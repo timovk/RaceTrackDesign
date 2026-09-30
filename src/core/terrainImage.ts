@@ -12,8 +12,8 @@ export interface TerrainImages {
   contourInterval: number;
 }
 
-// Land colour ramp by height above the lowest land, as a fraction of max(land range, RAMP_MIN_RANGE).
-const RAMP: readonly [number, number, number, number][] = [
+// Land colour ramp by height above the lowest land, as a fraction of max(land range, RAMP_MIN_RANGE); the 3D view uses it too.
+export const RAMP: readonly [number, number, number, number][] = [
   [0.0, 106, 154, 79],
   [0.3, 155, 178, 101],
   [0.55, 201, 189, 132],
@@ -22,8 +22,8 @@ const RAMP: readonly [number, number, number, number][] = [
   [1.0, 217, 214, 208],
 ];
 /** Below this range the ramp is not stretched, so flat maps stay green instead of turning to rock. */
-const RAMP_MIN_RANGE = 120;
-const ROCK = [138, 128, 116];
+export const RAMP_MIN_RANGE = 120;
+export const ROCK = [138, 128, 116];
 const WATER_SHALLOW = [86, 140, 186];
 const WATER_DEEP = [29, 79, 128];
 const CONTOUR_STEPS = [0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200];

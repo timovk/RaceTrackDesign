@@ -842,7 +842,8 @@ input[type='range'] {
   gap: 4px;
   align-items: stretch;
   flex-wrap: wrap;
-  max-width: calc(100% - 330px);
+  /* Room for the toolbar on the right. */
+  max-width: calc(100% - 490px);
   pointer-events: none;
 }
 
@@ -939,6 +940,74 @@ input[type='range'] {
   padding-left: 6px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.map-dimension .segment {
+  padding: 3px 9px;
+  font-size: 12px;
+}
+
+.map:not(.is-3d) .map-relief,
+.map.is-3d .only-2d {
+  display: none;
+}
+
+/* 3D view */
+
+.map3d {
+  position: absolute;
+  inset: 0;
+  background: #9cc2e2;
+}
+
+.map3d-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: grab;
+}
+
+.map3d-canvas:active {
+  cursor: grabbing;
+}
+
+.map3d-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.map3d-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(12, 15, 19, 0.78);
+  color: #f1f3f5;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.map3d-label.start {
+  background: #f1f3f5;
+  color: #111;
+}
+
+.map3d-note {
+  position: absolute;
+  left: 12px;
+  bottom: 44px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(12, 15, 19, 0.8);
+  color: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
 }
 
 .map-toolbar select {

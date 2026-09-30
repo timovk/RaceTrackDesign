@@ -27,6 +27,7 @@ src/
     circuits.ts      real circuit CSVs -> track designs
     calibration.ts   reference laps, error, parameter fitting
     project.ts       project file format
+    scene3d.ts       3D geometry: earthworks, terrain patches, road surfaces, the model's sides
     race/
       rules.ts       race rules per class from data/racing.json
       model.ts       race lap, slipstream/wake/DRS ratios, fuel, tyres, pit lane, braking zones
@@ -39,9 +40,10 @@ src/
       stats.ts       fastest laps, speed trap, overtakes, pit stops, chart series
       export.ts      CSV of results, laps and telemetry
   worker/          terrain generation, and lap times + facilities + licence, off the main thread
-  ui/              plain TypeScript and canvas, no framework
+  ui/              plain TypeScript and canvas (three.js for the 3D view), no framework
     store.ts         state, derived data, undo, autosave
-    mapView.ts       map canvas: camera, drawing, editing tools, overlays
+    mapView.ts       map canvas: camera, drawing, editing tools, overlays, the 2D/3D switch
+    view3d.ts        the 3D view: scene, terrain shader, orbit camera, picking (loaded on demand)
     profileView.ts   elevation profile and speed trace canvas
     facilityLayer.ts facilities and drag handles on the map
     raceController.ts runs and plays back a race, drops it when the track changes
@@ -160,6 +162,20 @@ Sectors split the lap of a reference class (GT3) into thirds of time, each line 
 This is an estimate from the geometry alone: barriers, kerbs, medical centre and buildings are not modelled, and real homologation needs an inspection. The run-off depth and the crest limit (cars keep at least half their weight) are this tool's own assumptions, since the regulations set run-off per circuit.
 
 Run-off is checked per grade with the laps of the classes that need exactly that grade. Each corner gets two escape paths: straight on from the turn-in point, at the fastest speed in the 100 m before it, and along the apex tangent at apex speed. A path starts where it leaves the track surface and runs until it meets water, the map edge or another part of the track (not the stretch within 300 m of the corner). It passes when it is free for the required depth: 30 m at 100 km/h rising to 100 m at 300 km/h for cars, and 1.3 times that (40 to 130 m) for bikes. The ground slope along it is reported against the FIA (25% up, 3% down) and FIM (10% up, 3% down) limits.
+
+## 3D view
+
+`scene3d.ts` builds the geometry in scene coordinates (x east, y up, z south, metres; heights above sea level) and `view3d.ts` shows it with three.js. The 3D view is its own chunk, loaded the first time the map switches to 3D.
+
+**Earthworks.** Roads are centrelines with a height and a half width: the track, and the pit lane (level with the stretch of track beside it, or blending between the track at its ends for a lane across the infield; narrower where it leaves and joins). Around them the ground is shaped as a circuit is built: flat under the road, a 3 m grass verge falling 3%, then an embankment (1 in 2) down to lower ground or a cutting (1 in 1.4) up into higher ground, until it meets the natural terrain. Every road segment within reach puts a floor (its embankment) and a ceiling (its cutting) on the ground at a point, and the natural height is clamped between them; so parts of the track close together share their banks, and where two roads at different heights cannot both be met the ground splits the difference. Under the roads the ground sits 0.3 m below the surface (easing out over the first 2 m of bank), so the road surfaces never fight it for depth. Segments sit in 32 m buckets over the map, each listing the segments that reach it, so a height lookup checks only nearby ones.
+
+**Terrain.** A quadtree of square patches of 32 cells covers the map: 1/256 of the map at the root (32 m on an 8 km map), split while the nearest road is closer than a third of the patch size, down to 2 m cells near the track; the parts of a split patch that are not near a road themselves keep half the detail. Each patch samples the shaped ground with a one-cell border, so its normals match its neighbours'. Patches of different detail leave small cracks between them, which skirts hanging down from every patch edge hide. On Spa the terrain has about 525,000 vertices and builds in about 60 ms; a 13 km track needs about a million vertices.
+
+**Roads.** The paved surface is built as strips across each station (edge asphalt, a white line 0.25 m wide from 0.3 m inside the edge, the coloured middle), so nothing overlaps within it; the verges have a short skirt into the ground. The start line lies on top. Polygon offsets order the overlapping surfaces: start line over track, track over pit lane, both over the verges, all over the ground. The asphalt between the lines takes the flat map's track colouring.
+
+**The model.** The map's sides go down from the ground (or up to the water level where the edge is under water) to a base below the lowest point, as on a model. Water is a translucent plane at the water level.
+
+**Drawing.** The ground takes its colour in the shader: the flat map's height ramp, bare rock on steep slopes, grass on embankments and earth in cuttings (from how far the earthworks moved the ground at each vertex), a darker bed under water, and contour lines from the height with screen-space derivatives. Light comes from a sun in the north-west (as the flat map's hillshade) and a sky-and-ground hemisphere; a gradient sky and haze sit behind. Heights can be exaggerated by scaling the model vertically around its lowest point. The view draws only when something changed; the orbit camera keeps above the ground, and its near plane follows the distance to what it looks at, for depth precision. Hover and double-click find the ground under the cursor by marching along the view ray through the shaped ground (the same height function as the mesh) and refining the crossing, so no triangles are tested; a point on the track sets the store's hover station, which the profile shares.
 
 ## Races
 

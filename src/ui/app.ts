@@ -128,6 +128,8 @@ export function mountApp(root: HTMLElement, store: Store): void {
       store.setFocus(null);
     } else if (key === 'f') {
       map.fit();
+    } else if (key === 'v') {
+      store.setView({ dimension: store.view.dimension === '3d' ? '2d' : '3d' });
     } else if (key >= '1' && key <= '4') {
       store.setMode(MODES[Number(key) - 1].mode);
     } else if (key === 'p' && store.mode === 'race') {

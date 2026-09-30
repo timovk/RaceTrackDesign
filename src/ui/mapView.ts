@@ -17,6 +17,7 @@ import { download } from './download.ts';
 import * as fmt from './format.ts';
 import type { RaceController } from './raceController.ts';
 import type { Store, Topic } from './store.ts';
+import type { View3D } from './view3d.ts';
 
 interface Camera {
   x: number;
@@ -71,6 +72,11 @@ export class MapView {
   private readonly labelToggle: HTMLButtonElement;
   private readonly lineToggle: HTMLButtonElement;
   private readonly facilityToggle: HTMLButtonElement;
+  private readonly dimensionButtons: HTMLButtonElement[];
+  private readonly reliefSelect: HTMLSelectElement;
+  /** The 3D view, loaded (with three.js) the first time it is shown. */
+  private view3d: View3D | null = null;
+  private view3dLoading = false;
 
   constructor(store: Store, race: RaceController | null = null) {
     this.store = store;
@@ -88,7 +94,19 @@ export class MapView {
     this.contourToggle = h('button', { class: 'chip', title: 'Show contour lines', onclick: () => store.setView({ contours: !store.view.contours }) }, 'Contours');
     this.labelToggle = h('button', { class: 'chip', title: 'Show corner numbers', onclick: () => store.setView({ labels: !store.view.labels }) }, 'Labels');
     this.lineToggle = h('button', { class: 'chip', title: 'Show the racing line', onclick: () => store.setView({ line: !store.view.line }) }, 'Line');
-    this.facilityToggle = h('button', { class: 'chip', title: 'Show pit lane, grid, DRS zones, marshal posts and run-off', onclick: () => store.setView({ facilities: !store.view.facilities }) }, 'Facilities');
+    this.facilityToggle = h('button', { class: 'chip only-2d', title: 'Show pit lane, grid, DRS zones, marshal posts and run-off', onclick: () => store.setView({ facilities: !store.view.facilities }) }, 'Facilities');
+    this.dimensionButtons = (['2d', '3d'] as const).map((d) =>
+      h('button', { class: 'segment', title: d === '3d' ? 'The terrain and track in 3D (V)' : 'The flat map, for drawing and editing (V)', onclick: () => store.setView({ dimension: d }) }, d.toUpperCase()));
+    this.reliefSelect = h('select', {
+      title: 'Exaggerate heights in 3D',
+      onchange: () => {
+        store.setView({ relief: Number(this.reliefSelect.value) });
+        this.reliefSelect.blur();
+      },
+    }, ...[1, 1.5, 2, 3].map((r) => h('option', { value: String(r) }, `×${r}`)));
+    const viewBar = h('div', { class: 'map-toolbar map-viewbar' },
+      h('label', { class: 'map-toolbar-label map-relief' }, 'Height', this.reliefSelect),
+      h('div', { class: 'segmented map-dimension' }, ...this.dimensionButtons));
     const toolbar = h('div', { class: 'map-toolbar' },
       h('label', { class: 'map-toolbar-label' }, 'Colour', this.colorSelect),
       this.contourToggle,
@@ -106,7 +124,7 @@ export class MapView {
     this.progressLabel = h('div', { class: 'progress-label' }, 'Generating terrain');
     this.progress = h('div', { class: 'map-progress', hidden: true }, this.progressLabel, h('div', { class: 'progress-track' }, this.progressBar));
 
-    this.el = h('div', { class: 'map' }, this.canvas, this.hud, h('div', { class: 'map-right' }, toolbar, this.legend), this.readout, this.tooltip, this.progress);
+    this.el = h('div', { class: 'map' }, this.canvas, this.hud, h('div', { class: 'map-right' }, toolbar, viewBar, this.legend), this.readout, this.tooltip, this.progress);
 
     new ResizeObserver(() => this.resize()).observe(this.el);
     this.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
@@ -152,6 +170,10 @@ export class MapView {
   }
 
   fit(): void {
+    if (this.is3d) {
+      this.view3d?.fit(this.raceActive ? this.freeArea().x0 : 0);
+      return;
+    }
     if (this.raceActive) {
       this.fitTrackBesideTower();
       return;
@@ -160,8 +182,51 @@ export class MapView {
     this.invalidate();
   }
 
-  /** Saves the map as it is on screen (terrain, track, facilities and cars) as a PNG. */
+  private get is3d(): boolean {
+    return this.store.view.dimension === '3d';
+  }
+
+  /** Shows the flat map or the 3D view, loading the 3D view the first time. */
+  private applyDimension(): void {
+    const on = this.is3d;
+    this.dimensionButtons.forEach((b, i) => b.classList.toggle('on', (i === 1) === on));
+    this.el.classList.toggle('is-3d', on);
+    this.canvas.hidden = on;
+    this.tooltip.hidden = true;
+    if (!on) {
+      this.view3d?.setVisible(false);
+      setText(this.readout, '');
+      this.invalidate();
+      return;
+    }
+    if (this.view3d) {
+      this.view3d.setVisible(true);
+      return;
+    }
+    if (this.view3dLoading) return;
+    this.view3dLoading = true;
+    import('./view3d.ts')
+      .then(({ View3D }) => {
+        this.view3d = new View3D(this.store, this.readout);
+        this.canvas.after(this.view3d.el);
+        this.view3d.setVisible(this.is3d);
+      })
+      .catch((err: unknown) => {
+        console.error('3D view failed:', err);
+        alert('The 3D view needs WebGL, which is not available here.');
+        this.store.setView({ dimension: '2d' });
+      })
+      .finally(() => {
+        this.view3dLoading = false;
+      });
+  }
+
+  /** Saves the map as it is on screen (terrain, track, facilities and cars, or the 3D view) as a PNG. */
   exportImage(filename: string): void {
+    if (this.is3d && this.view3d) {
+      this.view3d.exportImage(filename);
+      return;
+    }
     this.draw();
     this.canvas.toBlob((blob) => {
       if (blob) download(filename, blob);
@@ -228,10 +293,13 @@ export class MapView {
     }
     if (topics.has('view')) {
       this.colorSelect.value = s.view.colorBy;
+      this.reliefSelect.value = String(s.view.relief);
+      this.dimensionButtons.forEach((b, i) => b.classList.toggle('on', (i === 1) === this.is3d));
       this.contourToggle.classList.toggle('on', s.view.contours);
       this.labelToggle.classList.toggle('on', s.view.labels);
       this.lineToggle.classList.toggle('on', s.view.line);
       this.facilityToggle.classList.toggle('on', s.view.facilities);
+      if (this.is3d !== this.el.classList.contains('is-3d') || (this.is3d && !this.view3d)) this.applyDimension();
     }
     const lapChanged = topics.has('performance') || topics.has('vehicle');
     if (topics.has('view') || topics.has('track') || lapChanged) this.updateLegend();
@@ -241,7 +309,7 @@ export class MapView {
     if (topics.has('race') && this.race && this.race.sim !== this.raceShown) {
       this.raceShown = this.race.sim;
       // A new race: once the timing tower and the dock are laid out (and the map resized to fit), show the whole track.
-      if (this.race.sim) requestAnimationFrame(() => requestAnimationFrame(() => this.fitTrackBesideTower()));
+      if (this.race.sim) requestAnimationFrame(() => requestAnimationFrame(() => (this.is3d ? this.fit() : this.fitTrackBesideTower())));
     }
     this.invalidate();
   }
@@ -591,7 +659,7 @@ export class MapView {
   // ---- drawing -------------------------------------------------------------------
 
   invalidate(): void {
-    if (this.frameRequested) return;
+    if (this.frameRequested || this.is3d) return;
     this.frameRequested = true;
     requestAnimationFrame(() => {
       this.frameRequested = false;

@@ -46,6 +46,10 @@ export interface ViewOptions {
   facilities: boolean;
   /** Licence grade whose run-off escape paths are drawn, or null for none. */
   runoffGrade: string | null;
+  /** The flat map or the 3D view. */
+  dimension: '2d' | '3d';
+  /** Vertical exaggeration in the 3D view. */
+  relief: number;
 }
 
 /** A station range to highlight, e.g. a corner or warning picked from a list. */
@@ -89,7 +93,7 @@ export class Store {
   /** Hovered station index (from the map, profile or a list). */
   hover: number | null = null;
   focus: Focus | null = null;
-  view: ViewOptions = { colorBy: 'plain', contours: true, labels: true, line: false, facilities: true, runoffGrade: null };
+  view: ViewOptions = { colorBy: 'plain', contours: true, labels: true, line: false, facilities: true, runoffGrade: null, dimension: '2d', relief: 1 };
 
   private readonly client = new TerrainClient();
   private readonly performanceClient = new PerformanceClient((a, e) => this.receiveAnalysis(a, e));

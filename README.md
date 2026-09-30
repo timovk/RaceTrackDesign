@@ -14,6 +14,8 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | 4 | Race core, moving dots, timing tower | **done** |
 | 5 | Telemetry, charts, statistics, export | **done** |
 | 6 | Multi-class, safety car, endurance, weather | **done** |
+| 7a | 3D view: terrain with the track's earthworks, track and pit lane, orbit camera | **done** |
+| 7b | 3D dressing (kerbs, run-off, buildings, trees), camera shots, image export | next |
 
 ## Running it
 
@@ -77,9 +79,17 @@ The strip under the map has two views that share hover with the map: the elevati
 
 Warnings flag corners tighter than the track is wide, very tight corners, steep and too-steep gradients, crossings and overlaps, parts of the track too close together for barriers, water, and track off the map.
 
+**3D view.** The **2D / 3D** switch under the map toolbar (or V) shows the map as a model: the terrain with the earthworks the track needs (grass embankments where it is built up, bare-earth cuttings where it is dug in), the track with its edge lines, verges and start line, the pit lane, water, and the sides of the map, under a sky.
+- Drag to orbit, right-drag to pan, scroll to zoom towards the cursor, double-click to centre on a spot, F to see the whole track again.
+- **Height** exaggerates the relief (×1 to ×3), so gentle slopes show.
+- The track colouring, **Contours**, **Labels** (corner numbers and the start) and **Line** (the racing line) work in 3D too. Hovering the track marks it on the elevation profile, and hovering the profile marks the spot in 3D; the readout shows the position and height under the cursor.
+- Editing happens in 2D. In Race mode the 3D view shows the track without the cars, and **Map image** saves the 3D view.
+- The 3D view (three.js) loads the first time it is opened. It needs WebGL.
+
 | Shortcut | Action |
 |---|---|
 | 1, 2, 3, 4 | Terrain, Design, Analyse, Race |
+| V | Switch between the flat map and the 3D view |
 | P | Play or pause the race |
 | Scroll | Zoom |
 | Right-drag, Space + drag | Pan |
