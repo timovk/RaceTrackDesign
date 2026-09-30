@@ -1,0 +1,175 @@
+{
+  "version": 1,
+  "notes": "Race rules per vehicle class, keyed by the class id in vehicles.json; a class missing here gets generic defaults. Percentages are shares of the lap time. field: default grid size, cars per team and the spread (standard deviation) of car and driver pace. race: default length, either distanceKm (laps rounded up) or minutes, and a time limit. pace: racePct is how much slower race laps are than qualifying before fuel and tyres (engine modes, tyre saving); consistencyPct the lap-to-lap scatter; overtaking scales how easily passes succeed. fuel: typical kg per km on the reference circuits, tank size, refuelling rate (0 = no refuelling). tyres: compounds with their pace offset to the fastest, life in km on the reference circuits and pace lost at the end of that life; mustUseTwo requires two different compounds in a race. pit: whether stops are allowed at all, stationary time for four tyres, whether refuelling and tyres happen at once, mandatory stops and the shortest stationary time of a mandatory stop. drs: the lap from which it is enabled and the gap in seconds at the detection point. air: share of drag removed when right behind another car, and share of downforce lost in its wake. incidents: chances per lap and technical retirements per 1000 km. reference: average wheel energy (MJ/km) and tyre work per km on the real circuits in data/circuits, printed by scripts/raceReference.ts; fuel and tyre wear scale with a track's own values against these. All figures are approximate defaults meant to be edited.",
+  "classes": {
+    "f1": {
+      "field": { "cars": 20, "perTeam": 2, "carSpreadPct": 0.5, "driverSpreadPct": 0.2 },
+      "race": { "distanceKm": 305, "maxMinutes": 120 },
+      "pace": { "racePct": 0.4, "consistencyPct": 0.25, "overtaking": 1 },
+      "fuel": { "kgPerKm": 0.34, "capacityKg": 110, "refuelKgPerS": 0 },
+      "tyres": {
+        "mustUseTwo": true,
+        "compounds": [
+          { "name": "Soft", "code": "S", "color": "#ff3b30", "offsetPct": 0, "lifeKm": 85, "degPct": 1.4 },
+          { "name": "Medium", "code": "M", "color": "#ffd60a", "offsetPct": 0.5, "lifeKm": 140, "degPct": 1.2 },
+          { "name": "Hard", "code": "H", "color": "#f2f2f2", "offsetPct": 0.9, "lifeKm": 200, "degPct": 1 }
+        ]
+      },
+      "pit": { "stops": true, "tyreChangeS": 2.4, "concurrent": true, "minStops": 0, "minStationaryS": 0 },
+      "drs": { "fromLap": 3, "gapS": 1 },
+      "air": { "towDragCut": 0.25, "wakeDownforceLoss": 0.2 },
+      "incidents": { "mistakePerLap": 0.02, "offPerLap": 0.003, "crashPerLap": 0.0004, "dnfPer1000Km": 0.15 },
+      "reference": { "energyMJPerKm": 7.83, "tyreWork": 6.602 }
+    },
+    "f2": {
+      "field": { "cars": 22, "perTeam": 2, "carSpreadPct": 0.1, "driverSpreadPct": 0.35 },
+      "race": { "distanceKm": 170, "maxMinutes": 60 },
+      "pace": { "racePct": 0.5, "consistencyPct": 0.3, "overtaking": 1.1 },
+      "fuel": { "kgPerKm": 0.3, "capacityKg": 100, "refuelKgPerS": 0 },
+      "tyres": {
+        "mustUseTwo": true,
+        "compounds": [
+          { "name": "Soft", "code": "S", "color": "#ff3b30", "offsetPct": 0, "lifeKm": 70, "degPct": 1.8 },
+          { "name": "Hard", "code": "H", "color": "#f2f2f2", "offsetPct": 0.8, "lifeKm": 150, "degPct": 1.2 }
+        ]
+      },
+      "pit": { "stops": true, "tyreChangeS": 3.2, "concurrent": true, "minStops": 1, "minStationaryS": 0 },
+      "drs": { "fromLap": 3, "gapS": 1 },
+      "air": { "towDragCut": 0.25, "wakeDownforceLoss": 0.25 },
+      "incidents": { "mistakePerLap": 0.025, "offPerLap": 0.004, "crashPerLap": 0.0006, "dnfPer1000Km": 0.25 },
+      "reference": { "energyMJPerKm": 5.45, "tyreWork": 3.406 }
+    },
+    "indycar": {
+      "field": { "cars": 27, "perTeam": 3, "carSpreadPct": 0.2, "driverSpreadPct": 0.3 },
+      "race": { "distanceKm": 320, "maxMinutes": 150 },
+      "pace": { "racePct": 0.5, "consistencyPct": 0.3, "overtaking": 1.1 },
+      "fuel": { "kgPerKm": 0.55, "capacityKg": 55, "refuelKgPerS": 7.5 },
+      "tyres": {
+        "mustUseTwo": true,
+        "compounds": [
+          { "name": "Alternate", "code": "A", "color": "#ff3b30", "offsetPct": 0, "lifeKm": 90, "degPct": 2 },
+          { "name": "Primary", "code": "P", "color": "#d0d4da", "offsetPct": 0.6, "lifeKm": 150, "degPct": 1.2 }
+        ]
+      },
+      "pit": { "stops": true, "tyreChangeS": 6, "concurrent": true, "minStops": 0, "minStationaryS": 0 },
+      "air": { "towDragCut": 0.2, "wakeDownforceLoss": 0.25 },
+      "incidents": { "mistakePerLap": 0.02, "offPerLap": 0.003, "crashPerLap": 0.0005, "dnfPer1000Km": 0.2 },
+      "reference": { "energyMJPerKm": 6.11, "tyreWork": 3.654 }
+    },
+    "hypercar": {
+      "field": { "cars": 18, "perTeam": 2, "carSpreadPct": 0.3, "driverSpreadPct": 0.35 },
+      "race": { "minutes": 360 },
+      "pace": { "racePct": 0.8, "consistencyPct": 0.35, "overtaking": 1.1 },
+      "fuel": { "kgPerKm": 0.47, "capacityKg": 90, "refuelKgPerS": 2.8 },
+      "tyres": {
+        "mustUseTwo": false,
+        "compounds": [
+          { "name": "Medium", "code": "M", "color": "#ffd60a", "offsetPct": 0, "lifeKm": 500, "degPct": 1.5 }
+        ]
+      },
+      "pit": { "stops": true, "tyreChangeS": 22, "concurrent": false, "minStops": 0, "minStationaryS": 0 },
+      "air": { "towDragCut": 0.2, "wakeDownforceLoss": 0.15 },
+      "incidents": { "mistakePerLap": 0.015, "offPerLap": 0.002, "crashPerLap": 0.0002, "dnfPer1000Km": 0.1 },
+      "reference": { "energyMJPerKm": 5.92, "tyreWork": 2.446 }
+    },
+    "lmp2": {
+      "field": { "cars": 14, "perTeam": 2, "carSpreadPct": 0.1, "driverSpreadPct": 0.5 },
+      "race": { "minutes": 240 },
+      "pace": { "racePct": 0.8, "consistencyPct": 0.4, "overtaking": 1.1 },
+      "fuel": { "kgPerKm": 0.37, "capacityKg": 56, "refuelKgPerS": 2.2 },
+      "tyres": {
+        "mustUseTwo": false,
+        "compounds": [
+          { "name": "Medium", "code": "M", "color": "#ffd60a", "offsetPct": 0, "lifeKm": 400, "degPct": 1.5 }
+        ]
+      },
+      "pit": { "stops": true, "tyreChangeS": 25, "concurrent": false, "minStops": 0, "minStationaryS": 0 },
+      "air": { "towDragCut": 0.2, "wakeDownforceLoss": 0.15 },
+      "incidents": { "mistakePerLap": 0.02, "offPerLap": 0.003, "crashPerLap": 0.0003, "dnfPer1000Km": 0.08 },
+      "reference": { "energyMJPerKm": 5.11, "tyreWork": 2.04 }
+    },
+    "gt3": {
+      "field": { "cars": 30, "perTeam": 2, "carSpreadPct": 0.25, "driverSpreadPct": 0.45 },
+      "race": { "minutes": 180 },
+      "pace": { "racePct": 0.6, "consistencyPct": 0.35, "overtaking": 1 },
+      "fuel": { "kgPerKm": 0.5, "capacityKg": 90, "refuelKgPerS": 2 },
+      "tyres": {
+        "mustUseTwo": false,
+        "compounds": [
+          { "name": "Dry", "code": "D", "color": "#d0d4da", "offsetPct": 0, "lifeKm": 450, "degPct": 1.5 }
+        ]
+      },
+      "pit": { "stops": true, "tyreChangeS": 20, "concurrent": false, "minStops": 2, "minStationaryS": 0 },
+      "air": { "towDragCut": 0.2, "wakeDownforceLoss": 0.1 },
+      "incidents": { "mistakePerLap": 0.02, "offPerLap": 0.003, "crashPerLap": 0.0003, "dnfPer1000Km": 0.06 },
+      "reference": { "energyMJPerKm": 5.11, "tyreWork": 1.993 }
+    },
+    "gt4": {
+      "field": { "cars": 30, "perTeam": 2, "carSpreadPct": 0.3, "driverSpreadPct": 0.5 },
+      "race": { "minutes": 60 },
+      "pace": { "racePct": 0.6, "consistencyPct": 0.4, "overtaking": 1 },
+      "fuel": { "kgPerKm": 0.4, "capacityKg": 100, "refuelKgPerS": 0 },
+      "tyres": {
+        "mustUseTwo": false,
+        "compounds": [
+          { "name": "Dry", "code": "D", "color": "#d0d4da", "offsetPct": 0, "lifeKm": 300, "degPct": 1.5 }
+        ]
+      },
+      "pit": { "stops": true, "tyreChangeS": 20, "concurrent": false, "minStops": 1, "minStationaryS": 30 },
+      "air": { "towDragCut": 0.2, "wakeDownforceLoss": 0.1 },
+      "incidents": { "mistakePerLap": 0.025, "offPerLap": 0.004, "crashPerLap": 0.0004, "dnfPer1000Km": 0.08 },
+      "reference": { "energyMJPerKm": 4.66, "tyreWork": 1.417 }
+    },
+    "tcr": {
+      "field": { "cars": 24, "perTeam": 2, "carSpreadPct": 0.3, "driverSpreadPct": 0.45 },
+      "race": { "minutes": 30 },
+      "pace": { "racePct": 0.4, "consistencyPct": 0.35, "overtaking": 1.4 },
+      "fuel": { "kgPerKm": 0.3, "capacityKg": 75, "refuelKgPerS": 0 },
+      "tyres": {
+        "mustUseTwo": false,
+        "compounds": [
+          { "name": "Dry", "code": "D", "color": "#d0d4da", "offsetPct": 0, "lifeKm": 250, "degPct": 1.5 }
+        ]
+      },
+      "pit": { "stops": false, "tyreChangeS": 20, "concurrent": false, "minStops": 0, "minStationaryS": 0 },
+      "air": { "towDragCut": 0.25, "wakeDownforceLoss": 0.05 },
+      "incidents": { "mistakePerLap": 0.03, "offPerLap": 0.005, "crashPerLap": 0.0008, "dnfPer1000Km": 0.2 },
+      "reference": { "energyMJPerKm": 3.78, "tyreWork": 1.199 }
+    },
+    "motogp": {
+      "field": { "cars": 22, "perTeam": 2, "carSpreadPct": 0.3, "driverSpreadPct": 0.35 },
+      "race": { "distanceKm": 120, "maxMinutes": 60 },
+      "pace": { "racePct": 0.6, "consistencyPct": 0.3, "overtaking": 1.6 },
+      "fuel": { "kgPerKm": 0.135, "capacityKg": 16.3, "refuelKgPerS": 0 },
+      "tyres": {
+        "mustUseTwo": false,
+        "compounds": [
+          { "name": "Soft", "code": "S", "color": "#ff3b30", "offsetPct": 0, "lifeKm": 100, "degPct": 2.5 },
+          { "name": "Medium", "code": "M", "color": "#ffd60a", "offsetPct": 0.3, "lifeKm": 130, "degPct": 2 },
+          { "name": "Hard", "code": "H", "color": "#f2f2f2", "offsetPct": 0.6, "lifeKm": 160, "degPct": 1.6 }
+        ]
+      },
+      "pit": { "stops": false, "tyreChangeS": 0, "concurrent": false, "minStops": 0, "minStationaryS": 0 },
+      "air": { "towDragCut": 0.3, "wakeDownforceLoss": 0 },
+      "incidents": { "mistakePerLap": 0.03, "offPerLap": 0.003, "crashPerLap": 0.0025, "dnfPer1000Km": 0.2 },
+      "reference": { "energyMJPerKm": 1.51, "tyreWork": 1.917 }
+    },
+    "superbike": {
+      "field": { "cars": 23, "perTeam": 2, "carSpreadPct": 0.4, "driverSpreadPct": 0.45 },
+      "race": { "distanceKm": 100, "maxMinutes": 50 },
+      "pace": { "racePct": 0.6, "consistencyPct": 0.35, "overtaking": 1.6 },
+      "fuel": { "kgPerKm": 0.17, "capacityKg": 17.8, "refuelKgPerS": 0 },
+      "tyres": {
+        "mustUseTwo": false,
+        "compounds": [
+          { "name": "Soft", "code": "S", "color": "#ff3b30", "offsetPct": 0, "lifeKm": 110, "degPct": 2.2 },
+          { "name": "Medium", "code": "M", "color": "#ffd60a", "offsetPct": 0.3, "lifeKm": 140, "degPct": 1.8 }
+        ]
+      },
+      "pit": { "stops": false, "tyreChangeS": 0, "concurrent": false, "minStops": 0, "minStationaryS": 0 },
+      "air": { "towDragCut": 0.3, "wakeDownforceLoss": 0 },
+      "incidents": { "mistakePerLap": 0.03, "offPerLap": 0.003, "crashPerLap": 0.0025, "dnfPer1000Km": 0.2 },
+      "reference": { "energyMJPerKm": 1.45, "tyreWork": 1.705 }
+    }
+  }
+}

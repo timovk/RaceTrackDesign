@@ -5,24 +5,30 @@ import { h, isTyping } from './dom.ts';
 import { MapView } from './mapView.ts';
 import { AnalysePanel } from './panels/analysePanel.ts';
 import { DesignPanel } from './panels/designPanel.ts';
+import { RacePanel } from './panels/racePanel.ts';
 import { TerrainPanel } from './panels/terrainPanel.ts';
 import { ProfileView } from './profileView.ts';
+import { RaceController } from './raceController.ts';
+import { TimingTower } from './raceTower.ts';
 import type { Mode, Store, Topic } from './store.ts';
 
 const MODES: { mode: Mode; label: string }[] = [
   { mode: 'terrain', label: 'Terrain' },
   { mode: 'design', label: 'Design' },
   { mode: 'analyse', label: 'Analyse' },
+  { mode: 'race', label: 'Race' },
 ];
 
 export function mountApp(root: HTMLElement, store: Store): void {
-  const map = new MapView(store);
+  const race = new RaceController(store);
+  const map = new MapView(store, race);
   const locate = (station: number) => map.centreOn(station);
   const profile = new ProfileView(store, locate);
   const panels: Record<Mode, HTMLElement> = {
     terrain: new TerrainPanel(store).el,
     design: new DesignPanel(store, locate).el,
     analyse: new AnalysePanel(store, locate).el,
+    race: new RacePanel(store, race).el,
   };
 
   const name = h('input', {
@@ -62,7 +68,6 @@ export function mountApp(root: HTMLElement, store: Store): void {
 
   const tabs = MODES.map(({ mode, label }, i) =>
     h('button', { class: 'tab', onclick: () => store.setMode(mode) }, h('span', { class: 'tab-num' }, String(i + 1)), label));
-  const raceTab = h('button', { class: 'tab', disabled: true, title: 'Race simulation arrives in milestone 4' }, h('span', { class: 'tab-num' }, '4'), 'Race');
 
   const sidebar = h('aside', { class: 'sidebar' },
     h('header', { class: 'brand' },
@@ -76,10 +81,11 @@ export function mountApp(root: HTMLElement, store: Store): void {
         h('button', { class: 'btn small', onclick: () => fileInput.click() }, 'Open'),
         h('button', { class: 'btn small', onclick: saveFile }, 'Save'),
         fileInput)),
-    h('nav', { class: 'tabs' }, ...tabs, raceTab),
+    h('nav', { class: 'tabs' }, ...tabs),
     h('div', { class: 'panel-scroll' }, ...Object.values(panels)),
   );
 
+  map.el.append(new TimingTower(store, race).el);
   root.append(sidebar, h('main', { class: 'workspace' }, map.el, profile.el));
 
   const update = (topics: Set<Topic>) => {
@@ -120,8 +126,10 @@ export function mountApp(root: HTMLElement, store: Store): void {
       store.setFocus(null);
     } else if (key === 'f') {
       map.fit();
-    } else if (key >= '1' && key <= '3') {
+    } else if (key >= '1' && key <= '4') {
       store.setMode(MODES[Number(key) - 1].mode);
+    } else if (key === 'p' && store.mode === 'race') {
+      race.togglePlay();
     }
   });
 }

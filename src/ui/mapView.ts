@@ -14,6 +14,7 @@ import { type Handle, drawFacilities, drawHandles, handleStations } from './faci
 import { ASPHALT, COLOR_BY_LABELS, type ColorBy, buckets, stationBuckets } from './colors.ts';
 import { h, isTyping, setChildren, setText } from './dom.ts';
 import * as fmt from './format.ts';
+import type { RaceController } from './raceController.ts';
 import type { Store, Topic } from './store.ts';
 
 interface Camera {
@@ -42,6 +43,7 @@ const MIN_TRACK_PX = 3.5;
 export class MapView {
   readonly el: HTMLElement;
   private readonly store: Store;
+  private readonly race: RaceController | null;
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private cam: Camera = { x: 4096, y: 4096, scale: 0.1 };
@@ -54,6 +56,7 @@ export class MapView {
   private pointerInside = false;
   private cursor: Vec2 | null = null;
   private bucketCache: { track: unknown; colorBy: ColorBy; lap: unknown; buckets: Int8Array } | null = null;
+  private raceShown: unknown = null;
 
   private readonly hud: HTMLElement;
   private readonly legend: HTMLElement;
@@ -68,8 +71,9 @@ export class MapView {
   private readonly lineToggle: HTMLButtonElement;
   private readonly facilityToggle: HTMLButtonElement;
 
-  constructor(store: Store) {
+  constructor(store: Store, race: RaceController | null = null) {
     this.store = store;
+    this.race = race;
     this.canvas = h('canvas', { class: 'map-canvas' });
     this.ctx = this.canvas.getContext('2d')!;
 
@@ -132,6 +136,7 @@ export class MapView {
     });
 
     store.subscribe((topics) => this.onChange(topics));
+    race?.onTick(() => this.onRaceTick());
     this.onChange(new Set<Topic>(['project', 'terrain', 'generating', 'track', 'view', 'mode']));
   }
 
@@ -146,6 +151,10 @@ export class MapView {
   }
 
   fit(): void {
+    if (this.raceActive) {
+      this.fitTrackBesideTower();
+      return;
+    }
     this.cam = { x: this.extent / 2, y: this.extent / 2, scale: this.fitScale() };
     this.invalidate();
   }
@@ -220,6 +229,11 @@ export class MapView {
     if (topics.has('track') || topics.has('mode') || topics.has('project') || lapChanged) this.updateHud();
     if (topics.has('hover') || topics.has('track') || lapChanged) this.updateTooltip();
     if (topics.has('mode')) this.updateCursor();
+    if (topics.has('race') && this.race && this.race.sim !== this.raceShown) {
+      this.raceShown = this.race.sim;
+      // A new race: once the timing tower is laid out, show the whole track beside it.
+      if (this.race.sim) requestAnimationFrame(() => this.fitTrackBesideTower());
+    }
     this.invalidate();
   }
 
@@ -445,6 +459,8 @@ export class MapView {
         if (hit !== null) s.deletePoint(hit);
       } else if (!drag.moved && drag.button === 0 && s.mode === 'analyse') {
         this.focusCornerAt(p.x, p.y);
+      } else if (!drag.moved && drag.button === 0 && s.mode === 'race') {
+        this.pickCar(p.x, p.y);
       }
     } else if (drag?.kind === 'point') {
       s.commitEdit();
@@ -597,6 +613,7 @@ export class MapView {
     }
 
     this.drawTrack();
+    if (this.store.mode === 'race') this.drawCars();
     this.drawPoints();
     if (this.drag?.kind === 'freehand') this.drawStroke(this.drag.points);
     this.drawScaleBar();
@@ -887,6 +904,143 @@ export class MapView {
     ctx.beginPath();
     points.forEach((p, i) => (i === 0 ? ctx.moveTo(this.sx(p.x), this.sy(p.y)) : ctx.lineTo(this.sx(p.x), this.sy(p.y))));
     ctx.stroke();
+  }
+
+  // ---- race ------------------------------------------------------------------------
+
+  private get raceActive(): boolean {
+    return !!this.race?.sim && this.store.mode === 'race';
+  }
+
+  private onRaceTick(): void {
+    if (!this.raceActive) return;
+    const r = this.race!;
+    if (r.follow && r.selected !== null) {
+      const pose = r.sim!.pose(r.sim!.cars[r.selected], r.alpha);
+      if (pose && this.drag?.kind !== 'pan') {
+        this.cam.scale = Math.max(this.cam.scale, Math.min(MAX_SCALE, this.fitScale() * 4));
+        const free = this.freeArea();
+        this.cam.x = pose.x - ((free.x0 + free.x1) / 2 - this.width / 2) / this.cam.scale;
+        this.cam.y = pose.y - ((free.y0 + free.y1) / 2 - this.height / 2) / this.cam.scale;
+      }
+    }
+    this.invalidate();
+  }
+
+  /** The part of the map not covered by the timing tower, in CSS pixels. */
+  private freeArea(): { x0: number; y0: number; x1: number; y1: number } {
+    const tower = this.el.querySelector<HTMLElement>('.tower');
+    const x0 = tower && !tower.hidden ? tower.offsetLeft + tower.offsetWidth + 8 : 0;
+    return { x0: Math.min(x0, this.width * 0.6), y0: 0, x1: this.width, y1: this.height };
+  }
+
+  /** Fits the track into the part of the map beside the timing tower. */
+  fitTrackBesideTower(): void {
+    const t = this.store.track;
+    if (!t) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let k = 0; k < t.n; k++) {
+      minX = Math.min(minX, t.x[k]);
+      maxX = Math.max(maxX, t.x[k]);
+      minY = Math.min(minY, t.y[k]);
+      maxY = Math.max(maxY, t.y[k]);
+    }
+    const free = this.freeArea();
+    const pad = 40;
+    const w = Math.max(50, free.x1 - free.x0 - 2 * pad);
+    const hgt = Math.max(50, free.y1 - free.y0 - 2 * pad - 40);
+    this.cam.scale = Math.min(MAX_SCALE, w / Math.max(1, maxX - minX), hgt / Math.max(1, maxY - minY));
+    this.cam.x = (minX + maxX) / 2 - ((free.x0 + free.x1) / 2 - this.width / 2) / this.cam.scale;
+    this.cam.y = (minY + maxY) / 2 - ((free.y0 + free.y1) / 2 + 20 - this.height / 2) / this.cam.scale;
+    this.invalidate();
+  }
+
+  private pickCar(px: number, py: number): void {
+    const r = this.race;
+    const sim = r?.sim;
+    if (!r || !sim) return;
+    let best: number | null = null;
+    let bestD = 14;
+    for (const car of sim.cars) {
+      const pose = sim.pose(car, r.alpha);
+      if (!pose || car.status === 'retired') continue;
+      const d = dist(this.sx(pose.x), this.sy(pose.y), px, py);
+      if (d < bestD) {
+        bestD = d;
+        best = car.id;
+      }
+    }
+    if (best !== null) r.select(best);
+    else if (r.selected !== null && !r.follow) r.select(null);
+  }
+
+  /** Cars as dots in their team colours, the leader drawn on top; retired cars as grey crosses where they stopped. */
+  private drawCars(): void {
+    const r = this.race;
+    const sim = r?.sim;
+    if (!r || !sim) return;
+    const ctx = this.ctx;
+    const radius = Math.max(3.5, Math.min(9, 2.4 * this.cam.scale));
+    const labels = this.cam.scale > 0.9;
+    ctx.font = '700 10px system-ui, sans-serif';
+    ctx.textBaseline = 'middle';
+    for (let i = sim.order.length - 1; i >= 0; i--) {
+      const car = sim.order[i];
+      const pose = sim.pose(car, r.alpha);
+      if (!pose) continue;
+      const x = this.sx(pose.x);
+      const y = this.sy(pose.y);
+      if (x < -20 || y < -20 || x > this.width + 20 || y > this.height + 20) continue;
+      if (car.status === 'retired') {
+        ctx.strokeStyle = 'rgba(160,168,178,0.8)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x - 3.5, y - 3.5);
+        ctx.lineTo(x + 3.5, y + 3.5);
+        ctx.moveTo(x + 3.5, y - 3.5);
+        ctx.lineTo(x - 3.5, y + 3.5);
+        ctx.stroke();
+        continue;
+      }
+      const selected = r.selected === car.id;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = car.entrant.color;
+      ctx.globalAlpha = car.status === 'pit' ? 0.75 : 1;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#0b0d10';
+      ctx.stroke();
+      if (car.position === 1) {
+        ctx.beginPath();
+        ctx.arc(x, y, radius + 2.5, 0, Math.PI * 2);
+        ctx.strokeStyle = '#ffd60a';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+      if (selected) {
+        ctx.beginPath();
+        ctx.arc(x, y, radius + 4.5, 0, Math.PI * 2);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      if (labels || selected) {
+        const text = selected ? `P${car.position} ${car.entrant.code}` : car.entrant.code;
+        const w = ctx.measureText(text).width + 8;
+        const lx = x + radius + 5;
+        ctx.fillStyle = selected ? '#ffffff' : 'rgba(12,15,19,0.8)';
+        roundRect(ctx, lx, y - 7, w, 14, 3);
+        ctx.fill();
+        ctx.fillStyle = selected ? '#111' : '#f1f3f5';
+        ctx.textAlign = 'left';
+        ctx.fillText(text, lx + 4, y + 0.5);
+      }
+    }
   }
 
   private drawScaleBar(): void {

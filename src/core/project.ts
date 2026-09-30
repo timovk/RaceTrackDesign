@@ -8,6 +8,8 @@ import {
 } from './terrain.ts';
 import { type ControlPoint, type TrackDesign, DEFAULT_GRADING, DEFAULT_WIDTH, emptyDesign } from './track.ts';
 import type { Overrides } from './facilities.ts';
+import { type RaceSettings, parseRaceSettings } from './race/setup.ts';
+import { VEHICLES } from './vehicles.ts';
 
 export const PROJECT_VERSION = 1;
 
@@ -18,8 +20,8 @@ export interface Project {
   track: TrackDesign;
   /** Start/finish, pit lane and speed trap moved by hand (world positions); anything absent is placed automatically. */
   overrides: Overrides;
-  /** Race setup, including its own seed; filled from milestone 4. */
-  race: Record<string, unknown> | null;
+  /** Race setup with its own seed, so a saved project reproduces the race; null until a race is set up. */
+  race: RaceSettings | null;
 }
 
 export function newProject(seed: string, preset: TerrainPreset = 'rolling'): Project {
@@ -95,7 +97,7 @@ export function parseProject(text: string): Project {
     terrain,
     track,
     overrides: parseOverrides(raw.overrides),
-    race: isObject(raw.race) ? raw.race : null,
+    race: parseRaceSettings(raw.race, VEHICLES.map((v) => v.id)),
   };
 }
 

@@ -29,7 +29,7 @@ export interface VehicleClass {
   /** Acceleration and braking limits in g beyond tyre grip (wheelie and stoppie for bikes); null when none. */
   maxAccelG: number | null;
   maxBrakeG: number | null;
-  /** Share of drag removed by an opened rear wing (DRS) on long straights; 0 without DRS. */
+  /** Share of drag removed by an opened rear wing in the DRS zones; 0 without DRS. */
   drs: number;
   /** m/s, set by gearing. */
   topSpeed: number;

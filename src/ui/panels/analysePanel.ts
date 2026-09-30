@@ -104,8 +104,7 @@ export class AnalysePanel {
         h('p', { class: 'hint' }, 'Numbered from the start/finish line. Click a row to show it on the map.')),
       section('Straights', straights),
       section(`Checks (${s.issues.length})`, issueList(s, this.onLocate)),
-      section('Coming next',
-        h('p', { class: 'hint' }, 'Race simulation with moving cars and a timing tower arrives in milestone 4.')),
+      h('button', { class: 'btn primary block', onclick: () => s.setMode('race') }, 'Next: race on it'),
     );
   }
 }

@@ -16,15 +16,18 @@ import { type Track, type TrackDesign, buildTrack, heightmapSampler } from '../c
 import { type Issue, validateTrack } from '../core/validate.ts';
 import { VEHICLES, type VehicleClass } from '../core/vehicles.ts';
 import type { Heightmap } from '../core/heightmap.ts';
+import { raceRules } from '../core/race/rules.ts';
+import { type RaceSettings, defaultRaceSettings } from '../core/race/setup.ts';
+import { randomSeedString } from '../core/rng.ts';
 import type { ColorBy } from './colors.ts';
 import { PerformanceClient } from './performanceClient.ts';
 import { CancelledError, TerrainClient } from './terrainClient.ts';
 
-export type Mode = 'terrain' | 'design' | 'analyse';
+export type Mode = 'terrain' | 'design' | 'analyse' | 'race';
 export type Tool = 'points' | 'freehand';
 export type Topic =
   | 'project' | 'terrain' | 'generating' | 'track' | 'performance' | 'vehicle'
-  | 'selection' | 'hover' | 'focus' | 'view' | 'mode' | 'history';
+  | 'selection' | 'hover' | 'focus' | 'view' | 'mode' | 'history' | 'race';
 
 export interface TerrainLayer {
   heightmap: Heightmap;
@@ -97,6 +100,8 @@ export class Store {
   private editStart: string | null = null;
   private autosaveTimer = 0;
   private performanceTimer = 0;
+  /** Seed for the default race until one is saved in the project. */
+  private readonly raceSeed = randomSeedString();
 
   constructor(project: Project) {
     this.project = project;
@@ -329,6 +334,33 @@ export class Store {
     this.selected = null;
     this.rebuildTrack();
     this.emit('project', 'selection', 'history');
+  }
+
+  // ---- race setup ------------------------------------------------------------
+
+  /** The saved race settings, or the default race for Formula 1 on this track. */
+  get raceSettings(): RaceSettings {
+    return this.project.race ?? this.defaultRace(this.vehicles[0].id, this.raceSeed);
+  }
+
+  /** The class's usual race on the current track (length from its lap time here, when known). */
+  defaultRace(vehicleId: string, seed: string): RaceSettings {
+    const vehicle = this.vehicles.find((v) => v.id === vehicleId) ?? this.vehicles[0];
+    const lap = this.performance?.laps.find((l) => l.vehicleId === vehicle.id);
+    const length = this.performance?.line.length ?? this.track?.length ?? 5000;
+    return defaultRaceSettings(vehicle, raceRules(vehicle), length, lap?.time ?? length / 45, seed);
+  }
+
+  setRaceSettings(changes: Partial<RaceSettings>): void {
+    this.project.race = { ...this.raceSettings, ...changes };
+    this.emit('project', 'race');
+  }
+
+  /** Switches the race to another class with that class's usual grid and length, keeping the seed and grid order. */
+  setRaceClass(vehicleId: string): void {
+    const cur = this.raceSettings;
+    this.project.race = { ...this.defaultRace(vehicleId, cur.seed), grid: cur.grid };
+    this.emit('project', 'race');
   }
 
   // ---- selection and view --------------------------------------------------

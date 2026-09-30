@@ -28,4 +28,12 @@ describe('project files', () => {
     expect(() => parseProject('{"version": 99}')).toThrow(/newer/);
     expect(() => parseProject('{"track":{"points":[{"x":1}]}}')).toThrow(/coordinates/);
   });
+
+  it('keeps the race setup, and drops one it cannot use', () => {
+    const p = newProject('1');
+    p.race = { vehicleId: 'gt3', cars: 24, kind: 'time', laps: 40, minutes: 90, grid: 'reversed', seed: 'abc' };
+    expect(parseProject(serializeProject(p)).race).toEqual(p.race);
+    expect(parseProject('{"race":{"vehicleId":"kart","cars":10,"laps":5,"minutes":10}}').race).toBeNull();
+    expect(parseProject('{}').race).toBeNull();
+  });
 });
