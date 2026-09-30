@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sampleClosedSpline, simplifyPolyline, smoothCircular } from '../src/core/geometry.ts';
-import { buildTrack, gradeProfile } from '../src/core/track.ts';
+import { buildTrack, gradeProfile, heightmapSampler } from '../src/core/track.ts';
 import { circlePoints, design, flatMap, makeHeightmap } from './helpers.ts';
 
 describe('closed spline', () => {
@@ -35,7 +35,7 @@ describe('geometry helpers', () => {
 
 describe('track stations', () => {
   const R = 300;
-  const circle = buildTrack(design(circlePoints(4096, 4096, R)), flatMap())!;
+  const circle = buildTrack(design(circlePoints(4096, 4096, R)), heightmapSampler(flatMap()))!;
 
   it('measures a circle close to 2 pi r', () => {
     expect(circle.length).toBeGreaterThan(2 * Math.PI * R * 0.995);
@@ -72,7 +72,7 @@ describe('track stations', () => {
     pts[1].width = 20;
     pts[2].width = 10;
     pts[3].width = 10;
-    const t = buildTrack(design(pts), flatMap())!;
+    const t = buildTrack(design(pts), heightmapSampler(flatMap()))!;
     expect(t.width[t.pointStations[0]]).toBeCloseTo(10, 1);
     expect(t.width[t.pointStations[1]]).toBeCloseTo(20, 1);
     const mid = Math.round((t.pointStations[0] + t.pointStations[1]) / 2);
@@ -81,12 +81,12 @@ describe('track stations', () => {
   });
 
   it('needs at least three points', () => {
-    expect(buildTrack(design(circlePoints(4096, 4096, R, 2)), flatMap())).toBeNull();
+    expect(buildTrack(design(circlePoints(4096, 4096, R, 2)), heightmapSampler(flatMap()))).toBeNull();
   });
 
   it('reads gradients from a tilted plane', () => {
     const tilt = makeHeightmap((x) => 0.05 * x);
-    const t = buildTrack(design(circlePoints(4096, 4096, R), { smoothing: 0, maxCutFill: 0 }), tilt)!;
+    const t = buildTrack(design(circlePoints(4096, 4096, R), { smoothing: 0, maxCutFill: 0 }), heightmapSampler(tilt))!;
     let max = 0;
     for (let k = 0; k < t.n; k++) max = Math.max(max, t.gradient[k]);
     expect(max).toBeGreaterThan(0.048);

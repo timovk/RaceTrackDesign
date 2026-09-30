@@ -34,6 +34,15 @@ export function volume(m3: number): string {
   return `${Math.round(m3)} m³`;
 }
 
+/** Metres per second as km/h. */
+export function speed(v: number): string {
+  return `${Math.round(v * 3.6)} km/h`;
+}
+
+export function percent(f: number): string {
+  return `${Math.round(f * 100)}%`;
+}
+
 export function degrees(d: number): string {
   return `${Math.round(d)}°`;
 }

@@ -561,6 +561,88 @@ input[type='range'] {
   text-align: center;
 }
 
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: 1px;
+  flex: none;
+}
+
+.badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  font-weight: 600;
+}
+
+.strong {
+  font-weight: 700;
+}
+
+.table.laps td {
+  white-space: nowrap;
+}
+
+.table.stale {
+  opacity: 0.55;
+}
+
+.card.detail {
+  margin-top: 4px;
+}
+
+.card.detail h3 {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sectors {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.sector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 4px;
+  border-radius: 6px;
+  background: var(--panel-3);
+}
+
+.sector-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #ffd60a;
+  letter-spacing: 0.06em;
+}
+
+.sector-time {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.vehicle-data summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 2px 0 6px;
+}
+
+.vehicle-data .stats {
+  margin-bottom: 6px;
+}
+
 /* ---- workspace -------------------------------------------------------- */
 
 .workspace {
@@ -630,6 +712,17 @@ input[type='range'] {
 
 .hud-hint {
   color: var(--text);
+}
+
+.hud-lap {
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+}
+
+.hud-lap.pending .hud-value {
+  opacity: 0.5;
 }
 
 .hud-issues {
@@ -810,12 +903,31 @@ input[type='range'] {
   padding: 7px 14px 0;
 }
 
-.profile-header h2 {
-  margin: 0;
+.profile-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.profile-tab {
+  border: none;
+  background: transparent;
+  padding: 2px 8px;
+  border-radius: 5px;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  font-weight: 700;
   color: var(--muted);
+  cursor: pointer;
+}
+
+.profile-tab:hover {
+  color: var(--text);
+}
+
+.profile-tab.on {
+  background: var(--panel-3);
+  color: var(--text);
 }
 
 .profile-summary {

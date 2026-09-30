@@ -15,18 +15,29 @@ src/
     track.ts         control points -> stations; elevation grading
     analysis.ts      metrics, corners, straights
     validate.ts      design warnings
+    racingLine.ts    minimum-curvature racing line
+    vehicles.ts      vehicle classes from data/vehicles.json
+    lapSim.ts        quasi-steady-state lap simulation
+    performance.ts   racing line + a lap per class + sectors
+    circuits.ts      real circuit CSVs -> track designs
+    calibration.ts   reference laps, error, parameter fitting
     project.ts       project file format
-  worker/          terrain generation off the main thread
+  worker/          terrain generation and lap-time analysis off the main thread
   ui/              plain TypeScript and canvas, no framework
     store.ts         state, derived data, undo, autosave
     mapView.ts       map canvas: camera, drawing, editing tools, overlays
-    profileView.ts   elevation profile canvas
+    profileView.ts   elevation profile and speed trace canvas
     panels/          sidebar panels per mode
-tests/             Vitest suites for core
-scripts/           benchmarks
+data/
+  vehicles.json      vehicle classes (edit to add or change classes)
+  reference-laps.json  real qualifying laps with sources
+  circuits/          TUMFTM racetrack database (LGPL-3.0)
+docs/CALIBRATION.md  generated calibration report
+tests/             Vitest suites for core, including calibration against real laps
+scripts/           benchmarks and the calibration script (Node)
 ```
 
-`core` never touches the DOM, so later milestones (lap-time model, race simulation) can run in a worker or in tests without changes.
+`core` never touches the DOM, so the same code runs in the app, in workers, in tests and in Node scripts.
 
 ## Conventions
 
@@ -43,9 +54,10 @@ TrackDesign (control points, widths, grading) + Heightmap
     --buildTrack--> Track (stations every ~2 m)
     --analyseTrack--> TrackMetrics
     --validateTrack--> Issue[]
+Track + VehicleClass[] --worker--> Performance (racing line, a LapResult per class, sectors)
 ```
 
-The store owns the project (the only persisted state) and recomputes the track, metrics and warnings whenever the design or terrain changes. Views subscribe to topics (`track`, `hover`, `selection`, ...) batched per microtask. Panels update their controls in place rather than rebuilding, so a slider being dragged is never replaced.
+The store owns the project (the only persisted state) and recomputes the track, metrics and warnings whenever the design or terrain changes. Lap times follow 150 ms after the last change, in a worker; until they arrive the previous laps stay on screen, mapped onto the new stations by their share of the lap. Views subscribe to topics (`track`, `hover`, `selection`, ...) batched per microtask. Panels update their controls in place rather than rebuilding, so a slider being dragged is never replaced.
 
 ## Terrain
 
@@ -71,3 +83,29 @@ The base image uses a colour ramp by height above the lowest land (stretched ove
 - **Corners.** A station enters a corner below 300 m radius and leaves above 450 m. The entry and exit extend while the radius stays under 1 km. Same-direction corners less than 40 m apart merge into one (a double apex), and turns under 10° are dropped. Each corner is classified from its total angle and minimum radius: kink, hairpin, long corner, sweeper, slow or medium. Quick direction changes are then paired as chicanes (tight) or esses (fast). Corners are numbered from the first control point; milestone 3 will number them from the start/finish line.
 - **Straights** have a radius above 1 km and change direction by no more than 15° in total. The limit stops a long gentle arc from counting as one straight.
 - **Warnings.** Per-station tests are grouped into ranges. Crossings, overlaps and too-close stretches come from a spatial grid over the stations, ignoring neighbours along the lap. One issue is reported per stretch, named after the worst problem in it.
+
+## Racing line
+
+Each station may move sideways by an offset *n* along the track normal, staying 1.2 m inside each edge. Around a reference line with curvature κ, the curvature of the moved line is to first order κ − n″ − κ²n: the last term says that the outside of a corner is gentler. The line minimises ∫κ² ds, which is quadratic in the offsets with a pentadiagonal matrix, and is solved exactly:
+
+- the loop is cut by pinning two stations on a straight, which leaves a banded system solved by LDLᵀ;
+- the edge limits are held by an active-set method;
+- the problem is re-linearised around the new line eight times, alternating the cut between two straights and limiting each step to 4 m.
+
+It takes 30–90 ms for a 5 km track. Minimum curvature is the standard stand-in for a real line. A direct lap-time optimisation was about 2.4% faster on a synthetic circuit of 90° corners, but too slow to run live; calibration absorbs the difference.
+
+## Lap simulation
+
+A quasi-steady-state point mass on the racing line:
+
+1. **Corner speed** per station by bisection, from tyre grip (falling linearly with load above the car's weight), downforce and vertical curvature (crests unload the tyres, dips load them).
+2. **Forward pass**: acceleration limited by power, by traction on the driven wheels after the cornering force is taken (friction ellipse), and for bikes by the wheelie limit. Drag, rolling resistance and gradient act against it. F1 and F2 open DRS on straights of 300 m or more.
+3. **Backward pass**: braking limited the same way, and for bikes by the stoppie limit.
+
+Both passes start at the slowest corner and run twice round the loop, so the lap closes on itself. The speed is the lowest of the three. Throttle and brake come from the force each speed change needs. Gears are spaced geometrically from first gear to top speed. Cars with an aero range are run at five wing settings and the fastest is kept.
+
+Sectors split the lap of a reference class (GT3) into thirds of time, each line moved to the nearest full-throttle station within 6% of the lap time.
+
+## Calibration
+
+`scripts/calibrate.ts` builds the flat TUMFTM circuits, runs every class and compares the result with the real qualifying laps in `data/reference-laps.json`. It then fits the parameters described in [docs/CALIBRATION.md](docs/CALIBRATION.md) by golden-section search on squared log errors. `tests/calibration.test.ts` keeps every class within 2.5% RMS and every fitted lap within 5%.

@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "notes": "Vehicle classes for the lap-time model. Units: mass in kg including driver and qualifying fuel; power in kW at the wheels; cdA and clA in m2 as [low-downforce, high-downforce] trim; grip is the tyre friction coefficient at static load; loadSensitivity is the relative grip lost per extra car weight of load; driveShare is the share of load on the driven wheels; accel and brake limits in g apply to bikes; drs is the share of drag an opened rear wing removes on straights of 300 m or more. Power and drag are set so the top speeds match real speed traps; scripts/calibrate.ts then fits grip for every class, downforce (clA) for classes with 3+ reference laps and loadSensitivity with 4+; see docs/CALIBRATION.md.",
+  "classes": [
+    {
+      "id": "f1", "name": "Formula 1", "spec": "2025", "kind": "car", "color": "#ff3b30",
+      "mass": 805, "powerKw": 700, "cdA": [1.05, 1.45], "clA": [3.586, 5.281],
+      "grip": 2.005, "loadSensitivity": 0.032, "driveShare": 0.6, "rollingResistance": 0.015,
+      "drs": 0.22,
+      "topSpeedKmh": 355, "gears": 8, "firstGearKmh": 110,
+      "calibration": {"laps": 6, "rmsError": 0.0212}
+    },
+    {
+      "id": "f2", "name": "Formula 2", "spec": "2025", "kind": "car", "color": "#3fb6ff",
+      "mass": 800, "powerKw": 430, "cdA": [0.9, 1.2], "clA": [4.099, 5.465],
+      "grip": 1.555, "loadSensitivity": 0.03, "driveShare": 0.6, "rollingResistance": 0.015,
+      "drs": 0.18,
+      "topSpeedKmh": 335, "gears": 6, "firstGearKmh": 120,
+      "calibration": {"laps": 4, "rmsError": 0.0187}
+    },
+    {
+      "id": "indycar", "name": "IndyCar", "spec": "road course", "kind": "car", "color": "#a78bfa",
+      "mass": 840, "powerKw": 490, "cdA": [1.15, 1.35], "clA": [3.2, 4],
+      "grip": 1.931, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
+      "topSpeedKmh": 345, "gears": 6, "firstGearKmh": 130,
+      "calibration": {"laps": 1, "rmsError": 0}
+    },
+    {
+      "id": "hypercar", "name": "Hypercar", "spec": "WEC", "kind": "car", "color": "#ffb020",
+      "mass": 1110, "powerKw": 470, "cdA": [0.9, 1], "clA": [3, 3.4],
+      "grip": 1.721, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
+      "topSpeedKmh": 345, "gears": 7, "firstGearKmh": 120,
+      "calibration": {"laps": 2, "rmsError": 0.0059}
+    },
+    {
+      "id": "lmp2", "name": "LMP2", "spec": "Oreca 07", "kind": "car", "color": "#2dd4bf",
+      "mass": 1010, "powerKw": 400, "cdA": [0.85, 0.95], "clA": [3, 3.6],
+      "grip": 1.519, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
+      "topSpeedKmh": 335, "gears": 6, "firstGearKmh": 120,
+      "calibration": {"laps": 2, "rmsError": 0.0082}
+    },
+    {
+      "id": "gt3", "name": "GT3", "spec": "2025", "kind": "car", "color": "#4ade80",
+      "mass": 1370, "powerKw": 330, "cdA": [1, 1], "clA": [0.574, 0.574],
+      "grip": 2.264, "loadSensitivity": 0.15, "driveShare": 0.62, "rollingResistance": 0.015,
+      "topSpeedKmh": 295, "gears": 6, "firstGearKmh": 110,
+      "calibration": {"laps": 4, "rmsError": 0.0198}
+    },
+    {
+      "id": "gt4", "name": "GT4", "spec": "2025", "kind": "car", "color": "#a3e635",
+      "mass": 1480, "powerKw": 280, "cdA": [1, 1], "clA": [0.4, 0.4],
+      "grip": 1.917, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
+      "topSpeedKmh": 275, "gears": 6, "firstGearKmh": 100,
+      "calibration": {"laps": 2, "rmsError": 0.0137}
+    },
+    {
+      "id": "tcr", "name": "TCR", "spec": "2025", "kind": "car", "color": "#f472b6",
+      "mass": 1270, "powerKw": 220, "cdA": [0.9, 0.9], "clA": [0.25, 0.25],
+      "grip": 1.762, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
+      "topSpeedKmh": 260, "gears": 6, "firstGearKmh": 95,
+      "calibration": {"laps": 2, "rmsError": 0.0217}
+    },
+    {
+      "id": "motogp", "name": "MotoGP", "spec": "2025", "kind": "bike", "color": "#fb923c",
+      "mass": 237, "powerKw": 215, "cdA": [0.32, 0.32], "clA": [0.06, 0.06],
+      "grip": 1.682, "loadSensitivity": 0.05, "driveShare": 1, "rollingResistance": 0.015,
+      "maxAccelG": 1.05, "maxBrakeG": 1.45,
+      "topSpeedKmh": 365, "gears": 6, "firstGearKmh": 140,
+      "calibration": {"laps": 2, "rmsError": 0.0032}
+    },
+    {
+      "id": "superbike", "name": "Superbike", "spec": "WorldSBK", "kind": "bike", "color": "#e5e7eb",
+      "mass": 248, "powerKw": 165, "cdA": [0.33, 0.33], "clA": [0, 0],
+      "grip": 1.66, "loadSensitivity": 0.05, "driveShare": 1, "rollingResistance": 0.015,
+      "maxAccelG": 1, "maxBrakeG": 1.35,
+      "topSpeedKmh": 335, "gears": 6, "firstGearKmh": 130,
+      "calibration": {"laps": 2, "rmsError": 0.0029}
+    }
+  ]
+}

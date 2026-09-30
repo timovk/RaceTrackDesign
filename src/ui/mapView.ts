@@ -9,6 +9,7 @@ import { CORNER_LABELS } from '../core/analysis.ts';
 import { dist, simplifyPolyline, type Vec2 } from '../core/geometry.ts';
 import { sampleHeight } from '../core/heightmap.ts';
 import type { ControlPoint } from '../core/track.ts';
+import { formatLapTime } from '../core/calibration.ts';
 import { ASPHALT, COLOR_BY_LABELS, type ColorBy, buckets, stationBuckets } from './colors.ts';
 import { h, isTyping, setChildren, setText } from './dom.ts';
 import * as fmt from './format.ts';
@@ -29,6 +30,7 @@ type Drag =
 const SEVERITY_COLORS = { error: 'rgba(255, 77, 79, 0.75)', warning: 'rgba(245, 177, 76, 0.7)', info: 'rgba(111, 179, 255, 0.55)' };
 const ACCENT = '#ff5a36';
 const HOVER = '#3fb6ff';
+const SECTOR = '#ffd60a';
 const POINT_HIT_PX = 10;
 const TRACK_HIT_PX = 12;
 const MAX_SCALE = 10;
@@ -49,7 +51,7 @@ export class MapView {
   private spaceDown = false;
   private pointerInside = false;
   private cursor: Vec2 | null = null;
-  private bucketCache: { track: unknown; colorBy: ColorBy; buckets: Int8Array } | null = null;
+  private bucketCache: { track: unknown; colorBy: ColorBy; lap: unknown; buckets: Int8Array } | null = null;
 
   private readonly hud: HTMLElement;
   private readonly legend: HTMLElement;
@@ -61,6 +63,7 @@ export class MapView {
   private readonly colorSelect: HTMLSelectElement;
   private readonly contourToggle: HTMLButtonElement;
   private readonly labelToggle: HTMLButtonElement;
+  private readonly lineToggle: HTMLButtonElement;
 
   constructor(store: Store) {
     this.store = store;
@@ -76,10 +79,12 @@ export class MapView {
     }, ...(Object.keys(COLOR_BY_LABELS) as ColorBy[]).map((k) => h('option', { value: k }, COLOR_BY_LABELS[k])));
     this.contourToggle = h('button', { class: 'chip', title: 'Show contour lines', onclick: () => store.setView({ contours: !store.view.contours }) }, 'Contours');
     this.labelToggle = h('button', { class: 'chip', title: 'Show corner numbers', onclick: () => store.setView({ labels: !store.view.labels }) }, 'Labels');
+    this.lineToggle = h('button', { class: 'chip', title: 'Show the racing line', onclick: () => store.setView({ line: !store.view.line }) }, 'Line');
     const toolbar = h('div', { class: 'map-toolbar' },
       h('label', { class: 'map-toolbar-label' }, 'Colour', this.colorSelect),
       this.contourToggle,
       this.labelToggle,
+      this.lineToggle,
       h('button', { class: 'chip', title: 'Fit the map to the window (F)', onclick: () => this.fit() }, 'Fit'),
     );
 
@@ -202,10 +207,12 @@ export class MapView {
       this.colorSelect.value = s.view.colorBy;
       this.contourToggle.classList.toggle('on', s.view.contours);
       this.labelToggle.classList.toggle('on', s.view.labels);
+      this.lineToggle.classList.toggle('on', s.view.line);
     }
-    if (topics.has('view') || topics.has('track')) this.updateLegend();
-    if (topics.has('track') || topics.has('mode') || topics.has('project')) this.updateHud();
-    if (topics.has('hover') || topics.has('track')) this.updateTooltip();
+    const lapChanged = topics.has('performance') || topics.has('vehicle');
+    if (topics.has('view') || topics.has('track') || lapChanged) this.updateLegend();
+    if (topics.has('track') || topics.has('mode') || topics.has('project') || lapChanged) this.updateHud();
+    if (topics.has('hover') || topics.has('track') || lapChanged) this.updateTooltip();
     if (topics.has('mode')) this.updateCursor();
     this.invalidate();
   }
@@ -225,7 +232,16 @@ export class MapView {
     const errors = s.issues.filter((i) => i.severity === 'error').length;
     const warnings = s.issues.filter((i) => i.severity === 'warning').length;
     const stat = (label: string, value: string) => h('div', { class: 'hud-stat' }, h('span', { class: 'hud-value' }, value), h('span', { class: 'hud-label' }, label));
+    const lap = s.lap;
+    const lapStat = h('button', {
+      class: `hud-stat hud-lap${s.performancePending ? ' pending' : ''}`,
+      title: 'Lap times for every class in Analyse',
+      onclick: () => s.setMode('analyse'),
+    },
+    h('span', { class: 'hud-value' }, lap ? formatLapTime(lap.time) : '—'),
+    h('span', { class: 'hud-label' }, h('span', { class: 'dot', style: `background:${s.vehicle.color}` }), `${s.vehicle.name} lap`));
     setChildren(this.hud,
+      lapStat,
       stat('length', fmt.km(m.length)),
       stat('height difference', fmt.elevation(m.elevationRange)),
       stat('corners', String(m.corners.length)),
@@ -239,7 +255,8 @@ export class MapView {
   }
 
   private updateLegend(): void {
-    const list = buckets(this.store.view.colorBy, this.store.track);
+    const s = this.store;
+    const list = buckets(s.view.colorBy, s.track, s.lap, s.vehicle.gears);
     this.legend.hidden = list.length === 0;
     setChildren(this.legend, ...list.map((b) => h('div', { class: 'legend-row' }, h('span', { class: 'swatch', style: `background:${b.color}` }), b.label)));
   }
@@ -271,9 +288,12 @@ export class MapView {
     }
     const corner = s.metrics?.corners.find((c) => inRange(k, c.start, c.end));
     const r = 1 / Math.max(1e-9, Math.abs(t.curvature[k]));
+    const lap = s.lap;
+    const i = s.lapIndex(k);
     setChildren(this.tooltip,
       h('div', { class: 'tt-main' }, `${fmt.km(t.s[k])}  ·  ${fmt.elevation(t.z[k])}  ·  ${fmt.gradient(t.gradient[k])}`),
       h('div', { class: 'tt-sub' }, corner ? `T${corner.number} ${CORNER_LABELS[corner.type].toLowerCase()} · radius ${fmt.radius(r)}` : r > 1000 ? 'straight' : `radius ${fmt.radius(r)}`),
+      lap ? h('div', { class: 'tt-sub' }, `${s.vehicle.name}: ${fmt.speed(lap.v[i])} · gear ${lap.gear[i]} · ${pedalText(lap.throttle[i], lap.brake[i])}`) : null,
     );
     this.tooltip.hidden = false;
     this.tooltip.style.transform = `translate(${this.sx(this.cursor.x) + 16}px, ${this.sy(this.cursor.y) + 16}px)`;
@@ -578,7 +598,7 @@ export class MapView {
     ctx.lineWidth = basePx + 2.5;
     ctx.stroke();
 
-    const colors = buckets(s.view.colorBy, t);
+    const colors = buckets(s.view.colorBy, t, s.lap, s.vehicle.gears);
     const idx = this.stationBuckets();
     let start = 0;
     while (start < t.n) {
@@ -608,7 +628,9 @@ export class MapView {
       }
     }
 
+    if (s.view.line) this.drawRacingLine();
     this.drawStartLine(basePx);
+    this.drawSectorLines(basePx);
     this.drawChevrons(basePx);
     if (s.view.labels) this.drawCornerLabels();
 
@@ -625,10 +647,64 @@ export class MapView {
   private stationBuckets(): Int8Array {
     const s = this.store;
     const c = this.bucketCache;
-    if (c && c.track === s.track && c.colorBy === s.view.colorBy) return c.buckets;
-    const b = stationBuckets(s.track!, s.view.colorBy);
-    this.bucketCache = { track: s.track, colorBy: s.view.colorBy, buckets: b };
+    const lap = s.lap;
+    if (c && c.track === s.track && c.colorBy === s.view.colorBy && c.lap === lap) return c.buckets;
+    const b = stationBuckets(s.track!, s.view.colorBy, { lap, index: (k) => s.lapIndex(k) });
+    this.bucketCache = { track: s.track, colorBy: s.view.colorBy, lap, buckets: b };
     return b;
+  }
+
+  /** The racing line as a thin bright line, hidden while it is being recalculated. */
+  private drawRacingLine(): void {
+    const s = this.store;
+    const perf = s.performance;
+    if (!perf || !s.performanceCurrent) return;
+    const line = perf.line;
+    const ctx = this.ctx;
+    ctx.beginPath();
+    for (let k = 0; k <= line.n; k++) {
+      const i = k % line.n;
+      if (k === 0) ctx.moveTo(this.sx(line.x[i]), this.sy(line.y[i]));
+      else ctx.lineTo(this.sx(line.x[i]), this.sy(line.y[i]));
+    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    ctx.lineWidth = 3.5;
+    ctx.stroke();
+    ctx.strokeStyle = '#7df9ff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  /** Yellow bars across the track where sectors 2 and 3 begin. */
+  private drawSectorLines(trackPx: number): void {
+    const s = this.store;
+    const t = s.track!;
+    const perf = s.performance;
+    if (!perf || !s.performanceCurrent) return;
+    const ctx = this.ctx;
+    ctx.font = '700 10px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    perf.sectors.forEach((k, i) => {
+      const half = Math.max(trackPx / 2, (t.width[k] / 2) * this.cam.scale) + 3;
+      const nx = Math.sin(t.heading[k]);
+      const ny = -Math.cos(t.heading[k]);
+      const cx = this.sx(t.x[k]);
+      const cy = this.sy(t.y[k]);
+      ctx.beginPath();
+      ctx.moveTo(cx - nx * half, cy - ny * half);
+      ctx.lineTo(cx + nx * half, cy + ny * half);
+      ctx.strokeStyle = SECTOR;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      const lx = cx + nx * (half + 12);
+      const ly = cy + ny * (half + 12);
+      ctx.fillStyle = SECTOR;
+      roundRect(ctx, lx - 11, ly - 7, 22, 14, 3);
+      ctx.fill();
+      ctx.fillStyle = '#111';
+      ctx.fillText(`S${i + 2}`, lx, ly + 0.5);
+    });
   }
 
   /** A chequered bar across the track at station 0, the provisional start. */
@@ -790,6 +866,13 @@ export class MapView {
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
   ctx.beginPath();
   ctx.roundRect(x, y, w, h, r);
+}
+
+function pedalText(throttle: number, brake: number): string {
+  if (brake > 0) return `braking ${Math.round(brake * 100)}%`;
+  if (throttle >= 0.98) return 'full throttle';
+  if (throttle > 0.05) return `throttle ${Math.round(throttle * 100)}%`;
+  return 'coasting';
 }
 
 function plural(count: number, word: string): string {

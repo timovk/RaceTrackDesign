@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "notes": "Real qualifying laps the lap-time model is calibrated against. Only circuits whose layout matches the TUMFTM data and that are nearly flat are used for fitting ('fit': true), since the circuit data carries no elevation. 'derived' marks targets computed from another class.",
+  "laps": [
+    { "class": "f1", "circuit": "Monza", "time": "1:18.792", "event": "2025 Italian GP, qualifying", "driver": "Max Verstappen", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_Italian_Grand_Prix" },
+    { "class": "f1", "circuit": "Silverstone", "time": "1:24.892", "event": "2025 British GP, qualifying", "driver": "Max Verstappen", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_British_Grand_Prix" },
+    { "class": "f1", "circuit": "Budapest", "time": "1:15.372", "event": "2025 Hungarian GP, qualifying", "driver": "Charles Leclerc", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_Hungarian_Grand_Prix" },
+    { "class": "f1", "circuit": "Montreal", "time": "1:10.899", "event": "2025 Canadian GP, qualifying", "driver": "George Russell", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_Canadian_Grand_Prix" },
+    { "class": "f1", "circuit": "Shanghai", "time": "1:30.641", "event": "2025 Chinese GP, qualifying", "driver": "Oscar Piastri", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_Chinese_Grand_Prix" },
+    { "class": "f1", "circuit": "Sakhir", "time": "1:29.841", "event": "2025 Bahrain GP, qualifying", "driver": "Oscar Piastri", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_Bahrain_Grand_Prix" },
+
+    { "class": "f2", "circuit": "Monza", "time": "1:32.390", "event": "2025 Monza F2 round, qualifying", "driver": "Luke Browning", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_Monza_Formula_2_round" },
+    { "class": "f2", "circuit": "Silverstone", "time": "1:39.731", "event": "2025 Silverstone F2 round, qualifying", "driver": "Victor Martins", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_Silverstone_Formula_2_round" },
+    { "class": "f2", "circuit": "Budapest", "time": "1:28.779", "event": "2025 Budapest F2 round, qualifying", "driver": "Roman Staněk", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_Budapest_Formula_2_round" },
+    { "class": "f2", "circuit": "Sakhir", "time": "1:44.008", "event": "2025 Sakhir F2 round, qualifying", "driver": "Leonardo Fornaroli", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_Sakhir_Formula_2_round" },
+
+    { "class": "indycar", "circuit": "Austin", "time": "1:46.018", "event": "2019 IndyCar Classic, qualifying", "driver": "Will Power", "fit": true, "note": "COTA has about 40 m of elevation change, which the flat circuit data leaves out.", "source": "https://en.wikipedia.org/wiki/2019_IndyCar_Classic" },
+
+    { "class": "hypercar", "circuit": "Sakhir", "time": "1:46.826", "event": "2025 8 Hours of Bahrain, Hyperpole", "driver": "Kamui Kobayashi", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_8_Hours_of_Bahrain" },
+    { "class": "hypercar", "circuit": "Monza", "time": "1:35.358", "event": "2023 6 Hours of Monza, Hyperpole", "driver": "Toyota #7", "fit": true, "source": "https://en.wikipedia.org/wiki/2023_6_Hours_of_Monza" },
+
+    { "class": "lmp2", "circuit": "Monza", "time": "1:39.354", "event": "2023 6 Hours of Monza, qualifying", "driver": "Team WRT #41", "fit": true, "source": "https://en.wikipedia.org/wiki/2023_6_Hours_of_Monza" },
+    { "class": "lmp2", "circuit": "Sakhir", "time": "1:52.290", "event": "2023 8 Hours of Bahrain, qualifying", "driver": "United Autosports", "fit": true, "source": "https://en.wikipedia.org/wiki/2023_8_Hours_of_Bahrain" },
+
+    { "class": "gt3", "circuit": "Monza", "time": "1:45.000", "event": "2025 GT World Challenge Europe Monza, qualifying 2", "driver": "Mercedes-AMG Team GetSpeed #17", "fit": true, "source": "https://www.gt-world-challenge-europe.com/results/2025/monza" },
+    { "class": "gt3", "circuit": "Norisring", "time": "48.467", "event": "2025 DTM Norisring, qualifying 1", "driver": "Jordan Pepper", "fit": true, "source": "https://www.gt-report.com/2025/07/05/dtm-norisring-pepper-powers-to-race-1-pole-with-lap-record/" },
+    { "class": "gt3", "circuit": "Oschersleben", "time": "1:21.072", "event": "2025 DTM Oschersleben, qualifying 2", "driver": "Jules Gounon", "fit": true, "source": "https://www.motorsport-magazin.com/dtm/ergebnisse/2025/session/oschersleben-qualifying-40283.html" },
+    { "class": "gt3", "circuit": "Hockenheim", "time": "1:36.259", "event": "2025 DTM Hockenheim, qualifying 2", "driver": "Gilles Magnus", "fit": true, "source": "https://www.motorsport-total.com/dtm/news/dtm-qualifying-hockenheim-2-aston-martin-pole-dtm-leader-im-mittelfeld-25100501" },
+
+    { "class": "gt4", "circuit": "Monza", "time": "1:53.708", "event": "2024 GT4 European Series Monza, qualifying", "driver": "Audi R8 LMS GT4 #3", "fit": true, "source": "https://www.racingsportscars.com/results/Monza-2024-09-22-38789.html" },
+    { "class": "gt4", "circuit": "Oschersleben", "time": "1:28.820", "event": "2025 ADAC GT4 Germany Oschersleben, qualifying 1", "driver": "Hugo Sasse", "fit": true, "source": "https://gt-place.com/2025/04/26/adac-gt4-germany-hugo-sasse-auf-pole-position-3/" },
+
+    { "class": "tcr", "circuit": "Monza", "time": "1:53.613", "event": "2026 TCR Europe Monza, qualifying 1", "driver": "Gabriele Covini", "fit": true, "source": "https://www.touringcartimes.com/2026/09/26/gabriele-covini-grabs-tcr-europe-race-one-pole-at-monza/" },
+    { "class": "tcr", "circuit": "Budapest", "time": "1:51.954", "event": "2026 TCR Europe Hungaroring, qualifying 1", "driver": "Marco Butti", "fit": true, "source": "https://www.touringcartimes.com/2026/07/04/marco-butti-claims-pole-for-opening-tcr-europe-race-in-hungary/" },
+
+    { "class": "motogp", "circuit": "Sepang", "time": "1:57.001", "event": "2025 Malaysian MotoGP, qualifying", "driver": "Francesco Bagnaia", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_Malaysian_motorcycle_Grand_Prix" },
+    { "class": "motogp", "circuit": "Silverstone", "time": "1:57.233", "event": "2025 British MotoGP, qualifying", "driver": "Fabio Quartararo", "fit": true, "source": "https://en.wikipedia.org/wiki/2025_British_motorcycle_Grand_Prix" },
+
+    { "class": "superbike", "circuit": "Sepang", "time": "1:59.511", "event": "MotoGP 2025 Sepang pole x 1.0215", "derived": true, "fit": true, "note": "WorldSBK no longer races on any circuit in the data set. The target scales the MotoGP pole by the 2025 Assen gap: WorldSBK Superpole 1:32.596 (Sam Lowes) against MotoGP pole 1:30.651 (Fabio Quartararo).", "source": "https://en.wikipedia.org/wiki/2025_Dutch_TT" },
+    { "class": "superbike", "circuit": "Silverstone", "time": "1:59.748", "event": "MotoGP 2025 Silverstone pole x 1.0215", "derived": true, "fit": true, "note": "Scaled from MotoGP as above.", "source": "https://en.wikipedia.org/wiki/2025_Dutch_TT" }
+  ]
+}

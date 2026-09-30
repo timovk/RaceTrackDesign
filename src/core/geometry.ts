@@ -77,6 +77,32 @@ export function sampleClosedSpline(pts: readonly Vec2[], maxStep = 0.5): SplineS
 }
 
 /**
+ * Heading (radians) and signed curvature (1/m, positive turning right with y
+ * pointing south) of a closed polyline. Curvature is the change in chord
+ * heading divided by the mean length of the two chords, smoothed over
+ * `smoothing` samples; spacing does not need to be uniform.
+ */
+export function headingAndCurvature(x: Float64Array, y: Float64Array, smoothing: number): { heading: Float64Array; curvature: Float64Array } {
+  const n = x.length;
+  const chord = new Float64Array(n);
+  const len = new Float64Array(n);
+  for (let k = 0; k < n; k++) {
+    const k1 = (k + 1) % n;
+    chord[k] = Math.atan2(y[k1] - y[k], x[k1] - x[k]);
+    len[k] = dist(x[k], y[k], x[k1], y[k1]);
+  }
+  const heading = new Float64Array(n);
+  const raw = new Float64Array(n);
+  for (let k = 0; k < n; k++) {
+    const p = mod(k - 1, n);
+    const turn = wrapAngle(chord[k] - chord[p]);
+    heading[k] = wrapAngle(chord[p] + turn / 2);
+    raw[k] = turn / Math.max(1e-9, (len[p] + len[k]) / 2);
+  }
+  return { heading, curvature: smoothCircular(raw, smoothing) };
+}
+
+/**
  * Smooths a closed-loop signal with a triweight kernel whose standard
  * deviation is `sigma` samples. Uses only arithmetic, so it is deterministic.
  */

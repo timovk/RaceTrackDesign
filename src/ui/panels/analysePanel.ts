@@ -1,22 +1,27 @@
-/** Analyse mode: headline metrics, corners, straights and warnings. */
+/** Analyse mode: lap times, headline metrics, corners, straights and warnings. */
 import { CORNER_LABELS } from '../../core/analysis.ts';
 import { section } from '../controls.ts';
 import { h, setChildren } from '../dom.ts';
 import * as fmt from '../format.ts';
 import type { Store, Topic } from '../store.ts';
 import { issueList } from './issueList.ts';
+import { lapTimesSection } from './lapTimes.ts';
 
 export class AnalysePanel {
   readonly el: HTMLElement;
   private readonly store: Store;
   private readonly onLocate: (station: number) => void;
+  private readonly lapsEl: HTMLElement;
+  private readonly geometryEl: HTMLElement;
 
   constructor(store: Store, onLocate: (station: number) => void) {
     this.store = store;
     this.onLocate = onLocate;
-    this.el = h('div', { class: 'panel' });
+    this.lapsEl = h('div');
+    this.geometryEl = h('div');
+    this.el = h('div', { class: 'panel' }, this.lapsEl, this.geometryEl);
     store.subscribe((topics) => this.update(topics));
-    this.update(new Set<Topic>(['track']));
+    this.update(new Set<Topic>(['track', 'performance']));
   }
 
   private locate(start: number, end: number, centre: number): void {
@@ -25,12 +30,18 @@ export class AnalysePanel {
   }
 
   private update(topics: Set<Topic>): void {
-    if (!topics.has('track') && !topics.has('focus')) return;
+    if (topics.has('performance') || topics.has('vehicle') || topics.has('track')) {
+      setChildren(this.lapsEl, this.store.track ? lapTimesSection(this.store) : null);
+    }
+    if (topics.has('track') || topics.has('focus')) this.updateGeometry();
+  }
+
+  private updateGeometry(): void {
     const s = this.store;
     const t = s.track;
     const m = s.metrics;
     if (!t || !m) {
-      setChildren(this.el, h('p', { class: 'muted' }, 'Draw a closed track in Design to see its analysis.'));
+      setChildren(this.geometryEl, h('p', { class: 'muted' }, 'Draw a closed track in Design to see its analysis.'));
       return;
     }
 
@@ -80,14 +91,14 @@ export class AnalysePanel {
             h('span', null, fmt.distance(st.length)), h('span', { class: 'muted' }, `from ${fmt.km(t.s[st.start])}`))))
       : h('p', { class: 'muted small' }, 'No straights of 100 m or more.');
 
-    setChildren(this.el,
+    setChildren(this.geometryEl,
       section('Overview', overview),
       section(`Corners (${m.corners.length})`, corners,
         h('p', { class: 'hint' }, 'Numbered from the start point. Click a row to show it on the map.')),
       section('Straights', straights),
       section(`Checks (${s.issues.length})`, issueList(s, this.onLocate)),
       section('Coming next',
-        h('p', { class: 'hint' }, 'Lap times per car class and timed sectors arrive in milestone 2; start/finish, pit lane and the FIA grade estimate in milestone 3.')),
+        h('p', { class: 'hint' }, 'Start/finish, pit lane and the FIA grade estimate arrive in milestone 3; until then laps and sectors start at the first point.')),
     );
   }
 }

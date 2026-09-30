@@ -7,7 +7,7 @@
  * Sign convention: world y points south, so a positive curvature is a
  * right-hand corner and a positive gradient is uphill in the direction of travel.
  */
-import { mod, sampleClosedSpline, smoothCircular, wrapAngle } from './geometry.ts';
+import { headingAndCurvature, mod, sampleClosedSpline, smoothCircular } from './geometry.ts';
 import { type Heightmap, sampleHeight } from './heightmap.ts';
 
 export interface ControlPoint {
@@ -78,8 +78,15 @@ export function emptyDesign(): TrackDesign {
   return { points: [], defaultWidth: DEFAULT_WIDTH, grading: { ...DEFAULT_GRADING } };
 }
 
+/** Natural ground elevation at a world position. */
+export type HeightSampler = (x: number, y: number) => number;
+
+export function heightmapSampler(hm: Heightmap): HeightSampler {
+  return (x, y) => sampleHeight(hm, x, y);
+}
+
 /** Builds stations for a closed track; null when there are fewer than three points. */
-export function buildTrack(design: TrackDesign, hm: Heightmap, spacing = STATION_SPACING): Track | null {
+export function buildTrack(design: TrackDesign, heightAt: HeightSampler, spacing = STATION_SPACING): Track | null {
   const pts = design.points;
   if (pts.length < 3) return null;
 
@@ -128,24 +135,10 @@ export function buildTrack(design: TrackDesign, hm: Heightmap, spacing = STATION
     }
   }
 
-  // Headings of the chords between stations, then curvature as the change in heading per metre.
-  const chord = new Float64Array(n);
-  for (let k = 0; k < n; k++) {
-    const k1 = (k + 1) % n;
-    chord[k] = Math.atan2(y[k1] - y[k], x[k1] - x[k]);
-  }
-  const heading = new Float64Array(n);
-  const rawCurv = new Float64Array(n);
-  for (let k = 0; k < n; k++) {
-    const prev = chord[mod(k - 1, n)];
-    const turn = wrapAngle(chord[k] - prev);
-    heading[k] = wrapAngle(prev + turn / 2);
-    rawCurv[k] = turn / ds;
-  }
-  const curvature = smoothCircular(rawCurv, CURVATURE_SMOOTHING / ds);
+  const { heading, curvature } = headingAndCurvature(x, y, CURVATURE_SMOOTHING / ds);
 
   const terrain = new Float64Array(n);
-  for (let k = 0; k < n; k++) terrain[k] = sampleHeight(hm, x[k], y[k]);
+  for (let k = 0; k < n; k++) terrain[k] = heightAt(x[k], y[k]);
   const z = gradeProfile(terrain, ds, design.grading);
 
   const gradient = new Float64Array(n);
