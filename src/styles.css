@@ -643,6 +643,160 @@ input[type='range'] {
   margin-bottom: 6px;
 }
 
+.grade-badges {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.grade-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(88, 194, 125, 0.12);
+  border: 1px solid rgba(88, 194, 125, 0.45);
+}
+
+.grade-badge.none {
+  background: rgba(255, 77, 79, 0.1);
+  border-color: rgba(255, 77, 79, 0.45);
+}
+
+.grade-body {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.grade-value {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.class-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.class-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-size: 11px;
+}
+
+.class-chip.blocked {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.check-group summary {
+  cursor: pointer;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 6px;
+}
+
+.grade-ladder {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.grade-step {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 77, 79, 0.14);
+  color: #ff9a9b;
+  font-weight: 600;
+}
+
+.grade-step.ok {
+  background: rgba(88, 194, 125, 0.16);
+  color: var(--ok);
+}
+
+.checks {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.check {
+  display: grid;
+  grid-template-columns: 16px 1fr auto;
+  gap: 6px;
+  align-items: baseline;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--panel-2);
+}
+
+.check.link:hover {
+  background: var(--panel-3);
+}
+
+.check-icon {
+  text-align: center;
+  font-weight: 800;
+}
+
+.check.pass .check-icon {
+  color: var(--ok);
+}
+
+.check.required .check-icon {
+  color: var(--error);
+}
+
+.check.recommended .check-icon {
+  color: var(--warning);
+}
+
+.check.info .check-icon {
+  color: var(--info);
+  font-style: italic;
+}
+
+.check-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.check-detail {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.check-grades {
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.facility-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.facility-head .btn:first-of-type {
+  margin-left: auto;
+}
+
 /* ---- workspace -------------------------------------------------------- */
 
 .workspace {

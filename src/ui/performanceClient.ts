@@ -1,28 +1,36 @@
 /**
- * Runs lap-time analysis in a Web Worker. Only the result of the latest
- * request is delivered; older ones are dropped when they arrive.
+ * Runs lap-time, facility and licence analysis in a Web Worker. Only the
+ * result of the latest request is delivered; older ones are dropped when
+ * they arrive. The heightmap crosses to the worker once per terrain.
  */
-import type { Performance } from '../core/performance.ts';
-import type { Track } from '../core/track.ts';
-import type { VehicleClass } from '../core/vehicles.ts';
-import type { PerformanceRequest, PerformanceResponse } from '../worker/protocol.ts';
+import type { Heightmap } from '../core/heightmap.ts';
+import type { Analysis, PerformanceRequest, PerformanceResponse } from '../worker/protocol.ts';
+
+export type AnalysisRequest = Omit<PerformanceRequest, 'id' | 'heightmap' | 'terrainId'>;
 
 export class PerformanceClient {
   private readonly worker = new Worker(new URL('../worker/performanceWorker.ts', import.meta.url), { type: 'module' });
   private latest = 0;
+  private sentHeightmap: Heightmap | null = null;
+  private terrainId = 0;
 
-  constructor(onResult: (performance: Performance | null, error: string | null) => void) {
+  constructor(onResult: (analysis: Analysis | null, error: string | null) => void) {
     this.worker.onmessage = (event: MessageEvent<PerformanceResponse>) => {
       const msg = event.data;
       if (msg.id !== this.latest) return;
-      if (msg.type === 'done') onResult(msg.performance, null);
+      if (msg.type === 'done') onResult({ performance: msg.performance, facilities: msg.facilities, licence: msg.licence }, null);
       else onResult(null, msg.message);
     };
-    this.worker.onerror = (event) => onResult(null, event.message || 'Lap-time worker failed.');
+    this.worker.onerror = (event) => onResult(null, event.message || 'Analysis worker failed.');
   }
 
-  request(track: Track, vehicles: readonly VehicleClass[]): void {
-    const msg: PerformanceRequest = { id: ++this.latest, track, vehicles };
+  request(req: AnalysisRequest, heightmap: Heightmap): void {
+    const fresh = heightmap !== this.sentHeightmap;
+    if (fresh) {
+      this.sentHeightmap = heightmap;
+      this.terrainId++;
+    }
+    const msg: PerformanceRequest = { ...req, id: ++this.latest, terrainId: this.terrainId, heightmap: fresh ? heightmap : undefined };
     this.worker.postMessage(msg);
   }
 

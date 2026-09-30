@@ -210,20 +210,26 @@ export function simulateLapAtTrim(track: Track, line: RacingLine, car: VehicleCl
   };
 }
 
-/** A DRS zone needs this much straight: radius above 1 km for at least 300 m. */
-const DRS_MIN_STRAIGHT = 300;
+/** A DRS zone needs a straight on the racing line (radius above 1 km) of at least 400 m. */
+const DRS_MIN_STRAIGHT = 400;
 const DRS_MAX_CURVATURE = 1 / 1000;
+/** At most this many zones, on the longest straights, as in Formula One. */
+export const DRS_MAX_ZONES = 3;
 
-/**
- * Stations where an opened rear wing is allowed: along straights of at least
- * 300 m, the way qualifying DRS zones sit on the main straights.
- */
-export function drsStations(line: { n: number; curvature: Float64Array; ds: Float64Array }): Uint8Array {
+export interface DrsZone {
+  /** Station range (inclusive, may wrap past 0) where the wing may open. */
+  start: number;
+  end: number;
+  length: number;
+}
+
+/** DRS zones: the longest straights of the racing line, up to three, each at least 400 m. */
+export function drsZones(line: { n: number; curvature: Float64Array; ds: Float64Array }): DrsZone[] {
   const n = line.n;
-  const open = new Uint8Array(n);
   // Start from a curved station so no straight is split by the wrap-around.
   let origin = 0;
   for (let k = 1; k < n; k++) if (Math.abs(line.curvature[k]) > Math.abs(line.curvature[origin])) origin = k;
+  const runs: DrsZone[] = [];
   let runStart = -1;
   let runLength = 0;
   for (let i = 0; i <= n; i++) {
@@ -236,9 +242,20 @@ export function drsStations(line: { n: number; curvature: Float64Array; ds: Floa
       }
       runLength += line.ds[k];
     } else if (runStart >= 0) {
-      if (runLength >= DRS_MIN_STRAIGHT) for (let j = runStart; j < i; j++) open[(origin + j) % n] = 1;
+      if (runLength >= DRS_MIN_STRAIGHT) runs.push({ start: (origin + runStart) % n, end: (origin + i - 1) % n, length: runLength });
       runStart = -1;
     }
+  }
+  return runs.sort((a, b) => b.length - a.length).slice(0, DRS_MAX_ZONES).sort((a, b) => a.start - b.start);
+}
+
+/** Stations inside a DRS zone. */
+export function drsStations(line: { n: number; curvature: Float64Array; ds: Float64Array }): Uint8Array {
+  const n = line.n;
+  const open = new Uint8Array(n);
+  for (const z of drsZones(line)) {
+    const len = z.end >= z.start ? z.end - z.start + 1 : n - z.start + z.end + 1;
+    for (let i = 0; i < len; i++) open[(z.start + i) % n] = 1;
   }
   return open;
 }

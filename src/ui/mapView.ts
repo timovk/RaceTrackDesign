@@ -10,6 +10,7 @@ import { dist, simplifyPolyline, type Vec2 } from '../core/geometry.ts';
 import { sampleHeight } from '../core/heightmap.ts';
 import type { ControlPoint } from '../core/track.ts';
 import { formatLapTime } from '../core/calibration.ts';
+import { type Handle, drawFacilities, drawHandles, handleStations } from './facilityLayer.ts';
 import { ASPHALT, COLOR_BY_LABELS, type ColorBy, buckets, stationBuckets } from './colors.ts';
 import { h, isTyping, setChildren, setText } from './dom.ts';
 import * as fmt from './format.ts';
@@ -25,7 +26,8 @@ interface Camera {
 type Drag =
   | { kind: 'pan'; startX: number; startY: number; camX: number; camY: number; button: number; moved: boolean }
   | { kind: 'point'; index: number; dx: number; dy: number; moved: boolean }
-  | { kind: 'freehand'; points: Vec2[] };
+  | { kind: 'freehand'; points: Vec2[] }
+  | { kind: 'handle'; handle: Handle; station: number; moved: boolean };
 
 const SEVERITY_COLORS = { error: 'rgba(255, 77, 79, 0.75)', warning: 'rgba(245, 177, 76, 0.7)', info: 'rgba(111, 179, 255, 0.55)' };
 const ACCENT = '#ff5a36';
@@ -64,6 +66,7 @@ export class MapView {
   private readonly contourToggle: HTMLButtonElement;
   private readonly labelToggle: HTMLButtonElement;
   private readonly lineToggle: HTMLButtonElement;
+  private readonly facilityToggle: HTMLButtonElement;
 
   constructor(store: Store) {
     this.store = store;
@@ -80,11 +83,13 @@ export class MapView {
     this.contourToggle = h('button', { class: 'chip', title: 'Show contour lines', onclick: () => store.setView({ contours: !store.view.contours }) }, 'Contours');
     this.labelToggle = h('button', { class: 'chip', title: 'Show corner numbers', onclick: () => store.setView({ labels: !store.view.labels }) }, 'Labels');
     this.lineToggle = h('button', { class: 'chip', title: 'Show the racing line', onclick: () => store.setView({ line: !store.view.line }) }, 'Line');
+    this.facilityToggle = h('button', { class: 'chip', title: 'Show pit lane, grid, DRS zones, marshal posts and run-off', onclick: () => store.setView({ facilities: !store.view.facilities }) }, 'Facilities');
     const toolbar = h('div', { class: 'map-toolbar' },
       h('label', { class: 'map-toolbar-label' }, 'Colour', this.colorSelect),
       this.contourToggle,
       this.labelToggle,
       this.lineToggle,
+      this.facilityToggle,
       h('button', { class: 'chip', title: 'Fit the map to the window (F)', onclick: () => this.fit() }, 'Fit'),
     );
 
@@ -208,6 +213,7 @@ export class MapView {
       this.contourToggle.classList.toggle('on', s.view.contours);
       this.labelToggle.classList.toggle('on', s.view.labels);
       this.lineToggle.classList.toggle('on', s.view.line);
+      this.facilityToggle.classList.toggle('on', s.view.facilities);
     }
     const lapChanged = topics.has('performance') || topics.has('vehicle');
     if (topics.has('view') || topics.has('track') || lapChanged) this.updateLegend();
@@ -240,12 +246,19 @@ export class MapView {
     },
     h('span', { class: 'hud-value' }, lap ? formatLapTime(lap.time) : '—'),
     h('span', { class: 'hud-label' }, h('span', { class: 'dot', style: `background:${s.vehicle.color}` }), `${s.vehicle.name} lap`));
+    const lic = s.licence;
+    const gradeText = lic ? `FIA ${lic.fia.grade ?? '–'} · FIM ${lic.fim.grade ?? '–'}` : '…';
+    const licenceStat = h('button', {
+      class: `hud-stat hud-lap${s.performancePending ? ' pending' : ''}`,
+      title: 'Estimated circuit licence; details in Analyse',
+      onclick: () => s.setMode('analyse'),
+    }, h('span', { class: 'hud-value' }, gradeText), h('span', { class: 'hud-label' }, 'licence estimate'));
     setChildren(this.hud,
       lapStat,
+      licenceStat,
       stat('length', fmt.km(m.length)),
       stat('height difference', fmt.elevation(m.elevationRange)),
       stat('corners', String(m.corners.length)),
-      stat('longest straight', m.longestStraight ? fmt.distance(m.longestStraight.length) : '—'),
       h('button', {
         class: `hud-issues ${errors ? 'has-errors' : warnings ? 'has-warnings' : 'clean'}`,
         title: 'Show all warnings in Analyse',
@@ -330,6 +343,13 @@ export class MapView {
     } catch {
       // Synthetic events (tests, automation) have no capturable pointer; dragging still works without it.
     }
+    if (e.button === 0 && !this.spaceDown && s.mode === 'analyse' && s.view.facilities) {
+      const hit = this.handleAt(p.x, p.y);
+      if (hit) {
+        this.drag = { kind: 'handle', handle: hit.handle, station: hit.station, moved: false };
+        return;
+      }
+    }
     const panButton = e.button === 1 || e.button === 2 || (e.button === 0 && (this.spaceDown || s.mode !== 'design'));
     if (panButton) {
       this.drag = { kind: 'pan', startX: p.x, startY: p.y, camX: this.cam.x, camY: this.cam.y, button: e.button, moved: false };
@@ -397,6 +417,14 @@ export class MapView {
       const last = drag.points[drag.points.length - 1];
       if (dist(this.sx(last.x), this.sy(last.y), p.x, p.y) > 3) drag.points.push(this.clampToMap(this.cursor));
       this.invalidate();
+    } else if (drag?.kind === 'handle') {
+      // Handles slide along the track: snap to the nearest station.
+      const k = this.stationAt(p.x, p.y, 80);
+      if (k !== null && k !== drag.station) {
+        drag.station = k;
+        drag.moved = true;
+        this.invalidate();
+      }
     } else {
       s.setHover(this.stationAt(p.x, p.y, TRACK_HIT_PX));
       this.updateTooltip();
@@ -422,9 +450,37 @@ export class MapView {
       s.commitEdit();
     } else if (drag?.kind === 'freehand') {
       this.finishFreehand(drag.points);
+    } else if (drag?.kind === 'handle' && drag.moved) {
+      this.dropHandle(drag.handle, drag.station);
     }
     this.updateCursor();
     this.invalidate();
+  }
+
+  /** Stores a dragged facility as a hand placement (a world position, so it survives edits to the track). */
+  private dropHandle(handle: Handle, station: number): void {
+    const s = this.store;
+    const t = s.track;
+    if (!t) return;
+    const at = { x: t.x[station], y: t.y[station] };
+    if (handle === 'start') s.setOverride('startFinish', at);
+    else if (handle === 'speedTrap') s.setOverride('speedTrap', at);
+    else {
+      const pit = s.facilities?.pitLane;
+      if (!pit) return;
+      const entry = handle === 'pitEntry' ? at : { x: t.x[pit.entry], y: t.y[pit.entry] };
+      const exit = handle === 'pitExit' ? at : { x: t.x[pit.exit], y: t.y[pit.exit] };
+      s.setOverride('pitLane', { entry, exit, side: pit.side });
+    }
+  }
+
+  private handleAt(px: number, py: number): { handle: Handle; station: number } | null {
+    const t = this.store.track;
+    if (!t) return null;
+    for (const h of handleStations(this.store)) {
+      if (dist(this.sx(t.x[h.station]), this.sy(t.y[h.station]), px, py) < 12) return h;
+    }
+    return null;
   }
 
   private cancelDrag(): void {
@@ -632,7 +688,10 @@ export class MapView {
     this.drawStartLine(basePx);
     this.drawSectorLines(basePx);
     this.drawChevrons(basePx);
+    const layer = { ctx, store: s, scale: this.cam.scale, sx: (x: number) => this.sx(x), sy: (y: number) => this.sy(y) };
+    if (s.view.facilities) drawFacilities(layer);
     if (s.view.labels) this.drawCornerLabels();
+    if (s.view.facilities && s.mode === 'analyse') drawHandles(layer, this.drag?.kind === 'handle' ? this.drag : null);
 
     if (s.hover !== null && s.hover < t.n) {
       const k = s.hover;
@@ -811,11 +870,10 @@ export class MapView {
       const selected = i === s.selected;
       ctx.beginPath();
       ctx.arc(this.sx(p.x), this.sy(p.y), selected ? 6.5 : 4.5, 0, Math.PI * 2);
-      ctx.fillStyle = i === 0 ? ACCENT : '#ffffff';
+      ctx.fillStyle = '#ffffff';
       ctx.fill();
       ctx.lineWidth = selected ? 2.5 : 1.5;
       ctx.strokeStyle = selected ? ACCENT : '#111';
-      if (selected && i === 0) ctx.strokeStyle = '#fff';
       ctx.stroke();
     });
   }

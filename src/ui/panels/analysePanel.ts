@@ -6,20 +6,23 @@ import * as fmt from '../format.ts';
 import type { Store, Topic } from '../store.ts';
 import { issueList } from './issueList.ts';
 import { lapTimesSection } from './lapTimes.ts';
+import { facilitiesSection, licenceSection } from './licencePanel.ts';
 
 export class AnalysePanel {
   readonly el: HTMLElement;
   private readonly store: Store;
   private readonly onLocate: (station: number) => void;
   private readonly lapsEl: HTMLElement;
+  private readonly circuitEl: HTMLElement;
   private readonly geometryEl: HTMLElement;
 
   constructor(store: Store, onLocate: (station: number) => void) {
     this.store = store;
     this.onLocate = onLocate;
     this.lapsEl = h('div');
+    this.circuitEl = h('div');
     this.geometryEl = h('div');
-    this.el = h('div', { class: 'panel' }, this.lapsEl, this.geometryEl);
+    this.el = h('div', { class: 'panel' }, this.lapsEl, this.circuitEl, this.geometryEl);
     store.subscribe((topics) => this.update(topics));
     this.update(new Set<Topic>(['track', 'performance']));
   }
@@ -32,6 +35,10 @@ export class AnalysePanel {
   private update(topics: Set<Topic>): void {
     if (topics.has('performance') || topics.has('vehicle') || topics.has('track')) {
       setChildren(this.lapsEl, this.store.track ? lapTimesSection(this.store) : null);
+    }
+    if (topics.has('performance') || topics.has('track') || topics.has('view') || topics.has('project')) {
+      const s = this.store;
+      setChildren(this.circuitEl, s.track ? licenceSection(s, this.onLocate) : null, s.track ? facilitiesSection(s, this.onLocate) : null);
     }
     if (topics.has('track') || topics.has('focus')) this.updateGeometry();
   }
@@ -94,11 +101,11 @@ export class AnalysePanel {
     setChildren(this.geometryEl,
       section('Overview', overview),
       section(`Corners (${m.corners.length})`, corners,
-        h('p', { class: 'hint' }, 'Numbered from the start point. Click a row to show it on the map.')),
+        h('p', { class: 'hint' }, 'Numbered from the start/finish line. Click a row to show it on the map.')),
       section('Straights', straights),
       section(`Checks (${s.issues.length})`, issueList(s, this.onLocate)),
       section('Coming next',
-        h('p', { class: 'hint' }, 'Start/finish, pit lane and the FIA grade estimate arrive in milestone 3; until then laps and sectors start at the first point.')),
+        h('p', { class: 'hint' }, 'Race simulation with moving cars and a timing tower arrives in milestone 4.')),
     );
   }
 }

@@ -118,3 +118,10 @@ export function chicaneCircuit(): ControlPoint[] {
     .arc(50, 90)
     .close();
 }
+
+/** A rectangle with 1500 m and 800 m straights and 50 m corners, 15 m wide, clockwise. */
+export function bigRectangle(width = 15) {
+  return new Turtle(3000, 3000, 0, 10)
+    .straight(1500).arc(50, 90).straight(800).arc(50, 90).straight(1500).arc(50, 90).straight(800).arc(50, 90)
+    .close().map((p) => ({ ...p, width }));
+}

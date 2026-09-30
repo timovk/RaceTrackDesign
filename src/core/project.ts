@@ -7,6 +7,7 @@ import {
   type TerrainPreset, type TerrainSettings,
 } from './terrain.ts';
 import { type ControlPoint, type TrackDesign, DEFAULT_GRADING, DEFAULT_WIDTH, emptyDesign } from './track.ts';
+import type { Overrides } from './facilities.ts';
 
 export const PROJECT_VERSION = 1;
 
@@ -15,8 +16,8 @@ export interface Project {
   name: string;
   terrain: TerrainSettings;
   track: TrackDesign;
-  /** Manual placements that override the automatic ones (start/finish, pit lane); filled from milestone 3. */
-  overrides: Record<string, unknown>;
+  /** Start/finish, pit lane and speed trap moved by hand (world positions); anything absent is placed automatically. */
+  overrides: Overrides;
   /** Race setup, including its own seed; filled from milestone 4. */
   race: Record<string, unknown> | null;
 }
@@ -93,9 +94,27 @@ export function parseProject(text: string): Project {
     name: typeof raw.name === 'string' && raw.name.trim() ? raw.name : 'Untitled circuit',
     terrain,
     track,
-    overrides: isObject(raw.overrides) ? raw.overrides : {},
+    overrides: parseOverrides(raw.overrides),
     race: isObject(raw.race) ? raw.race : null,
   };
+}
+
+/** Keeps only well-formed overrides; anything else falls back to automatic placement. */
+function parseOverrides(raw: unknown): Overrides {
+  const out: Overrides = {};
+  if (!isObject(raw)) return out;
+  const point = (v: unknown) => (isObject(v) && isNum(v.x) && isNum(v.y) ? { x: v.x, y: v.y } : null);
+  const sf = point(raw.startFinish);
+  if (sf) out.startFinish = sf;
+  const trap = point(raw.speedTrap);
+  if (trap) out.speedTrap = trap;
+  if (isObject(raw.pitLane)) {
+    const entry = point(raw.pitLane.entry);
+    const exit = point(raw.pitLane.exit);
+    const side = raw.pitLane.side === -1 ? -1 : raw.pitLane.side === 1 ? 1 : null;
+    if (entry && exit && side) out.pitLane = { entry, exit, side };
+  }
+  return out;
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {

@@ -55,7 +55,7 @@ export class DesignPanel {
     this.pointCard = h('section', { class: 'panel-section card' },
       this.pointTitle, this.pointInfo, this.pointWidth.el,
       h('div', { class: 'row' },
-        h('button', { class: 'btn', title: 'Measure distance from this point', onclick: () => this.makeStart() }, 'Make start point'),
+        h('button', { class: 'btn', title: 'Put the start/finish line at this point (Analyse can move it back to automatic)', onclick: () => this.startHere() }, 'Start/finish here'),
         h('button', { class: 'btn danger', onclick: () => store.selected !== null && store.deletePoint(store.selected) }, 'Delete')),
     );
 
@@ -92,7 +92,7 @@ export class DesignPanel {
       section('Track', width.el,
         h('div', { class: 'row' },
           h('button', { class: 'btn', onclick: () => store.edit((x) => x.points.forEach((p) => { p.width = x.defaultWidth; })) }, 'Apply width to all'),
-          h('button', { class: 'btn', title: 'Drive the other way round; the start point stays', onclick: () => this.reverse() }, 'Reverse direction'))),
+          h('button', { class: 'btn', title: 'Drive the other way round', onclick: () => this.reverse() }, 'Reverse direction'))),
       section('Grading', smoothing.el, cutFill.el,
         h('p', { class: 'hint' }, 'The track follows the ground, evened out over the smoothing length, but is never dug in or raised more than the limit.')),
       section('Checks', this.checks),
@@ -105,12 +105,10 @@ export class DesignPanel {
     this.update(new Set<Topic>(['project', 'selection', 'mode', 'track']));
   }
 
-  private makeStart(): void {
+  private startHere(): void {
     const s = this.store;
-    const i = s.selected;
-    if (i === null) return;
-    s.edit((d) => { d.points = [...d.points.slice(i), ...d.points.slice(0, i)]; });
-    s.select(0);
+    const pt = s.selected !== null ? s.design.points[s.selected] : undefined;
+    if (pt) s.setOverride('startFinish', { x: pt.x, y: pt.y });
   }
 
   private reverse(): void {
@@ -131,7 +129,7 @@ export class DesignPanel {
       const pt = i !== null ? pts[i] : undefined;
       this.pointCard.hidden = !pt;
       if (pt && i !== null) {
-        this.pointTitle.textContent = i === 0 ? `Point 1 of ${pts.length} (start)` : `Point ${i + 1} of ${pts.length}`;
+        this.pointTitle.textContent = `Point ${i + 1} of ${pts.length}`;
         const hm = s.terrain?.heightmap;
         const k = s.track?.pointStations[i];
         const ground = hm ? fmt.elevation(sampleHeight(hm, pt.x, pt.y)) : '—';

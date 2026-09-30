@@ -4,9 +4,13 @@
  * and receive the set of topics that changed, batched per microtask.
  */
 import { type TrackMetrics, analyseTrack } from '../core/analysis.ts';
+import type { Facilities, Overrides } from '../core/facilities.ts';
 import type { LapResult } from '../core/lapSim.ts';
+import type { Licence } from '../core/licence.ts';
 import type { Performance } from '../core/performance.ts';
 import { type Project, parseProject, serializeProject } from '../core/project.ts';
+import { type StartFinish, placeStartFinish, rotateTrack } from '../core/startFinish.ts';
+import type { Analysis } from '../worker/protocol.ts';
 import { PRESET_SHAPES, type TerrainPreset, type TerrainSettings } from '../core/terrain.ts';
 import { type Track, type TrackDesign, buildTrack, heightmapSampler } from '../core/track.ts';
 import { type Issue, validateTrack } from '../core/validate.ts';
@@ -35,6 +39,10 @@ export interface ViewOptions {
   labels: boolean;
   /** Draw the racing line on the track. */
   line: boolean;
+  /** Draw the pit lane, grid, DRS zones, marshal posts and so on. */
+  facilities: boolean;
+  /** Licence grade whose run-off escape paths are drawn, or null for none. */
+  runoffGrade: string | null;
 }
 
 /** A station range to highlight, e.g. a corner or warning picked from a list. */
@@ -56,13 +64,17 @@ export class Store {
   progress = 0;
   terrainError: string | null = null;
 
+  /** The track with its start line at station 0. */
   track: Track | null = null;
+  startFinish: StartFinish | null = null;
   metrics: TrackMetrics | null = null;
   issues: Issue[] = [];
 
   readonly vehicles: readonly VehicleClass[] = VEHICLES;
   /** Racing line, laps and sectors; may briefly belong to the previous version of the track while it recalculates. */
   performance: Performance | null = null;
+  facilities: Facilities | null = null;
+  licence: Licence | null = null;
   performancePending = false;
   /** Class shown on the map, in the speed trace and in the detail card. */
   vehicleId = 'f1';
@@ -74,10 +86,10 @@ export class Store {
   /** Hovered station index (from the map, profile or a list). */
   hover: number | null = null;
   focus: Focus | null = null;
-  view: ViewOptions = { colorBy: 'plain', contours: true, labels: true, line: false };
+  view: ViewOptions = { colorBy: 'plain', contours: true, labels: true, line: false, facilities: true, runoffGrade: null };
 
   private readonly client = new TerrainClient();
-  private readonly performanceClient = new PerformanceClient((p, e) => this.receivePerformance(p, e));
+  private readonly performanceClient = new PerformanceClient((a, e) => this.receiveAnalysis(a, e));
   private readonly listeners = new Set<(topics: Set<Topic>) => void>();
   private pending = new Set<Topic>();
   private undoStack: string[] = [];
@@ -154,10 +166,15 @@ export class Store {
     return this.project.track;
   }
 
-  /** Recomputes stations, metrics and warnings from the current design. */
+  /**
+   * Recomputes stations, the start line, metrics and warnings from the
+   * current design. The track is rotated so the start line is station 0.
+   */
   rebuildTrack(): void {
     const hm = this.terrain?.heightmap;
-    this.track = hm ? buildTrack(this.design, heightmapSampler(hm)) : null;
+    const raw = hm ? buildTrack(this.design, heightmapSampler(hm)) : null;
+    this.startFinish = raw ? placeStartFinish(raw, this.project.overrides.startFinish) : null;
+    this.track = raw && this.startFinish ? rotateTrack(raw, this.startFinish.station) : null;
     this.metrics = this.track ? analyseTrack(this.track) : null;
     this.issues = this.track && hm ? validateTrack(this.track, hm, this.design.grading) : [];
     if (this.hover !== null && (!this.track || this.hover >= this.track.n)) this.hover = null;
@@ -166,12 +183,14 @@ export class Store {
     this.schedulePerformance();
   }
 
-  /** Recomputes the racing line and lap times in a worker shortly after the track stops changing. */
+  /** Recomputes lap times, facilities and the licence in a worker shortly after the track stops changing. */
   private schedulePerformance(): void {
     clearTimeout(this.performanceTimer);
     if (!this.track) {
       this.performanceClient.cancel();
       this.performance = null;
+      this.facilities = null;
+      this.licence = null;
       this.performancePending = false;
       this.emit('performance');
       return;
@@ -179,15 +198,32 @@ export class Store {
     this.performancePending = true;
     this.emit('performance');
     this.performanceTimer = window.setTimeout(() => {
-      if (this.track) this.performanceClient.request(this.track, this.vehicles);
+      const hm = this.terrain?.heightmap;
+      if (!this.track || !this.metrics || !this.startFinish || !hm) return;
+      this.performanceClient.request({
+        track: this.track, metrics: this.metrics, issues: this.issues, startFinish: this.startFinish,
+        overrides: this.project.overrides, vehicles: this.vehicles,
+      }, hm);
     }, PERFORMANCE_DELAY);
   }
 
-  private receivePerformance(performance: Performance | null, error: string | null): void {
+  private receiveAnalysis(analysis: Analysis | null, error: string | null): void {
     if (error) console.error('Lap-time analysis failed:', error);
-    this.performance = performance;
+    this.performance = analysis?.performance ?? null;
+    this.facilities = analysis?.facilities ?? null;
+    this.licence = analysis?.licence ?? null;
     this.performancePending = false;
     this.emit('performance');
+  }
+
+  /** Moves a facility by hand (undoable), or back to automatic placement with `null`. */
+  setOverride<K extends keyof Overrides>(key: K, value: Overrides[K] | null): void {
+    this.beginEdit();
+    if (value === null) delete this.project.overrides[key];
+    else this.project.overrides[key] = value;
+    this.rebuildTrack();
+    this.emit('project');
+    this.commitEdit();
   }
 
   get vehicle(): VehicleClass {
@@ -232,14 +268,19 @@ export class Store {
     this.emit('project');
   }
 
+  /** What undo restores: the design and the hand-placed facilities. */
+  private snapshot(): string {
+    return JSON.stringify({ track: this.design, overrides: this.project.overrides });
+  }
+
   /** Marks the start of an undoable edit; repeated calls before commit keep the first snapshot. */
   beginEdit(): void {
-    if (this.editStart === null) this.editStart = JSON.stringify(this.design);
+    if (this.editStart === null) this.editStart = this.snapshot();
   }
 
   commitEdit(): void {
     if (this.editStart === null) return;
-    if (this.editStart !== JSON.stringify(this.design)) {
+    if (this.editStart !== this.snapshot()) {
       this.undoStack.push(this.editStart);
       if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
       this.redoStack = [];
@@ -281,8 +322,10 @@ export class Store {
     const snapshot = from.pop();
     if (snapshot === undefined) return;
     this.editStart = null;
-    to.push(JSON.stringify(this.design));
-    this.project.track = JSON.parse(snapshot) as TrackDesign;
+    to.push(this.snapshot());
+    const state = JSON.parse(snapshot) as { track: TrackDesign; overrides: Overrides };
+    this.project.track = state.track;
+    this.project.overrides = state.overrides;
     this.selected = null;
     this.rebuildTrack();
     this.emit('project', 'selection', 'history');
@@ -335,11 +378,14 @@ export class Store {
     this.hover = null;
     this.focus = null;
     this.track = null;
+    this.startFinish = null;
     this.metrics = null;
     this.issues = [];
     clearTimeout(this.performanceTimer);
     this.performanceClient.cancel();
     this.performance = null;
+    this.facilities = null;
+    this.licence = null;
     this.performancePending = false;
     this.emit('project', 'track', 'performance', 'selection', 'history', 'focus', 'hover');
     void this.generateTerrain();

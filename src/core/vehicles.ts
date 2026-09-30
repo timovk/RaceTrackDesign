@@ -38,6 +38,10 @@ export interface VehicleClass {
   firstGearSpeed: number;
   /** How well the class matched real laps when it was last calibrated; null if never. */
   calibration: Calibration | null;
+  /** Circuit licence the class needs: FIA grade 1-4 for cars, FIM grade A-F for bikes. */
+  licence: { body: 'FIA' | 'FIM'; grade: string };
+  /** Pit lane speed limit in m/s. */
+  pitSpeed: number;
 }
 
 export interface Calibration {
@@ -69,6 +73,9 @@ export interface VehicleSpec {
   gears: number;
   firstGearKmh: number;
   calibration?: Calibration;
+  /** "FIA 1".."FIA 4" or "FIM A".."FIM F". */
+  licence: string;
+  pitSpeedKmh?: number;
 }
 
 export interface VehicleFile {
@@ -119,6 +126,11 @@ export function parseVehicleSpec(raw: unknown, index = 0): VehicleClass {
   const calibration = isObject(cal) && typeof cal.laps === 'number' && typeof cal.rmsError === 'number'
     ? { laps: cal.laps, rmsError: cal.rmsError }
     : null;
+  const licence = (): { body: 'FIA' | 'FIM'; grade: string } => {
+    const lic = /^(FIA) ([1-4])$|^(FIM) ([A-F])$/.exec(typeof raw.licence === 'string' ? raw.licence.trim() : '');
+    if (!lic) throw new Error(`Vehicle ${where}: "licence" must be "FIA 1" to "FIA 4" or "FIM A" to "FIM F".`);
+    return { body: (lic[1] ?? lic[3]) as 'FIA' | 'FIM', grade: lic[2] ?? lic[4] };
+  };
   return {
     id: str('id'),
     name: str('name'),
@@ -140,6 +152,8 @@ export function parseVehicleSpec(raw: unknown, index = 0): VehicleClass {
     gears: Math.round(num('gears', 1, 12)),
     firstGearSpeed: num('firstGearKmh', 5, 600) / 3.6,
     calibration,
+    licence: licence(),
+    pitSpeed: (raw.pitSpeedKmh === undefined ? 60 : num('pitSpeedKmh', 20, 200)) / 3.6,
   };
 }
 

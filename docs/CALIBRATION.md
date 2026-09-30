@@ -19,31 +19,31 @@ real qualifying laps from `data/reference-laps.json`.
 The circuits are flat (the data has no elevation), the racing line keeps 1.2 m from each edge, and the
 circuit geometry comes from OpenStreetMap, so some corners are sharper or softer than the real ones. Errors per
 circuit therefore mix model error with data error, and classes with one or two reference laps are only loosely
-pinned down. The largest single miss is Formula 1 at Sakhir, -4.5%.
+pinned down. The largest single miss is Formula 1 at Sakhir, -4.6%.
 
 ## Results
 
 | Class | RMS error | Circuit | Real | Model | Error |
 |---|---|---|---|---|---|
-| Formula 1 | 2.1% | Monza | 1:18.792 | 1:18.787 | -0.0% |
-|  |  | Silverstone | 1:24.892 | 1:25.067 | +0.2% |
-|  |  | Budapest | 1:15.372 | 1:15.900 | +0.7% |
-|  |  | Montreal | 1:10.899 | 1:12.418 | +2.1% |
-|  |  | Shanghai | 1:30.641 | 1:31.694 | +1.2% |
-|  |  | Sakhir | 1:29.841 | 1:25.773 | -4.5% |
-| Formula 2 | 1.9% | Monza | 1:32.390 | 1:32.000 | -0.4% |
-|  |  | Silverstone | 1:39.731 | 1:40.652 | +0.9% |
-|  |  | Budapest | 1:28.779 | 1:30.056 | +1.4% |
-|  |  | Sakhir | 1:44.008 | 1:40.586 | -3.3% |
+| Formula 1 | 2.1% | Monza | 1:18.792 | 1:18.975 | +0.2% |
+|  |  | Silverstone | 1:24.892 | 1:25.196 | +0.4% |
+|  |  | Budapest | 1:15.372 | 1:15.796 | +0.6% |
+|  |  | Montreal | 1:10.899 | 1:12.361 | +2.1% |
+|  |  | Shanghai | 1:30.641 | 1:31.695 | +1.2% |
+|  |  | Sakhir | 1:29.841 | 1:25.698 | -4.6% |
+| Formula 2 | 1.8% | Monza | 1:32.390 | 1:32.147 | -0.3% |
+|  |  | Silverstone | 1:39.731 | 1:40.565 | +0.8% |
+|  |  | Budapest | 1:28.779 | 1:30.041 | +1.4% |
+|  |  | Sakhir | 1:44.008 | 1:40.718 | -3.2% |
 | IndyCar | 0.0% | Austin | 1:46.018 | 1:46.018 | -0.0% |
 | Hypercar | 0.6% | Sakhir | 1:46.826 | 1:46.254 | -0.5% |
 |  |  | Monza | 1:35.358 | 1:35.969 | +0.6% |
 | LMP2 | 0.8% | Monza | 1:39.354 | 1:40.283 | +0.9% |
 |  |  | Sakhir | 1:52.290 | 1:51.506 | -0.7% |
-| GT3 | 2.0% | Monza | 1:45.000 | 1:43.214 | -1.7% |
-|  |  | Norisring | 48.467 | 49.457 | +2.0% |
-|  |  | Oschersleben | 1:21.072 | 1:22.466 | +1.7% |
-|  |  | Hockenheim | 1:36.259 | 1:33.977 | -2.4% |
+| GT3 | 2.0% | Monza | 1:45.000 | 1:43.223 | -1.7% |
+|  |  | Norisring | 48.467 | 49.445 | +2.0% |
+|  |  | Oschersleben | 1:21.072 | 1:22.460 | +1.7% |
+|  |  | Hockenheim | 1:36.259 | 1:33.991 | -2.4% |
 | GT4 | 1.4% | Monza | 1:53.708 | 1:51.896 | -1.6% |
 |  |  | Oschersleben | 1:28.820 | 1:29.806 | +1.1% |
 | TCR | 2.2% | Monza | 1:53.613 | 1:56.492 | +2.5% |

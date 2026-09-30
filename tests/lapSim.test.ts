@@ -16,6 +16,7 @@ const simpleCar = (overrides: Partial<VehicleClass> = {}): VehicleClass => ({
   mass: 1000, power: 300_000, cdA: [0.8, 0.8], clA: [0, 0], grip: 1.2, loadSensitivity: 0,
   driveShare: 0.6, rollingResistance: 0, maxAccelG: null, maxBrakeG: null, drs: 0,
   topSpeed: 300 / 3.6, gears: 6, firstGearSpeed: 90 / 3.6, calibration: null,
+  licence: { body: 'FIA', grade: '3' }, pitSpeed: 60 / 3.6,
   ...overrides,
 });
 
@@ -177,5 +178,5 @@ describe('vehicle data', () => {
 
 const VEHICLE_JSON = {
   id: 'kart', name: 'Kart', spec: '', kind: 'car', color: '#fff', mass: 175, powerKw: 20, cdA: 0.5, clA: 0,
-  grip: 1.2, loadSensitivity: 0, driveShare: 0.5, rollingResistance: 0.02, topSpeedKmh: 130, gears: 1, firstGearKmh: 130,
+  grip: 1.2, loadSensitivity: 0, driveShare: 0.5, rollingResistance: 0.02, topSpeedKmh: 130, gears: 1, firstGearKmh: 130, licence: 'FIA 4',
 };

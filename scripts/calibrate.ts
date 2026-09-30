@@ -60,6 +60,7 @@ function formatVehicleFile(f: VehicleFile): string {
       ['grip', 'loadSensitivity', 'driveShare', 'rollingResistance'],
       ['maxAccelG', 'maxBrakeG', 'drs'],
       ['topSpeedKmh', 'gears', 'firstGearKmh'],
+      ['licence', 'pitSpeedKmh'],
       ['calibration'],
     ];
     for (const g of groups) {

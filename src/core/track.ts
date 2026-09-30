@@ -41,7 +41,7 @@ export interface Track {
   length: number;
   x: Float64Array;
   y: Float64Array;
-  /** Distance from the first control point in metres. */
+  /** Distance from station 0 in metres: the first control point, or the start/finish line once it is placed. */
   s: Float64Array;
   /** Direction of travel in radians (atan2 in world coordinates). */
   heading: Float64Array;

@@ -36,7 +36,7 @@ export function lapTimesSection(store: Store): HTMLElement {
   return h('section', { class: 'panel-section' },
     h('h3', null, title),
     table,
-    h('p', { class: 'hint' }, 'Flying laps from the start point on the racing line, with qualifying fuel. Top speed in km/h. Click a class for its details.'),
+    h('p', { class: 'hint' }, 'Flying laps on the racing line with qualifying fuel, timed from the start/finish line. Top speed in km/h. Click a class for its details.'),
     detailCard(store),
   );
 }
