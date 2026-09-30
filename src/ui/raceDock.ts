@@ -2,22 +2,27 @@
  * The race analysis dock under the map in Race mode:
  * - Telemetry: speed, throttle and brake, gear and g-forces over a lap for
  *   one car, optionally overlaid with another lap or car and the time delta;
- * - Positions (lap chart), Gaps to the leader and Lap times per lap;
- * - Stints: tyre sets per car;
+ * - Positions (lap chart), Gaps to the leader and Lap times per lap, with
+ *   laps under a safety car, VSC or full course yellow shaded;
+ * - Stints: tyre sets per car, and who drove when;
+ * - Conditions: rain, track wetness, flags and the tyres the field runs on;
  * - Statistics: fastest laps, speed trap, overtakes and pit stops.
- * Hovering the telemetry marks the spot on the map; clicking a line in a
- * chart selects that car. The dock's height can be dragged.
+ * In a multi-class race everything can be narrowed to one class (shared
+ * with the timing tower). Hovering the telemetry marks the spot on the map;
+ * clicking a line in a chart selects that car. The dock's height can be
+ * dragged.
  */
 import { formatLapTime } from '../core/calibration.ts';
 import type { RaceCar, RaceSim } from '../core/race/sim.ts';
-import { fastestLaps, gapsByLap, overtakeCounts, pitStops, positionsByLap, speedTraps, stints } from '../core/race/stats.ts';
+import { carsOf, driverStints, fastestLaps, gapsByLap, neutralLaps, overtakeCounts, pitStops, positionsByLap, speedTraps, stints } from '../core/race/stats.ts';
 import type { LapChoice, Telemetry } from '../core/race/telemetry.ts';
 import { AXIS_TEXT, FONT, GRID, type Plot, TEXT, lapAxis, niceStep, polyline, sizeCanvas, tag, yAxis } from './charts.ts';
 import { h, setChildren, setText } from './dom.ts';
+import { classBadge, clock } from './panels/racePanel.ts';
 import type { RaceController } from './raceController.ts';
 import type { Store, Topic } from './store.ts';
 
-type DockTab = 'telemetry' | 'positions' | 'gaps' | 'laps' | 'stints' | 'stats';
+type DockTab = 'telemetry' | 'positions' | 'gaps' | 'laps' | 'stints' | 'conditions' | 'stats';
 
 const TABS: { tab: DockTab; label: string }[] = [
   { tab: 'telemetry', label: 'Telemetry' },
@@ -25,8 +30,11 @@ const TABS: { tab: DockTab; label: string }[] = [
   { tab: 'gaps', label: 'Gaps' },
   { tab: 'laps', label: 'Lap times' },
   { tab: 'stints', label: 'Stints' },
+  { tab: 'conditions', label: 'Conditions' },
   { tab: 'stats', label: 'Statistics' },
 ];
+const NEUTRAL_FILL: Record<'sc' | 'vsc' | 'fcy', string> = { sc: 'rgba(255,176,32,0.16)', vsc: 'rgba(255,214,10,0.1)', fcy: 'rgba(255,214,10,0.1)' };
+const TYRE_FILL = ['rgba(208,212,218,0.55)', 'rgba(57,181,74,0.65)', 'rgba(10,132,255,0.7)'];
 const HEIGHT_KEY = 'racetrackdesign.dock';
 const DEFAULT_HEIGHT = 380;
 const REFRESH_MS = 250;
@@ -49,8 +57,10 @@ export class RaceDock {
   private readonly body: HTMLElement;
   private readonly statsEl: HTMLElement;
   private readonly controlsEl: HTMLElement;
+  private readonly classEl: HTMLSelectElement;
   private readonly summaryEl: HTMLElement;
   private readonly tabButtons: HTMLButtonElement[];
+  private classKey = '';
   private tab: DockTab = 'telemetry';
   private width = 1;
   private height = 1;
@@ -69,12 +79,16 @@ export class RaceDock {
     this.statsEl = h('div', { class: 'dock-stats', hidden: true });
     this.body = h('div', { class: 'dock-body' }, this.canvas, this.statsEl);
     this.controlsEl = h('div', { class: 'dock-controls' });
+    this.classEl = h('select', {
+      class: 'dock-class', 'aria-label': 'Class', hidden: true,
+      onchange: () => race.setClassView(this.classEl.value === 'all' ? null : Number(this.classEl.value)),
+    });
     this.summaryEl = h('div', { class: 'dock-summary' });
     this.tabButtons = TABS.map(({ tab, label }) => h('button', { class: 'profile-tab', onclick: () => this.setTab(tab) }, label));
     const handle = h('div', { class: 'dock-resize', title: 'Drag to resize' });
     this.el = h('section', { class: 'dock', hidden: true },
       handle,
-      h('header', { class: 'dock-header' }, h('div', { class: 'profile-tabs' }, ...this.tabButtons), this.controlsEl, this.summaryEl),
+      h('header', { class: 'dock-header' }, h('div', { class: 'profile-tabs' }, ...this.tabButtons), this.classEl, this.controlsEl, this.summaryEl),
       this.body);
     let height = DEFAULT_HEIGHT;
     try {
@@ -142,9 +156,29 @@ export class RaceDock {
     const stats = this.tab === 'stats';
     this.canvas.hidden = stats;
     this.statsEl.hidden = !stats;
+    this.updateClassPicker();
     this.updateControls(true);
     this.dataVersion = '';
     this.refresh();
+  }
+
+  /** The class picker of a multi-class race, kept in step with the tower. */
+  private updateClassPicker(): void {
+    const sim = this.race.sim;
+    const multi = !!sim?.multiClass && this.tab !== 'telemetry';
+    this.classEl.hidden = !multi;
+    if (!sim || !multi) return;
+    const key = sim.classes.map((c) => c.label).join(',');
+    if (key !== this.classKey) {
+      this.classKey = key;
+      setChildren(this.classEl, h('option', { value: 'all' }, 'All classes'), ...sim.classes.map((c) => h('option', { value: String(c.index) }, `${c.label} · ${c.name}`)));
+    }
+    this.classEl.value = this.race.classView === null ? 'all' : String(this.race.classView);
+  }
+
+  /** Class to show, or null for all. */
+  private get view(): number | null {
+    return this.race.sim?.multiClass ? this.race.classView : null;
   }
 
   private onStore(topics: Set<Topic>): void {
@@ -154,6 +188,7 @@ export class RaceDock {
         this.race.wantsTelemetry = false;
         if (this.tab !== 'telemetry') this.setTab('telemetry');
       }
+      this.updateClassPicker();
       this.updateControls(topics.has('race'));
       this.dataVersion = '';
       this.refresh();
@@ -175,8 +210,8 @@ export class RaceDock {
     if (!sim || this.el.hidden) return;
     let laps = 0;
     for (const c of sim.cars) laps += c.history.length;
-    const live = this.tab === 'telemetry' && this.race.telemetry.lap === 'current' ? Math.floor(sim.t) : 0;
-    const version = `${laps}:${sim.stops.length}:${sim.finished}:${this.race.selected}:${live}`;
+    const live = (this.tab === 'telemetry' && this.race.telemetry.lap === 'current') || this.tab === 'conditions' ? Math.floor(sim.t) : 0;
+    const version = `${laps}:${sim.stops.length}:${sim.finished}:${this.race.selected}:${live}:${this.view}:${sim.neutral.length}`;
     if (version === this.dataVersion) return;
     this.dataVersion = version;
     if (this.tab === 'stats') this.renderStats(sim);
@@ -221,8 +256,9 @@ export class RaceDock {
       return;
     }
     this.controlsKey = key;
+    const place = (c: RaceCar) => (c.status === 'retired' ? 'DNF' : sim.multiClass ? `${c.cls.label} P${c.classPosition}` : `P${c.position}`);
     const carSelect = h('select', { 'aria-label': 'Car', onchange: () => this.race.setTelemetry({ car: Number(carSelect.value) }) },
-      ...sim.order.map((c) => h('option', { value: String(c.id) }, `${c.status === 'retired' ? 'DNF' : `P${c.position}`} ${c.entrant.code}`)));
+      ...sim.order.map((c) => h('option', { value: String(c.id) }, `${place(c)} ${c.entrant.code}`)));
     carSelect.value = String(carA.id);
     const lapSelect = lapPicker(carA, sel.lap, (lap) => this.race.setTelemetry({ lap }));
     const compareSelect = h('select', {
@@ -250,12 +286,15 @@ export class RaceDock {
       return;
     }
     if (this.tab !== 'telemetry') {
+      const shaded = sim.neutral.length ? ' Shaded: safety car (orange) and VSC or full course yellow (yellow).' : '';
+      const crews = sim.cars.some((c) => c.entrant.drivers.length > 1);
       const hints: Record<DockTab, string> = {
         telemetry: '',
-        positions: 'Position at the end of each lap. Click a line to pick a car.',
-        gaps: 'Seconds behind the leader at the end of each lap.',
-        laps: 'Lap times; open dots are laps with a pit stop.',
-        stints: 'Tyre sets per car; gaps are pit stops.',
+        positions: `Position${this.view !== null ? ' in the class' : ''} at the end of each lap. Click a line to pick a car.${shaded}`,
+        gaps: `Seconds behind the ${sim.multiClass ? 'class ' : ''}leader at the end of each lap.${shaded}`,
+        laps: `Lap times; open dots are laps with a pit stop.${shaded}`,
+        stints: `Tyre sets per car; gaps are pit stops.${crews ? ' The thin bar underneath shows who drove.' : ''}`,
+        conditions: 'Rain and track wetness, the flags, and how many cars run on each type of tyre.',
         stats: '',
       };
       setText(this.summaryEl, hints[this.tab]);
@@ -287,7 +326,109 @@ export class RaceDock {
     if (!sim || this.tab === 'stats') return;
     if (this.tab === 'telemetry') this.drawTelemetry(ctx, sim);
     else if (this.tab === 'stints') this.drawStints(ctx, sim);
+    else if (this.tab === 'conditions') this.drawConditions(ctx, sim);
     else this.drawLapChart(ctx, sim);
+  }
+
+  /** Shades the laps run under a safety car, VSC or full course yellow, behind a lap chart. */
+  private shadeNeutral(ctx: CanvasRenderingContext2D, sim: RaceSim, plot: Plot, x: (lap: number) => number): void {
+    for (const p of neutralLaps(sim)) {
+      const xa = Math.max(plot.x0, x(p.from));
+      const xb = Math.min(plot.x0 + plot.w, x(p.to));
+      if (xb <= xa) continue;
+      ctx.fillStyle = NEUTRAL_FILL[p.kind];
+      ctx.fillRect(xa, plot.y0, xb - xa, plot.h);
+      ctx.font = '700 9px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(255,200,80,0.9)';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      if (xb - xa > 18) ctx.fillText(p.kind.toUpperCase(), xa + 3, plot.y0 + 2);
+    }
+  }
+
+  /** Rain and wetness over race time, the flag periods, and the field's tyres. */
+  private drawConditions(ctx: CanvasRenderingContext2D, sim: RaceSim): void {
+    const W = this.width;
+    const H = this.height;
+    const tl = sim.timeline;
+    const end = Math.max(60, sim.t);
+    const x0 = 52;
+    const w = Math.max(10, W - x0 - 16);
+    const x = (t: number) => x0 + (t / end) * w;
+    const topH = Math.max(40, (H - 50) * 0.55);
+    const top: Plot = { x0, y0: 14, w, h: topH };
+    const bottom: Plot = { x0, y0: top.y0 + topH + 18, w, h: Math.max(30, H - 50 - topH) };
+
+    // Flag periods through both panels.
+    for (const p of sim.neutral) {
+      const xa = x(p.from);
+      const xb = x(Number.isNaN(p.to) ? sim.t : p.to);
+      ctx.fillStyle = NEUTRAL_FILL[p.kind];
+      ctx.fillRect(xa, top.y0, Math.max(1, xb - xa), bottom.y0 + bottom.h - top.y0);
+      ctx.font = '700 9px system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(255,200,80,0.9)';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      if (xb - xa > 18) ctx.fillText(p.kind.toUpperCase(), xa + 3, top.y0 + 2);
+    }
+
+    const y = yAxis(ctx, top, 0, 1, 0.25, (v) => `${Math.round(v * 100)}%`);
+    if (tl.length) {
+      // Rain as bars, wetness as a filled line.
+      const step = tl.length > 1 ? tl[1].t - tl[0].t : 30;
+      ctx.fillStyle = 'rgba(120,180,255,0.35)';
+      for (const p of tl) if (p.rain > 0.01) ctx.fillRect(x(p.t), y(p.rain), Math.max(1, x(p.t + step) - x(p.t)), y(0) - y(p.rain));
+      ctx.beginPath();
+      ctx.moveTo(x(tl[0].t), y(0));
+      for (const p of tl) ctx.lineTo(x(p.t), y(p.wet));
+      ctx.lineTo(x(tl[tl.length - 1].t), y(0));
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(10,132,255,0.25)';
+      ctx.fill();
+      ctx.strokeStyle = '#3fb6ff';
+      ctx.lineWidth = 1.5;
+      polyline(ctx, tl.length, (i) => x(tl[i].t), (i) => y(tl[i].wet));
+    }
+    ctx.font = '600 10px system-ui, sans-serif';
+    ctx.fillStyle = AXIS_TEXT;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('Track wetness (line) and rain (bars)', x0 + 4, top.y0 + 2 + (sim.neutral.length ? 12 : 0));
+
+    // The field's tyres, stacked: slicks, intermediates, wets.
+    const total = Math.max(1, ...tl.map((p) => p.tyres[0] + p.tyres[1] + p.tyres[2]));
+    const yb = yAxis(ctx, bottom, 0, total, niceStep(total, 3), (v) => String(Math.round(v)));
+    for (let i = 0; i < tl.length; i++) {
+      const p = tl[i];
+      const xa = x(p.t);
+      const xb = i + 1 < tl.length ? x(tl[i + 1].t) : x(sim.t);
+      let acc = 0;
+      for (let k = 0; k < 3; k++) {
+        if (!p.tyres[k]) continue;
+        ctx.fillStyle = TYRE_FILL[k];
+        ctx.fillRect(xa, yb(acc + p.tyres[k]), Math.max(1, xb - xa), yb(acc) - yb(acc + p.tyres[k]));
+        acc += p.tyres[k];
+      }
+    }
+    ctx.font = '600 10px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ['Slicks', 'Intermediates', 'Wets'].forEach((label, k) => {
+      const lx = x0 + 4 + k * 96;
+      ctx.fillStyle = TYRE_FILL[k];
+      ctx.fillRect(lx, bottom.y0 + 3, 10, 10);
+      ctx.fillStyle = AXIS_TEXT;
+      ctx.fillText(label, lx + 14, bottom.y0 + 2);
+    });
+
+    // Race time along the bottom, in whole minutes or hours.
+    const want = end / Math.max(2, w / 90);
+    const tick = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600].find((s) => s >= want) ?? 21600;
+    ctx.font = FONT;
+    ctx.fillStyle = AXIS_TEXT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    for (let t = 0; t <= end; t += tick) ctx.fillText(clock(t), x(t), bottom.y0 + bottom.h + 4);
   }
 
   private onMove(e: PointerEvent): void {
@@ -396,7 +537,7 @@ export class RaceDock {
         series(a, a.brake, BRAKE, 1.5, [], 100);
         if (hoverI !== null) readout.push(`throttle ${Math.round(a.throttle[hoverI] * 100)}% brake ${Math.round(a.brake[hoverI] * 100)}%`);
       } else if (panel.key === 'gear') {
-        const gears = sim.model.vehicle.gears;
+        const gears = Math.max(pair.carA.model.vehicle.gears, pair.carB?.model.vehicle.gears ?? 0);
         yv = yAxis(ctx, plot, 0.5, gears + 0.5, gears > 6 ? 2 : 1, (v) => `${Math.round(v)}`);
         if (b) series(b, b.gear, COMPARE_COLOR, 1, [3, 3]);
         series(a, a.gear, colorA, 1.5);
@@ -486,7 +627,8 @@ export class RaceDock {
   private drawLapChart(ctx: CanvasRenderingContext2D, sim: RaceSim): void {
     const W = this.width;
     const H = this.height;
-    const maxLap = Math.max(1, ...sim.cars.map((c) => c.lapsDone));
+    const cars = carsOf(sim, this.view);
+    const maxLap = Math.max(1, ...cars.map((c) => c.lapsDone));
     const plot: Plot = { x0: 52, y0: 12, w: Math.max(10, W - 52 - 64), h: Math.max(10, H - 12 - 24) };
     const selected = this.race.selected;
     const hoverCar = this.hover?.car ?? null;
@@ -496,15 +638,16 @@ export class RaceDock {
     let x: (lap: number) => number;
 
     if (this.tab === 'positions') {
-      const pos = positionsByLap(sim);
-      series = sim.cars.map((car) => ({ car, points: pos.get(car.id)!, first: 0 }));
+      const inClass = this.view !== null;
+      const pos = positionsByLap(sim, inClass);
+      series = cars.map((car) => ({ car, points: pos.get(car.id)!, first: 0 }));
       x = lapAxis(ctx, plot, 0, maxLap);
-      const n = sim.cars.length;
-      y = yAxis(ctx, plot, 1, n, n > 20 ? 5 : n > 10 ? 2 : 1, (v) => `P${v}`, true);
+      const n = cars.length;
+      y = yAxis(ctx, plot, 1, Math.max(2, n), n > 20 ? 5 : n > 10 ? 2 : 1, (v) => `P${v}`, true);
       valueText = (v) => `P${v}`;
     } else if (this.tab === 'gaps') {
       const gaps = gapsByLap(sim);
-      series = sim.cars.map((car) => ({ car, points: gaps.get(car.id)!, first: 1 }));
+      series = cars.map((car) => ({ car, points: gaps.get(car.id)!, first: 1 }));
       let hi = 1;
       for (const s of series) for (const g of s.points) if (Number.isFinite(g)) hi = Math.max(hi, g);
       const step = niceStep(hi, Math.max(2, plot.h / 30));
@@ -513,9 +656,9 @@ export class RaceDock {
       y = yAxis(ctx, plot, 0, hi, step, (v) => (v === 0 ? '0' : `+${v}`), true);
       valueText = (v) => `+${v.toFixed(3)} s`;
     } else {
-      series = sim.cars.map((car) => ({ car, points: car.history.map((hh) => hh.time), first: 1 }));
+      series = cars.map((car) => ({ car, points: car.history.map((hh) => hh.time), first: 1 }));
       const clean: number[] = [];
-      for (const c of sim.cars) for (const hh of c.history) if (hh.lap > 1 && !hh.pit) clean.push(hh.time);
+      for (const c of cars) for (const hh of c.history) if (hh.lap > 1 && !hh.pit && !hh.neutral) clean.push(hh.time);
       clean.sort((p, q) => p - q);
       const lo = clean.length ? clean[0] : sim.model.lapTime;
       const med = clean.length ? clean[Math.floor(clean.length / 2)] : sim.model.lapTime;
@@ -528,8 +671,8 @@ export class RaceDock {
       y = (v) => inner(Math.min(v, top));
       valueText = (v) => formatLapTime(v);
     }
-
-    const perTeam = Math.max(1, sim.model.rules.field.perTeam);
+    // Laps are the leader's; within one class they are close enough to shade the same stretch.
+    if (this.view === null || this.view === 0) this.shadeNeutral(ctx, sim, plot, x);
     const focus = hoverCar ?? selected;
     // Other cars first, then the focused one on top.
     const ordered = [...series].sort((p, q) => Number(p.car.id === focus) - Number(q.car.id === focus));
@@ -539,7 +682,9 @@ export class RaceDock {
       ctx.globalAlpha = on ? 1 : 0.28;
       ctx.strokeStyle = e.color;
       ctx.lineWidth = s.car.id === focus ? 2.5 : 1.5;
-      ctx.setLineDash(e.index % perTeam === 1 ? [5, 3] : []);
+      // Team-mates: the second car dashed.
+      const mate = sim.cars.find((c) => c.entrant.teamIndex === e.teamIndex);
+      ctx.setLineDash(mate && mate !== s.car ? [5, 3] : []);
       polyline(ctx, s.points.length, (i) => x(i + s.first), (i) => y(s.points[i]));
       ctx.setLineDash([]);
       for (let i = 0; i < s.points.length; i++) {
@@ -578,16 +723,17 @@ export class RaceDock {
   private drawStints(ctx: CanvasRenderingContext2D, sim: RaceSim): void {
     const W = this.width;
     const H = this.height;
-    const maxLap = Math.max(1, ...sim.cars.map((c) => c.lapsDone));
-    const cars = sim.order;
-    const plot: Plot = { x0: 64, y0: 6, w: Math.max(10, W - 64 - 16), h: Math.max(10, H - 6 - 24) };
+    const cars = this.view === null ? sim.order : sim.classes[this.view].order;
+    const maxLap = Math.max(1, ...cars.map((c) => c.lapsDone));
+    const plot: Plot = { x0: 84, y0: 6, w: Math.max(10, W - 84 - 16), h: Math.max(10, H - 6 - 24) };
     const rowH = Math.min(22, plot.h / Math.max(1, cars.length));
     const x = lapAxis(ctx, { ...plot, h: rowH * cars.length }, 0, maxLap);
-    const compounds = sim.model.rules.tyres.compounds;
     const all = stints(sim);
+    const crews = driverStints(sim);
     cars.forEach((car, row) => {
       const y0 = plot.y0 + row * rowH;
       const selected = this.race.selected === car.id;
+      const compounds = car.rules.tyres.compounds;
       if (selected) {
         ctx.fillStyle = 'rgba(63,182,255,0.14)';
         ctx.fillRect(0, y0, W, rowH);
@@ -596,27 +742,44 @@ export class RaceDock {
       ctx.fillStyle = car.status === 'retired' ? AXIS_TEXT : TEXT;
       ctx.textAlign = 'right';
       ctx.textBaseline = 'middle';
-      ctx.fillText(`${car.status === 'retired' ? '' : `P${car.position} `}${car.entrant.code}`, plot.x0 - 8, y0 + rowH / 2);
+      const place = car.status === 'retired' ? '' : sim.multiClass ? `${car.cls.label} ${car.classPosition} ` : `P${car.position} `;
+      ctx.fillText(`${place}${car.entrant.code}`, plot.x0 - 8, y0 + rowH / 2);
       ctx.fillStyle = car.entrant.color;
       ctx.fillRect(plot.x0 - 5, y0 + 3, 3, rowH - 6);
+      const crew = car.entrant.drivers.length > 1 && rowH >= 10;
+      const bh = Math.max(4, rowH - 6) * (crew ? 0.68 : 1);
+      const by = crew ? y0 + 2 : y0 + (rowH - bh) / 2;
       for (const s of all.get(car.id) ?? []) {
         const c = compounds[s.compound];
         const xa = x(s.from - 1) + 1;
         const xb = x(s.to) - 1;
-        const bh = Math.max(4, rowH - 6);
         ctx.fillStyle = c.color;
         ctx.globalAlpha = 0.85;
         ctx.beginPath();
-        ctx.roundRect(xa, y0 + (rowH - bh) / 2, Math.max(1, xb - xa), bh, 3);
+        ctx.roundRect(xa, by, Math.max(1, xb - xa), bh, 3);
         ctx.fill();
         ctx.globalAlpha = 1;
-        if (xb - xa > 34 && rowH >= 12) {
+        if (xb - xa > 34 && bh >= 10) {
           ctx.fillStyle = '#0b0d10';
           ctx.font = '700 10px system-ui, sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText(`${c.code} ${s.to - s.from + 1}`, (xa + xb) / 2, y0 + rowH / 2 + 0.5);
+          ctx.fillText(`${c.code} ${s.to - s.from + 1}`, (xa + xb) / 2, by + bh / 2 + 0.5);
         }
-        this.hits.push({ car: car.id, x: (xa + xb) / 2, y: y0 + rowH / 2, text: `${car.entrant.code} · ${c.name}, laps ${s.from}–${s.to}` });
+        this.hits.push({ car: car.id, x: (xa + xb) / 2, y: by + bh / 2, text: `${car.entrant.code} · ${c.name}, laps ${s.from}–${s.to}` });
+      }
+      if (crew) {
+        // Who drove: a thin bar per driver stint, shaded by driver.
+        const shades = ['rgba(230,233,238,0.85)', 'rgba(143,153,166,0.85)', 'rgba(90,99,112,0.95)', 'rgba(190,200,215,0.6)'];
+        const dy = by + bh + 1.5;
+        const dh = Math.max(2, y0 + rowH - 1 - dy);
+        for (const d of crews.get(car.id) ?? []) {
+          const xa = x(d.from - 1) + 1;
+          const xb = x(d.to) - 1;
+          ctx.fillStyle = shades[d.driver % shades.length];
+          ctx.fillRect(xa, dy, Math.max(1, xb - xa), dh);
+          const driver = car.entrant.drivers[d.driver];
+          this.hits.push({ car: car.id, x: (xa + xb) / 2, y: dy + dh / 2, text: `${car.entrant.code} · ${driver.name}, laps ${d.from}–${d.to}` });
+        }
       }
       if (car.status === 'retired' && car.retired) {
         ctx.fillStyle = AXIS_TEXT;
@@ -632,11 +795,14 @@ export class RaceDock {
   // ---- statistics ----------------------------------------------------------------
 
   private renderStats(sim: RaceSim): void {
+    const multi = sim.multiClass;
+    const view = this.view;
     const code = (id: number) => {
-      const e = sim.cars[id].entrant;
-      return h('span', null, h('span', { class: 'dot', style: `background:${e.color}` }), e.code);
+      const car = sim.cars[id];
+      const e = car.entrant;
+      return h('span', null, h('span', { class: 'dot', style: `background:${e.color}` }), e.code, multi && view === null ? h('span', null, ' ', classBadge(car.cls)) : null);
     };
-    const compounds = sim.model.rules.tyres.compounds;
+    const compounds = (id: number) => sim.cars[id].rules.tyres.compounds;
     const table = (title: string, head: string[], rows: (string | Node)[][], note?: string) =>
       h('div', { class: 'stat-block' },
         h('h3', null, title),
@@ -646,24 +812,43 @@ export class RaceDock {
               h('tbody', null, ...rows.map((r) => h('tr', null, ...r.map((c, i) => h('td', { class: i === 1 ? '' : 'num' }, c))))))
           : h('p', { class: 'muted small' }, 'Nothing yet.'),
         note ? h('p', { class: 'hint' }, note) : null);
+    // Rank within each class: the number restarts where the class changes.
+    const rank = <T extends { car: number }>(list: T[]) => {
+      let prev = -1;
+      let n = 0;
+      return list.map((item) => {
+        const cls = sim.cars[item.car].cls.index;
+        n = cls === prev ? n + 1 : 1;
+        prev = cls;
+        return n;
+      });
+    };
 
-    const fl = fastestLaps(sim);
-    const traps = speedTraps(sim);
-    const overtakes = overtakeCounts(sim).filter((o) => o.made || o.lost);
-    const stops = pitStops(sim);
-    const totalOvertakes = sim.events.filter((e) => e.kind === 'overtake').length;
+    const fl = fastestLaps(sim, view);
+    const flRank = rank(fl);
+    const traps = speedTraps(sim, view);
+    const trapRank = rank(traps);
+    const overtakes = overtakeCounts(sim, view).filter((o) => o.made || o.lost);
+    const stops = pitStops(sim, view);
+    const totalOvertakes = overtakes.reduce((a, o) => a + o.made, 0);
+    const crews = sim.cars.some((c) => c.entrant.drivers.length > 1);
     setChildren(this.statsEl,
       table('Fastest laps', ['#', 'Driver', 'Time', 'Gap', 'Lap', 'Tyre'],
-        fl.map((f, i) => [String(i + 1), code(f.car), formatLapTime(f.time), i === 0 ? '' : `+${f.gap.toFixed(3)}`, String(f.lap), compounds[f.compound].code])),
+        fl.map((f, i) => [String(flRank[i]), code(f.car), formatLapTime(f.time), flRank[i] === 1 ? '' : `+${f.gap.toFixed(3)}`, String(f.lap), compounds(f.car)[f.compound].code]),
+        multi ? 'Ranked within each class.' : undefined),
       table('Speed trap', ['#', 'Driver', 'km/h', 'Lap'],
-        traps.map((t, i) => [String(i + 1), code(t.car), (t.speed * 3.6).toFixed(1), String(t.lap)]),
+        traps.map((t, i) => [String(trapRank[i]), code(t.car), (t.speed * 3.6).toFixed(1), String(t.lap)]),
         'Best speed through the trap on laps without a stop.'),
       table(`Overtakes (${totalOvertakes})`, ['#', 'Driver', 'Made', 'Lost', 'Net'],
         overtakes.map((o, i) => [String(i + 1), code(o.car), String(o.made), String(o.lost), `${o.made - o.lost > 0 ? '+' : ''}${o.made - o.lost}`]),
-        'Passes for position; lapping backmarkers is not counted.'),
-      table(`Pit stops (${stops.length})`, ['#', 'Driver', 'Stationary', 'Pit lane', 'Lap', 'Tyres'],
-        stops.slice(0, 40).map((s, i) => [String(i + 1), code(s.car), `${s.stationary.toFixed(1)} s`, Number.isFinite(s.exit) ? `${(s.exit - s.entry).toFixed(1)} s` : '—', String(s.lap),
-          s.to === null ? 'no change' : `${compounds[s.from].code} → ${compounds[s.to].code}`]),
+        `Passes for position${multi ? ' in the class' : ''}; lapping backmarkers${multi ? ' and passing slower classes' : ''} is not counted.`),
+      table(`Pit stops (${stops.length})`, ['#', 'Driver', 'Stationary', 'Pit lane', 'Lap', crews ? 'Service' : 'Tyres'],
+        stops.slice(0, 40).map((s, i) => {
+          const c = compounds(s.car);
+          const tyres = s.to === null ? 'no tyres' : `${c[s.from].code} → ${c[s.to].code}`;
+          const driver = s.driver !== null ? `, ${sim.cars[s.car].entrant.drivers[s.driver].code} in` : '';
+          return [String(i + 1), code(s.car), `${s.stationary.toFixed(1)} s`, Number.isFinite(s.exit) ? `${(s.exit - s.entry).toFixed(1)} s` : '—', String(s.lap), `${tyres}${driver}`];
+        }),
         'Shortest time in the box first; the pit lane time runs from entry to exit.'),
     );
   }

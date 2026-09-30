@@ -14,7 +14,7 @@ import { DT, type RaceCar, RaceSim } from '../core/race/sim.ts';
 import { type LapChoice, type Telemetry, deltaTime, lapTelemetry, resolveLap } from '../core/race/telemetry.ts';
 import type { Store, Topic } from './store.ts';
 
-export const SPEEDS = [1, 5, 20, 100, 500];
+export const SPEEDS = [1, 5, 20, 100, 500, 1000];
 /** Work per frame, so playback and skipping never freeze the page. */
 const FRAME_BUDGET_MS = 12;
 
@@ -55,6 +55,8 @@ export class RaceController {
   telemetry: TelemetrySelection = { ...NO_TELEMETRY };
   /** Set when a car is picked on the map or in the tower: the dock opens its telemetry. */
   wantsTelemetry = false;
+  /** Class shown in the tower and the dock of a multi-class race, or null for all. */
+  classView: number | null = null;
 
   private readonly store: Store;
   private readonly tickListeners = new Set<() => void>();
@@ -77,7 +79,8 @@ export class RaceController {
     const s = this.store;
     if (!s.track) return 'Draw a closed track first.';
     if (!s.performance || !s.facilities || !s.performanceCurrent) return 'Waiting for the lap-time analysis…';
-    if (!s.performance.laps.some((l) => l.vehicleId === s.raceSettings.vehicleId)) return 'No lap time for this class yet.';
+    const perf = s.performance;
+    if (!s.raceSettings.classes.every((c) => perf.laps.some((l) => l.vehicleId === c.vehicleId))) return 'No lap time for this class yet.';
     return null;
   }
 
@@ -87,16 +90,19 @@ export class RaceController {
     const settings = s.raceSettings;
     // Save the settings with the project, so the file reproduces this race.
     if (!s.project.race) s.setRaceSettings({});
-    const vehicle = s.vehicles.find((v) => v.id === settings.vehicleId)!;
-    const model = buildRaceModel({
-      track: s.track!, performance: s.performance!, facilities: s.facilities!, vehicle, rules: raceRules(vehicle),
-      gridSize: MAX_CARS, corners: s.metrics?.corners,
+    const models = settings.classes.map((c) => {
+      const vehicle = s.vehicles.find((v) => v.id === c.vehicleId)!;
+      return buildRaceModel({
+        track: s.track!, performance: s.performance!, facilities: s.facilities!, vehicle, rules: raceRules(vehicle),
+        gridSize: MAX_CARS, corners: s.metrics?.corners,
+      });
     });
-    this.sim = new RaceSim(createRaceSetup(model, settings));
+    this.sim = new RaceSim(createRaceSetup(models, settings));
     this.builtFrom = { track: s.track, performance: s.performance, facilities: s.facilities };
     this.selected = null;
     this.notice = null;
     this.skipping = null;
+    this.classView = null;
     this.telemetry = { ...NO_TELEMETRY };
     this.acc = 0;
     this.alpha = 1;
@@ -141,11 +147,18 @@ export class RaceController {
 
   /** Selects a car (or clears the selection when it is already selected); `open` asks the dock to show its telemetry. */
   select(id: number | null, open = false): void {
+    if (id !== null && !this.sim?.cars[id]) return;
     this.selected = this.selected === id ? null : id;
     if (this.selected !== null) {
       this.telemetry.car = this.selected;
       this.wantsTelemetry = open;
     }
+    this.store.emit('race');
+    this.tick();
+  }
+
+  setClassView(cls: number | null): void {
+    this.classView = cls;
     this.store.emit('race');
     this.tick();
   }

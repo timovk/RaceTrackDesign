@@ -4,7 +4,8 @@
  *
  * - the race lap (no DRS) as a time per station segment, plus how that time
  *   changes with DRS open, in another car's slipstream (less drag) and in its
- *   wake (less downforce), each from its own run of the lap simulation;
+ *   wake (less downforce) and on a wet track (less grip), each from its own
+ *   run of the lap simulation;
  * - fuel burn and tyre wear per lap, scaled from the class's typical figures
  *   by this track's wheel energy and tyre work against the real circuits;
  * - lap-time cost of fuel mass, braking zones where passes happen, the pit
@@ -101,6 +102,32 @@ export interface RaceModel {
   samples: number;
   /** Station of the speed trap. */
   speedTrap: number;
+  /**
+   * Segment-time ratios against the race lap with 75% and 50% of the dry
+   * grip (a wet track), and the matching lap-time ratios; see gripBlend.
+   */
+  gripRatio: [Float64Array, Float64Array];
+  gripLap: [number, number];
+}
+
+/** Grip levels of the two wet laps. */
+const GRIP_LEVELS = [0.75, 0.5] as const;
+
+/**
+ * Weights (a, b) that blend the wet laps for a grip factor g: a segment's
+ * ratio is 1 + a (r75 - 1) + b (r50 - r75). Linear between the three laps,
+ * and extrapolated below 50% grip.
+ */
+export function gripBlend(g: number): [number, number] {
+  if (g >= 1) return [0, 0];
+  if (g >= GRIP_LEVELS[0]) return [(1 - g) / (1 - GRIP_LEVELS[0]), 0];
+  return [1, (GRIP_LEVELS[0] - g) / (GRIP_LEVELS[0] - GRIP_LEVELS[1])];
+}
+
+/** Lap-time ratio against the race lap at grip factor g. */
+export function lapRatioAtGrip(m: RaceModel, g: number): number {
+  const [a, b] = gripBlend(g);
+  return 1 + a * (m.gripLap[0] - 1) + b * (m.gripLap[1] - m.gripLap[0]);
 }
 
 export interface RaceModelInput {
@@ -144,6 +171,7 @@ export function buildRaceModel(input: RaceModelInput): RaceModel {
   const loss = rules.air.wakeDownforceLoss;
   const wake = loss > 0 ? simulateLapAtTrim(track, line, { ...noDrs, clA: [car.clA[0] * (1 - loss), car.clA[1] * (1 - loss)] }, trim) : base;
   const heavy = simulateLapAtTrim(track, line, { ...noDrs, mass: car.mass + HEAVY }, trim);
+  const wet = GRIP_LEVELS.map((g) => simulateLapAtTrim(track, line, { ...noDrs, grip: car.grip * g }, trim));
 
   let drsRatio: Float64Array | null = null;
   const drs: DrsRegion[] = [];
@@ -197,6 +225,8 @@ export function buildRaceModel(input: RaceModelInput): RaceModel {
     teleEvery,
     samples: Math.ceil(n / teleEvery),
     speedTrap: f.speedTrap.station,
+    gripRatio: [ratio(wet[0]), ratio(wet[1])],
+    gripLap: [wet[0].time / base.time, wet[1].time / base.time],
   };
 }
 

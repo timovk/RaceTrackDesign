@@ -1273,6 +1273,79 @@ input[type='range'] {
 .feed-item.retired { border-left-color: var(--error); }
 .feed-item.chequered,
 .feed-item.finish { border-left-color: #f4f4f4; }
+.feed-item.flag { border-left-color: #ffb020; color: #ffd27a; }
+.feed-item.weather { border-left-color: #3fb6ff; color: #9fd4ff; }
+.feed-item.plain { cursor: default; }
+
+/* Classes, flags and weather */
+
+.class-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.class-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.class-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.class-row .num-input {
+  width: 58px;
+}
+
+.class-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--class, #9aa4b1);
+  color: #0b0d10;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  vertical-align: 1px;
+}
+
+.class-result h4 {
+  margin: 10px 0 4px;
+  font-size: 13px;
+}
+
+.race-conditions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.flag-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: #ffd60a;
+  color: #0b0d10;
+}
+
+.flag-badge.sc {
+  background: #ffb020;
+}
+
+.crew {
+  display: flex;
+  flex-direction: column;
+}
 
 .table .up {
   color: var(--ok);
@@ -1350,6 +1423,95 @@ input[type='range'] {
 
 .tower.compact .wide {
   display: none;
+}
+
+.tw-class {
+  display: none;
+}
+
+.tower.multi .tower-row {
+  grid-template-columns: 22px 50px 26px 84px 72px 66px 66px 38px 38px 38px 40px 30px;
+}
+
+.tower.multi.compact .tower-row {
+  grid-template-columns: 22px 50px 26px 84px 72px 40px 30px;
+}
+
+.tower.multi .tw-class {
+  display: block;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--class, #9aa4b1);
+  color: #0b0d10;
+  font-size: 10px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.tower.multi .tower-labels .tw-class {
+  background: transparent;
+  color: var(--muted);
+}
+
+.tw-driver {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 10px;
+}
+
+.tower-weather {
+  margin-left: auto;
+  color: #9fd4ff;
+  font-size: 11px;
+}
+
+.tower-flag {
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: #ffd60a;
+  color: #0b0d10;
+  text-align: center;
+}
+
+.tower-flag.sc {
+  background: #ffb020;
+}
+
+.tower-flag.yellow {
+  background: rgba(255, 214, 10, 0.2);
+  color: #ffd60a;
+}
+
+.tower-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tower-tab {
+  flex: 1;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+
+.tower-tab:hover {
+  color: var(--text);
+}
+
+.tower-tab.on {
+  border-color: var(--class, var(--border));
+  color: var(--text);
+  background: var(--panel-2);
 }
 
 .tower-row:nth-child(even) {
@@ -1497,7 +1659,8 @@ input[type='range'] {
   align-items: center;
 }
 
-.dock-controls select {
+.dock-controls select,
+.dock-class {
   padding: 2px 6px;
   font-size: 12px;
 }

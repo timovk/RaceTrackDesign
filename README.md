@@ -13,7 +13,7 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | 3 | Start/finish, pit lane, other facilities, FIA grade estimate | **done** |
 | 4 | Race core, moving dots, timing tower | **done** |
 | 5 | Telemetry, charts, statistics, export | **done** |
-| 6 | Multi-class, safety car, endurance, weather | next |
+| 6 | Multi-class, safety car, endurance, weather | **done** |
 
 ## Running it
 
@@ -57,16 +57,18 @@ The app works in four modes, in order. Everything downstream recalculates live w
 - *Facilities*: start/finish, pit lane with the drive-through time loss per class, speed trap, DRS zones, overtaking spots and marshal posts.
 - *Geometry*: length, direction, height difference, climb, steepest gradients, longest straight, corners (numbered, with type, radius and angle), tightest crest and dip, width, cut and fill, and all design warnings.
 
-**4 Race.** Pick a class, the number of cars, the length (laps or time), the grid (qualifying order, reversed or random) and a race seed, then **Start race**. Each class starts with its usual race: 305 km for Formula 1, six hours for Hypercars, 120 km for MotoGP, and so on (**Class default** brings that back).
-- The cars run as dots in their team colours, the leader ringed in yellow. The timing tower over the map shows position, places gained, gap (or interval, click the header), last and best lap, sector times in purple, green and yellow, tyres and stops; **Times** and **Less** switch the lap and sector columns.
-- Play, pause (P) and play at 1× to 500×, or **Finish now** to simulate the rest at once. Click a car on the map or in the tower for its position, gaps, laps, tyres and wear, fuel, stops, next planned stop and speed; **Follow** keeps the map on it.
-- The race feed lists overtakes, pit stops, fastest laps, trips off the track, contact and retirements; the result and the qualifying order follow at the end.
-- Under the map, the analysis dock replaces the profile strip during a race (drag its top edge to resize):
+**4 Race.** Pick one or more classes and their number of cars (up to four classes and 60 cars), the length (laps or time), the grid (qualifying order, reversed or random), the weather (dry, changeable or wet) and a race seed, then **Start race**. A single class starts with its usual race: 305 km for Formula 1, six hours for Hypercars, 120 km for MotoGP, and so on (**Class default** brings that back). **WEC-style event** sets up Hypercars, LMP2 and GT3 together for six hours.
+- The cars run as dots in their team colours, the leader ringed in yellow; in a multi-class race each dot is ringed in its class colour. The safety car leads its queue as an orange box, yellow flags show along the track, a virtual safety car or full course yellow as a dashed yellow lap, and rain as a tint over the map with the track turning glossy as it gets wet.
+- The timing tower over the map shows position, places gained, gap (or interval, click the header), last and best lap, sector times in purple, green and yellow, tyres and stops; **Times** and **Less** switch the lap and sector columns. A banner shows the flags and the header the rain and track wetness. In a multi-class race every row has its class and position in class, gaps are within the class, and the tabs show all classes or one. Endurance cars show their number and the driver at the wheel.
+- Play, pause (P) and play at 1× to 1000×, or **Finish now** to simulate the rest at once. Click a car on the map or in the tower for its position, gaps, laps, tyres and wear, fuel, the crew and each driver's time at the wheel, stops, next planned stop and speed; **Follow** keeps the map on it.
+- The race feed lists overtakes, pit stops (with driver changes), fastest laps, trips off the track, contact, retirements, the flags and the weather; the result (per class in a multi-class race) and the qualifying order follow at the end.
+- Under the map, the analysis dock replaces the profile strip during a race (drag its top edge to resize). In a multi-class race the class picker narrows every tab to one class.
   - *Telemetry*: speed, throttle and brake, gear, and lateral and longitudinal g over a lap, for any car and any lap (last, best, the lap in progress or a chosen one). Compare with the fastest lap of the race or another car's lap to see both traces and the time delta along the lap; hovering marks the spot on the map. Clicking a car on the map or in the tower opens its telemetry.
-  - *Positions* (a lap chart), *Gaps* to the leader and *Lap times* per lap; click a line to pick a car.
-  - *Stints*: every car's tyre sets, with pit stops and retirements.
+  - *Positions* (a lap chart), *Gaps* to the (class) leader and *Lap times* per lap, with laps under a safety car or VSC shaded; click a line to pick a car.
+  - *Stints*: every car's tyre sets, with pit stops and retirements, and for crews who drove when.
+  - *Conditions*: rain and track wetness over the race, the flag periods, and how many cars run on slicks, intermediates and wets.
   - *Statistics*: fastest laps, speed-trap ranking, overtakes made and lost, and pit stops by time in the box and in the lane.
-- **Export** saves the results, every lap (times, sectors, position, gap, tyres, fuel, speed trap) and the telemetry shown as CSV files, and the map as a PNG image.
+- **Export** saves the results, every lap (times, sectors, position, gap, tyres, fuel, speed trap, driver, wetness), the race feed and the telemetry shown as CSV files, and the map as a PNG image.
 - Changing the track stops the race, since it no longer fits the layout.
 
 Click any row to find it on the map. In Analyse, drag **Start**, **Pit in**, **Pit out** and **Speed** on the map to move them; **Automatic** puts them back.
@@ -98,11 +100,14 @@ The current project autosaves in the browser. **Save** downloads a `.rtd.json` p
   "terrain": { "seed": "482913", "preset": "rolling", "mapSize": 8192, "resolution": 2048, "relief": 75, "...": "..." },
   "track": { "points": [{ "x": 3100.5, "y": 2890.2, "width": 12 }], "defaultWidth": 12, "grading": { "smoothing": 60, "maxCutFill": 12 } },
   "overrides": {},
-  "race": { "vehicleId": "f1", "cars": 20, "kind": "laps", "laps": 53, "minutes": 90, "grid": "qualifying", "seed": "785642" }
+  "race": {
+    "classes": [{ "vehicleId": "hypercar", "cars": 18 }, { "vehicleId": "gt3", "cars": 22 }],
+    "kind": "time", "laps": 125, "minutes": 360, "grid": "qualifying", "weather": "changeable", "seed": "785642"
+  }
 }
 ```
 
-Coordinates are metres from the map's top-left corner, x east and y south. The heightmap is never stored; it is regenerated from the terrain settings. `overrides` holds hand-placed facilities as world positions (`startFinish`, `speedTrap`, and `pitLane` with entry, exit and side); anything absent is placed automatically. `race` is the race setup with its own seed (`kind` is `laps` or `time`, and `laps` or `minutes` applies accordingly); it is saved when a race is first started, so the file reproduces the race.
+Coordinates are metres from the map's top-left corner, x east and y south. The heightmap is never stored; it is regenerated from the terrain settings. `overrides` holds hand-placed facilities as world positions (`startFinish`, `speedTrap`, and `pitLane` with entry, exit and side); anything absent is placed automatically. `race` is the race setup with its own seed: the classes and their cars, `kind` (`laps` or `time`, and `laps` or `minutes` applies accordingly), the grid order and the `weather` (`dry`, `changeable` or `wet`). It is saved when a race is first started, so the file reproduces the race, weather included. Files from earlier versions, with a single `vehicleId` and `cars`, still open.
 
 ## Lap times
 
@@ -128,10 +133,18 @@ A car cannot drive through the one ahead. It passes at braking zones, with a cha
 
 Stops happen in the real pit lane: braking for the entry, the speed limit, the team's box, the stationary time and pulling away. Classes without refuelling plan their stints before the start (the fastest split of the race into tyre stints that meets the two-compound rule and any mandatory stop), spread the stop by a lap or two, react to a rival's undercut and try one when stuck. Classes with refuelling stop when the fuel runs low and change tyres when the set would not last another stint. Fuel burn and tyre wear follow the track: each class's typical figures are scaled by the track's wheel energy and tyre work against the average of the real circuits. Mistakes, trips off, crashes and technical failures come from per-lap rates per class.
 
-The race rules per class (grid, default length, tyres, fuel, stops, DRS, slipstream, incident rates) live in [data/racing.json](data/racing.json); a class missing there gets generic defaults. The figures are approximate and meant to be edited.
+The race rules per class (grid, crews, default length and start, tyres, fuel, stops, driver changes, DRS, slipstream, incident rates, flags) live in [data/racing.json](data/racing.json); a class missing there gets generic defaults. The figures are approximate and meant to be edited.
 
-Telemetry is recorded as the moment each car passes a sample point every 5 m or so (coarser on very long laps, so a lap has at most about a thousand points). Speed follows from distance over time, g-forces from the change in speed and the racing line's curvature, gear from the gearing, and throttle and brake from the force the change in speed needs against drag, rolling resistance and gradient, as in the lap-time model. So the pedal traces are the model's estimate, not recorded inputs, and a lap run through the pit lane shows the lane mapped onto the stretch of track it bypasses.
+Several classes can race together, as at Le Mans. Each runs its own race lap, strategy and rules; the fastest class starts in front and its rules set the start, the flags and the time limit. Faster classes come up behind slower ones and get by at the next braking zone, losing a little time in the traffic; positions, gaps, fastest laps and sector colours count within the class, and passes of slower classes are not overtakes. When the flag falls for the overall leader, every car finishes at its next crossing, so slower classes run fewer laps, and they fuel and plan for those.
 
-Limits: no safety car, yellow flags or driver changes (milestone 6) and one class per race. Overtaking is only roughly tuned: in trials on the real circuits, Formula 1 races saw from under ten passes after lap 1 (Suzuka, Budapest) to about eighty (Monza, Bahrain), with Spa and Silverstone lower and Zandvoort (whose banking is not modelled) higher than in reality.
+Endurance cars (Hypercar, LMP2, GT3 and GT4) have crews of two or three drivers with their own pace, consistency and error rate. A driver hands over at a stop before passing the class's longest stint, to the team-mate who has driven least; the change happens while refuelling. These classes take a rolling start, as does IndyCar.
+
+Race control waves yellow flags where a car went off or stopped: no passing there, and a little slower through it. A crash or a car stopped on track may bring out the safety car, a virtual safety car (Formula 1 and 2: everyone a set share slower) or a full course yellow (endurance classes: 80 km/h everywhere), by the rules of the fastest class; bikes only get yellows. The safety car collects the field into a queue, comes in after the clean-up and at least a lap in front, and racing resumes at the line. Teams take the cheap pit stop a neutralisation offers when they have to stop anyway. In trials on the real circuits, the safety car came out in 15% (Bahrain) to 50% (Silverstone) of Formula 1 races and a VSC in about a quarter; six-hour WEC races at Spa averaged just over one safety car and two to three full course yellows.
+
+Weather comes from the race seed: dry, changeable (one or more showers, more in a long race) or wet (raining from the start, stopping and drying out in most races). The track gets wet within minutes of the rain and dries over about twenty. On a wet track every class loses grip, much more on slicks, which also aquaplane and crash far more easily; intermediates (Formula 1 only) suit a damp track and full wets a very wet one, and both wear out fast when it dries. Teams watch the rain on the radar and change tyres when the time it gains outweighs the stop; classes that never stop (MotoGP, Superbike, TCR) come in only for the weather. A race that starts wet starts on wet-weather tyres, DRS stays shut on a wet track, and the two-compound rule no longer applies once wet tyres are used.
+
+Telemetry is recorded as the moment each car passes a sample point every 5 m or so (coarser on very long laps, so a lap has at most about a thousand points). Speed follows from distance over time, g-forces from the change in speed and the racing line's curvature, gear from the gearing, and throttle and brake from the force the change in speed needs against drag, rolling resistance and gradient, as in the lap-time model (with the grip the tyres have on a wet track). So the pedal traces are the model's estimate, not recorded inputs, and a lap run through the pit lane shows the lane mapped onto the stretch of track it bypasses.
+
+Limits: no red flags, no track evolution or drying line, one weather for the whole circuit, and no rule on each endurance driver's minimum time at the wheel. Lapped cars are not waved past the safety car. The class paces come from the lap-time calibration, so on some circuits the gaps between classes are smaller than in reality (LMP2 and GT3 run close at Spa, for example). Overtaking is only roughly tuned: in trials on the real circuits, Formula 1 races saw from under ten passes after lap 1 (Suzuka, Budapest) to about a hundred (Monza, Bahrain), with Spa and Silverstone lower and Zandvoort (whose banking is not modelled) higher than in reality.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works inside.

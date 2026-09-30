@@ -101,7 +101,8 @@ describe('statistics', () => {
     const traps = speedTraps(f1);
     expect(traps.length).toBeGreaterThan(0);
     expect(traps[0].speed * 3.6).toBeGreaterThan(250);
-    expect(traps[0].speed).toBeLessThanOrEqual(car('f1').topSpeed * 1.05);
+    // A car with DRS open in another's slipstream goes a few percent past its own top speed.
+    expect(traps[0].speed).toBeLessThanOrEqual(car('f1').topSpeed * 1.07);
   });
 
   it('counts overtakes both ways', () => {

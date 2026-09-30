@@ -7,10 +7,12 @@
  * over (laps covered, compounds used) finds the fastest split of the race
  * into tyre stints, honouring the two-compound rule and mandatory stops.
  * Classes with refuelling stop when the fuel runs low and change tyres at a
- * stop when the set would not last another stint.
+ * stop when the set would not last another stint. Plans cover the dry
+ * compounds only; wet-weather tyres are fitted when the conditions call for
+ * them, and using them lifts the two-compound rule.
  */
 import type { RaceModel } from './model.ts';
-import type { Compound } from './rules.ts';
+import type { Compound, RaceRules, TyreType } from './rules.ts';
 
 export interface StintPlan {
   compound: number;
@@ -78,6 +80,7 @@ export function planStrategy(input: StrategyInput, rng?: () => number, margin = 
   const { model } = input;
   const compounds = model.rules.tyres.compounds;
   const C = compounds.length;
+  const dry = compounds.map((_, c) => c).filter((c) => compounds[c].type === 'slick');
   const N = Math.max(1, Math.min(MAX_DP_LAPS, Math.round(input.laps)));
   const lap = model.lapTime;
 
@@ -94,29 +97,30 @@ export function planStrategy(input: StrategyInput, rng?: () => number, margin = 
   const maxLen = (c: number, w0: number) =>
     pitsAllowed ? Math.max(1, Math.min(N, Math.floor((MAX_WEAR - w0) / Math.max(1e-6, wearPerLap(model, c, input.tyreFactor))))) : N;
   const freshMax = compounds.map((_, c) => maxLen(c, 0));
-  const needTwo = model.rules.tyres.mustUseTwo && pitsAllowed;
+  const needTwo = pitsAllowed && needsSecondCompound(model.rules, input.used, true);
   const minStops = pitsAllowed ? Math.max(0, model.rules.pit.minStops - input.stopsDone) : 0;
   const stop = stopCost(model);
 
   const options: Strategy[] = [];
-  const firstChoices = input.compound === null ? compounds.map((_, c) => c) : [input.compound];
+  const firstChoices = input.compound === null || compounds[input.compound].type !== 'slick' ? dry : [input.compound];
+  const onSet = input.compound !== null && firstChoices[0] === input.compound;
   for (const c0 of firstChoices) {
-    const first = input.compound === null ? fresh[c0] : stintCosts(c0, input.wear);
-    const plans = bestPlans(first, c0);
+    const first = onSet ? stintCosts(c0, input.wear) : fresh[c0];
+    const plans = bestPlans(first, c0, onSet);
     options.push(...plans);
   }
   options.sort((a, b) => a.cost - b.cost);
   if (!options.length) {
     // Nothing satisfies the rules (e.g. no pit lane but two compounds required): run the whole race on one set.
-    const c0 = input.compound ?? 0;
-    return { stints: [{ compound: c0, laps: N }], cost: stintCosts(c0, input.wear)[N] };
+    const c0 = onSet ? input.compound! : dry[0];
+    return { stints: [{ compound: c0, laps: N }], cost: stintCosts(c0, onSet ? input.wear : 0)[N] };
   }
   if (!rng || margin <= 0) return options[0];
   const near = options.filter((o) => o.cost <= options[0].cost + margin);
   return near[Math.min(near.length - 1, Math.floor(rng() * near.length))];
 
   /** The best plan for each number of stops, starting on compound c0. */
-  function bestPlans(first: Float64Array, c0: number): Strategy[] {
+  function bestPlans(first: Float64Array, c0: number, onSet: boolean): Strategy[] {
     const M = 1 << C;
     const size = (N + 1) * M;
     const out: Strategy[] = [];
@@ -129,7 +133,7 @@ export function planStrategy(input: StrategyInput, rng?: () => number, margin = 
       const comp = new Int8Array(size);
       const len = new Int16Array(size);
       if (s === 0) {
-        const firstMax = input.compound === null ? freshMax[c0] : maxLen(c0, input.wear);
+        const firstMax = onSet ? maxLen(c0, input.wear) : freshMax[c0];
         for (let L = pitsAllowed ? 1 : N; L <= firstMax; L++) {
           const i = L * M + startMask;
           cost[i] = first[L];
@@ -142,7 +146,7 @@ export function planStrategy(input: StrategyInput, rng?: () => number, margin = 
           for (let mask = 0; mask < M; mask++) {
             const base = last.cost[j * M + mask];
             if (base === Infinity) continue;
-            for (let c = 0; c < C; c++) {
+            for (const c of dry) {
               const nm = mask | (1 << c);
               const costs = fresh[c];
               const top = Math.min(N - j, freshMax[c]);
@@ -165,7 +169,7 @@ export function planStrategy(input: StrategyInput, rng?: () => number, margin = 
       // Complete plans at this number of stints.
       let bestI = -1;
       for (let mask = 0; mask < M; mask++) {
-        if (needTwo && popcount(mask) < 2) continue;
+        if (needTwo && popcount(mask & dryMask(model.rules)) < 2) continue;
         const i = N * M + mask;
         if (cost[i] < Infinity && (bestI < 0 || cost[i] < cost[bestI])) bestI = i;
       }
@@ -190,17 +194,46 @@ export function planStrategy(input: StrategyInput, rng?: () => number, margin = 
  */
 export function pickCompound(model: RaceModel, laps: number, tyreFactor: number, used: number, lastSet: boolean): number {
   const compounds = model.rules.tyres.compounds;
-  if (model.rules.tyres.mustUseTwo && popcount(used) < 2 && lastSet) {
+  const dry = compounds.map((_, c) => c).filter((c) => compounds[c].type === 'slick');
+  if (needsSecondCompound(model.rules, used) && lastSet) {
     let best = -1;
-    for (let c = 0; c < compounds.length; c++) {
+    for (const c of dry) {
       if (used & (1 << c)) continue;
       if (best < 0 || stintAverage(model, c, laps, tyreFactor) < stintAverage(model, best, laps, tyreFactor)) best = c;
     }
     if (best >= 0) return best;
   }
-  let best = 0;
-  for (let c = 1; c < compounds.length; c++) if (stintAverage(model, c, laps, tyreFactor) < stintAverage(model, best, laps, tyreFactor)) best = c;
+  let best = dry[0];
+  for (const c of dry) if (stintAverage(model, c, laps, tyreFactor) < stintAverage(model, best, laps, tyreFactor)) best = c;
   return best;
+}
+
+/** Bit mask of the dry (slick) compounds. */
+export function dryMask(rules: RaceRules): number {
+  return rules.tyres.compounds.reduce((m, c, i) => (c.type === 'slick' ? m | (1 << i) : m), 0);
+}
+
+/**
+ * Whether the two-compound rule still needs another dry compound: not once
+ * two have been used, nor after wet-weather tyres (with `ignoreUsed`, only
+ * whether the rule applies at all given the wet tyres used).
+ */
+export function needsSecondCompound(rules: RaceRules, used: number, ignoreUsed = false): boolean {
+  if (!rules.tyres.mustUseTwo) return false;
+  const dry = dryMask(rules);
+  if (used & ~dry) return false;
+  return ignoreUsed || popcount(used & dry) < 2;
+}
+
+/** The first compound of a type, or null when the class has none. */
+export function compoundOfType(rules: RaceRules, type: TyreType): number | null {
+  const i = rules.tyres.compounds.findIndex((c) => c.type === type);
+  return i < 0 ? null : i;
+}
+
+/** The tyre types a class can fit. */
+export function tyreTypes(rules: RaceRules): TyreType[] {
+  return [...new Set(rules.tyres.compounds.map((c) => c.type))];
 }
 
 function stintAverage(model: RaceModel, c: number, laps: number, tyreFactor: number): number {

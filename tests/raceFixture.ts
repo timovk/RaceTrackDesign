@@ -25,11 +25,38 @@ export function model(vehicle: VehicleClass, rules: RaceRules = raceRules(vehicl
   return buildRaceModel({ track, performance, facilities, vehicle, rules, gridSize: MAX_CARS, corners: metrics.corners });
 }
 
-/** Runs a race to the end. */
-export function race(vehicle: VehicleClass, changes: Partial<RaceSettings> = {}, rules?: RaceRules): RaceSim {
+/** Settings changes, with `cars` as a shorthand for the size of a single-class field. */
+export type RaceChanges = Partial<RaceSettings> & { cars?: number };
+
+/** Sets up a race without running it. */
+export function start(vehicle: VehicleClass, changes: RaceChanges = {}, rules?: RaceRules): RaceSim {
   const m = model(vehicle, rules);
-  const settings = { ...defaultRaceSettings(vehicle, m.rules, m.line.length, m.lapTime, '11'), ...changes };
-  const sim = new RaceSim(createRaceSetup(m, settings));
+  const { cars, ...rest } = changes;
+  const settings: RaceSettings = { ...defaultRaceSettings(vehicle, m.rules, m.line.length, m.lapTime, '11'), ...rest };
+  if (cars !== undefined) settings.classes = [{ vehicleId: vehicle.id, cars }];
+  return new RaceSim(createRaceSetup(m, settings));
+}
+
+/** Runs a race to the end. */
+export function race(vehicle: VehicleClass, changes: RaceChanges = {}, rules?: RaceRules): RaceSim {
+  const sim = start(vehicle, changes, rules);
+  while (!sim.finished) sim.step();
+  return sim;
+}
+
+/** Several classes together, set up but not run; `rules` can replace a class's rules. */
+export function multiClass(entries: { vehicle: VehicleClass; cars: number; rules?: RaceRules }[], changes: Partial<RaceSettings> = {}): RaceSim {
+  const models = entries.map((e) => model(e.vehicle, e.rules));
+  const lead = entries[0].vehicle;
+  const settings: RaceSettings = {
+    ...defaultRaceSettings(lead, models[0].rules, models[0].line.length, models[0].lapTime, '11'),
+    ...changes,
+    classes: entries.map((e) => ({ vehicleId: e.vehicle.id, cars: e.cars })),
+  };
+  return new RaceSim(createRaceSetup(models, settings));
+}
+
+export function runToEnd(sim: RaceSim): RaceSim {
   while (!sim.finished) sim.step();
   return sim;
 }

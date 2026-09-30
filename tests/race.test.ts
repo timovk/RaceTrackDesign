@@ -31,7 +31,9 @@ describe('race rules', () => {
   it('falls back to defaults for an unknown class and rejects bad numbers', () => {
     const r = parseRaceRules(undefined, { id: 'x', kind: 'bike', drs: 0 });
     expect(r.pit.stops).toBe(false);
-    expect(r.tyres.compounds).toHaveLength(1);
+    expect(r.flags.safetyCar).toBe(false);
+    // One dry compound, and a wet tyre added for the rain.
+    expect(r.tyres.compounds.map((c) => c.type)).toEqual(['slick', 'wet']);
     expect(() => parseRaceRules({ fuel: { kgPerKm: -1 } }, { id: 'x', kind: 'car', drs: 0 })).toThrow(/kgPerKm/);
   });
 });
@@ -119,19 +121,26 @@ describe('field and settings', () => {
     expect(a[0].team).not.toBe(a[2].team);
   });
 
-  it('checks saved settings', () => {
+  it('checks saved settings, including the single-class format of earlier versions', () => {
     const ids = VEHICLES.map((v) => v.id);
     expect(parseRaceSettings({ vehicleId: 'f1', cars: 99, laps: 5, minutes: 10, kind: 'time', grid: 'reversed', seed: 3 }, ids))
-      .toEqual({ vehicleId: 'f1', cars: 40, laps: 5, minutes: 10, kind: 'time', grid: 'reversed', seed: '3' });
+      .toEqual({ classes: [{ vehicleId: 'f1', cars: 60 }], laps: 5, minutes: 10, kind: 'time', grid: 'reversed', seed: '3', weather: 'dry' });
     expect(parseRaceSettings({ vehicleId: 'nope', cars: 5, laps: 5, minutes: 10 }, ids)).toBeNull();
     expect(parseRaceSettings(null, ids)).toBeNull();
+    // Several classes: unknown and repeated ones are dropped, and the field is capped as a whole.
+    const multi = parseRaceSettings({
+      classes: [{ vehicleId: 'hypercar', cars: 30 }, { vehicleId: 'kart', cars: 5 }, { vehicleId: 'lmp2', cars: 20 }, { vehicleId: 'hypercar', cars: 4 }, { vehicleId: 'gt3', cars: 30 }],
+      laps: 10, minutes: 360, kind: 'time', weather: 'changeable',
+    }, ids)!;
+    expect(multi.classes).toEqual([{ vehicleId: 'hypercar', cars: 30 }, { vehicleId: 'lmp2', cars: 20 }, { vehicleId: 'gt3', cars: 10 }]);
+    expect(multi.weather).toBe('changeable');
   });
 
   it('sets the grid by qualifying, reversed or at random', () => {
     const m = model(car('f1'));
     const base = defaultRaceSettings(car('f1'), m.rules, m.line.length, m.lapTime, '9');
     const q = createRaceSetup(m, base);
-    expect(q.grid).toEqual(q.qualifying.map((e) => e.car));
+    expect(q.grid).toEqual(q.qualifying[0].map((e) => e.car));
     expect(createRaceSetup(m, { ...base, grid: 'reversed' }).grid).toEqual([...q.grid].reverse());
   });
 });

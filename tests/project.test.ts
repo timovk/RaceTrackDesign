@@ -31,7 +31,7 @@ describe('project files', () => {
 
   it('keeps the race setup, and drops one it cannot use', () => {
     const p = newProject('1');
-    p.race = { vehicleId: 'gt3', cars: 24, kind: 'time', laps: 40, minutes: 90, grid: 'reversed', seed: 'abc' };
+    p.race = { classes: [{ vehicleId: 'gt3', cars: 24 }, { vehicleId: 'gt4', cars: 10 }], kind: 'time', laps: 40, minutes: 90, grid: 'reversed', seed: 'abc', weather: 'wet' };
     expect(parseProject(serializeProject(p)).race).toEqual(p.race);
     expect(parseProject('{"race":{"vehicleId":"kart","cars":10,"laps":5,"minutes":10}}').race).toBeNull();
     expect(parseProject('{}').race).toBeNull();

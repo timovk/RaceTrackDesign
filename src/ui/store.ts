@@ -17,7 +17,7 @@ import { type Issue, validateTrack } from '../core/validate.ts';
 import { VEHICLES, type VehicleClass } from '../core/vehicles.ts';
 import type { Heightmap } from '../core/heightmap.ts';
 import { raceRules } from '../core/race/rules.ts';
-import { type RaceSettings, defaultRaceSettings } from '../core/race/setup.ts';
+import { MAX_CARS, MAX_CLASSES, type RaceSettings, defaultRaceSettings, totalCars } from '../core/race/setup.ts';
 import { randomSeedString } from '../core/rng.ts';
 import type { ColorBy } from './colors.ts';
 import { PerformanceClient } from './performanceClient.ts';
@@ -356,11 +356,68 @@ export class Store {
     this.emit('project', 'race');
   }
 
-  /** Switches the race to another class with that class's usual grid and length, keeping the seed and grid order. */
-  setRaceClass(vehicleId: string): void {
+  /**
+   * Changes the class at `index`. With a single class, the race switches to
+   * that class's usual grid and length (keeping the seed, grid order and
+   * weather); in a multi-class race only that class changes.
+   */
+  setRaceClass(index: number, vehicleId: string): void {
     const cur = this.raceSettings;
-    this.project.race = { ...this.defaultRace(vehicleId, cur.seed), grid: cur.grid };
+    if (cur.classes.length === 1) {
+      this.project.race = { ...this.defaultRace(vehicleId, cur.seed), grid: cur.grid, weather: cur.weather };
+    } else {
+      if (cur.classes.some((c, i) => i !== index && c.vehicleId === vehicleId)) return;
+      const classes = cur.classes.map((c) => ({ ...c }));
+      const room = MAX_CARS - totalCars(cur) + classes[index].cars;
+      classes[index] = { vehicleId, cars: Math.max(1, Math.min(room, this.classCars(vehicleId))) };
+      this.project.race = { ...cur, classes };
+    }
     this.emit('project', 'race');
+  }
+
+  /** Adds a class not yet racing, with its usual grid as far as there is room. */
+  addRaceClass(): void {
+    const cur = this.raceSettings;
+    const room = MAX_CARS - totalCars(cur);
+    // The next slower class of the same kind (cars or bikes), else any class not yet racing.
+    const last = this.vehicles.findIndex((v) => v.id === cur.classes[cur.classes.length - 1].vehicleId);
+    const free = this.vehicles.filter((v) => !cur.classes.some((c) => c.vehicleId === v.id));
+    const next = free.find((v) => this.vehicles.indexOf(v) > last && v.kind === this.vehicles[last]?.kind) ?? free[0];
+    if (!next || room < 1 || cur.classes.length >= MAX_CLASSES) return;
+    this.setRaceSettings({ classes: [...cur.classes, { vehicleId: next.id, cars: Math.min(room, this.classCars(next.id)) }] });
+  }
+
+  removeRaceClass(index: number): void {
+    const cur = this.raceSettings;
+    if (cur.classes.length < 2) return;
+    this.setRaceSettings({ classes: cur.classes.filter((_, i) => i !== index) });
+  }
+
+  setRaceCars(index: number, cars: number): void {
+    const cur = this.raceSettings;
+    const classes = cur.classes.map((c) => ({ ...c }));
+    const room = MAX_CARS - totalCars(cur) + classes[index].cars;
+    classes[index].cars = Math.max(1, Math.min(room, Math.round(cars)));
+    this.setRaceSettings({ classes });
+  }
+
+  /** A WEC-style endurance event: Hypercars, LMP2 and GT3 together for six hours. */
+  setEnduranceEvent(): void {
+    const cur = this.raceSettings;
+    const lead = this.defaultRace('hypercar', cur.seed);
+    this.project.race = {
+      ...lead,
+      grid: cur.grid,
+      weather: cur.weather,
+      classes: [{ vehicleId: 'hypercar', cars: 18 }, { vehicleId: 'lmp2', cars: 14 }, { vehicleId: 'gt3', cars: 22 }],
+    };
+    this.emit('project', 'race');
+  }
+
+  /** A class's usual number of cars. */
+  private classCars(vehicleId: string): number {
+    const vehicle = this.vehicles.find((v) => v.id === vehicleId) ?? this.vehicles[0];
+    return raceRules(vehicle).field.cars;
   }
 
   // ---- selection and view --------------------------------------------------

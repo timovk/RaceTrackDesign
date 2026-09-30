@@ -1,13 +1,16 @@
 /**
  * The timing tower over the map in Race mode: position, driver, gap to the
  * leader or interval to the car ahead, last and best lap, the latest sector
- * times coloured purple (best of anyone), green (personal best) or yellow,
- * tyres and stops. Rows are reused and refreshed a few times a second.
+ * times coloured purple (best in the class), green (personal best) or
+ * yellow, tyres and stops. A banner shows the flags, the header the weather.
+ * In a multi-class race each row carries its class, gaps are within the
+ * class, and tabs show one class at a time. Rows are reused and refreshed a
+ * few times a second.
  */
 import { formatLapTime } from '../core/calibration.ts';
 import type { RaceCar, RaceSim, SectorMark } from '../core/race/sim.ts';
 import { h, setChildren, setText } from './dom.ts';
-import { gapText } from './panels/racePanel.ts';
+import { clock, flagText, gapText } from './panels/racePanel.ts';
 import type { RaceController } from './raceController.ts';
 import type { Store, Topic } from './store.ts';
 
@@ -17,8 +20,10 @@ const PREFS_KEY = 'racetrackdesign.tower';
 interface Row {
   el: HTMLElement;
   pos: HTMLElement;
+  cls: HTMLElement;
   moved: HTMLElement;
   code: HTMLElement;
+  driver: HTMLElement;
   gap: HTMLElement;
   last: HTMLElement;
   best: HTMLElement;
@@ -32,6 +37,9 @@ export class TimingTower {
   private readonly store: Store;
   private readonly race: RaceController;
   private readonly title: HTMLElement;
+  private readonly weather: HTMLElement;
+  private readonly flag: HTMLElement;
+  private readonly tabs: HTMLElement;
   private readonly body: HTMLElement;
   private readonly gapHead: HTMLButtonElement;
   private readonly sizeButton: HTMLButtonElement;
@@ -42,6 +50,7 @@ export class TimingTower {
   /** Whether the viewer has picked the tower size; until then it follows the map width. */
   private sizeChosen = false;
   private last = 0;
+  private tabsKey = '';
 
   constructor(store: Store, race: RaceController) {
     this.store = store;
@@ -55,13 +64,18 @@ export class TimingTower {
       // No stored preferences; use the defaults.
     }
     this.title = h('span', { class: 'tower-title' });
+    this.weather = h('span', { class: 'tower-weather' });
+    this.flag = h('div', { class: 'tower-flag', hidden: true });
+    this.tabs = h('div', { class: 'tower-tabs', hidden: true });
     this.gapHead = h('button', { class: 'tower-toggle', title: 'Switch between gap to the leader and interval to the car ahead', onclick: () => this.setPrefs({ interval: !this.interval }) });
     this.sizeButton = h('button', { class: 'tower-toggle', title: 'Show or hide lap and sector times', onclick: () => this.setPrefs({ compact: !this.compact }) });
     this.body = h('div', { class: 'tower-body' });
     this.el = h('div', { class: 'tower', hidden: true },
-      h('div', { class: 'tower-head' }, this.title, this.sizeButton),
+      h('div', { class: 'tower-head' }, this.title, this.weather, this.sizeButton),
+      this.flag,
+      this.tabs,
       h('div', { class: 'tower-row tower-labels' },
-        h('span', { class: 'tw-pos' }, ''), h('span', { class: 'tw-moved' }, ''), h('span', { class: 'tw-code' }, 'Driver'),
+        h('span', { class: 'tw-pos' }, ''), h('span', { class: 'tw-class' }, 'Class'), h('span', { class: 'tw-moved' }, ''), h('span', { class: 'tw-code' }, 'Driver'),
         h('span', { class: 'tw-gap' }, this.gapHead),
         h('span', { class: 'tw-time wide' }, 'Last'), h('span', { class: 'tw-time wide' }, 'Best'),
         h('span', { class: 'tw-sector wide' }, 'S1'), h('span', { class: 'tw-sector wide' }, 'S2'), h('span', { class: 'tw-sector wide' }, 'S3'),
@@ -97,6 +111,19 @@ export class TimingTower {
     if (topics.has('race') || topics.has('mode')) this.refresh(true);
   }
 
+  /** Class tabs of a multi-class race: all classes, or one. */
+  private updateTabs(sim: RaceSim): void {
+    const view = this.race.classView;
+    const key = sim.multiClass ? `${sim.classes.map((c) => c.label).join(',')}:${view}` : '';
+    if (key === this.tabsKey) return;
+    this.tabsKey = key;
+    this.tabs.hidden = !sim.multiClass;
+    if (!sim.multiClass) return;
+    const tab = (label: string, cls: number | null, color?: string) =>
+      h('button', { class: `tower-tab${view === cls ? ' on' : ''}`, style: color ? `--class:${color}` : '', onclick: () => this.race.setClassView(cls) }, label);
+    setChildren(this.tabs, tab('All', null), ...sim.classes.map((c) => tab(c.label, c.index, c.color)));
+  }
+
   private refresh(force: boolean): void {
     const sim = this.race.sim;
     const show = !!sim && this.store.mode === 'race';
@@ -109,36 +136,58 @@ export class TimingTower {
       this.sim = sim;
       this.rows.clear();
       setChildren(this.body);
+      this.tabsKey = '-';
       if (!this.sizeChosen) {
         // Lap and sector times only when the map has room for them beside the track.
         this.compact = (this.el.parentElement?.clientWidth ?? 0) < 1300;
         this.applyPrefs();
       }
     }
+    this.el.classList.toggle('multi', sim.multiClass);
+    this.updateTabs(sim);
     const laps = sim.setup.laps;
-    setText(this.title, sim.finished || sim.chequered ? `Lap ${sim.leaderLap}${laps !== null ? ` / ${laps}` : ''} · chequered` : `Lap ${sim.leaderLap}${laps !== null ? ` / ${laps}` : ''}`);
-    const rules = sim.model.rules;
-    sim.order.forEach((car, i) => {
+    const left = sim.setup.duration !== null && !sim.chequered ? ` · ${clock(Math.max(0, sim.setup.duration - sim.t))}` : '';
+    setText(this.title, `Lap ${sim.leaderLap}${laps !== null ? ` / ${laps}` : ''}${sim.finished || sim.chequered ? ' · chequered' : left}`);
+    const w = sim.wetness;
+    setText(this.weather, w >= 0.02 || sim.rain > 0.05 ? `${sim.rain > 0.05 ? 'Rain · ' : ''}wet ${Math.round(w * 100)}%` : '');
+    const flag = sim.finished ? null : flagText(sim);
+    this.flag.hidden = !flag;
+    if (flag) {
+      setText(this.flag, flag.text);
+      this.flag.className = `tower-flag ${flag.kind}`;
+    }
+
+    const view = sim.multiClass ? this.race.classView : null;
+    const cars = view === null ? sim.order : sim.classes[view].order;
+    const multi = sim.multiClass;
+    // Rows of cars no longer shown leave the body.
+    const shown = new Set(cars.map((c) => c.id));
+    for (const [id, row] of this.rows) if (!shown.has(id) && row.el.parentElement) row.el.remove();
+    cars.forEach((car, i) => {
       const row = this.row(car);
       if (this.body.children[i] !== row.el) this.body.insertBefore(row.el, this.body.children[i] ?? null);
       const out = car.status === 'retired';
+      const pos = view === null ? car.position : car.classPosition;
       row.el.classList.toggle('selected', this.race.selected === car.id);
       row.el.classList.toggle('out', out);
-      setText(row.pos, out ? '' : String(car.position));
-      const moved = car.gridPosition - car.position;
+      setText(row.pos, out ? '' : String(pos));
+      setText(row.cls, multi ? (view === null ? `${car.cls.label} ${out ? '' : car.classPosition}` : car.cls.label) : '');
+      const moved = multi ? car.classGrid - car.classPosition : car.gridPosition - car.position;
       setText(row.moved, out || moved === 0 ? '' : moved > 0 ? `▲${moved}` : `▼${-moved}`);
       row.moved.className = `tw-moved ${moved > 0 ? 'up' : 'down'}`;
-      setText(row.gap, out ? 'OUT' : gapText(this.interval ? sim.interval(car) : sim.gap(car), true));
+      const gap = multi ? (this.interval ? sim.classInterval(car) : sim.classGap(car)) : this.interval ? sim.interval(car) : sim.gap(car);
+      setText(row.gap, out ? 'OUT' : gapText(gap, true));
+      setText(row.driver, car.entrant.drivers.length > 1 ? car.driver.code : '');
       setText(row.last, car.lastLap !== null ? formatLapTime(car.lastLap) : '');
-      row.last.className = `tw-time wide ${lapMark(sim, car)}`;
+      row.last.className = `tw-time wide ${lapMark(car)}`;
       setText(row.best, car.bestLap !== null ? formatLapTime(car.bestLap) : '');
-      row.best.className = `tw-time wide ${sim.fastest?.car === car.id ? 'best' : ''}`;
+      row.best.className = `tw-time wide ${car.cls.fastest?.car === car.id ? 'best' : ''}`;
       for (let s = 0; s < 3; s++) {
         const v = car.sectors[s];
         setText(row.sectors[s], v !== null ? v.toFixed(1) : '');
         row.sectors[s].className = `tw-sector wide ${v !== null ? car.sectorMarks[s] : ''}`;
       }
-      const c = rules.tyres.compounds[car.compound];
+      const c = car.rules.tyres.compounds[car.compound];
       setText(row.tyre, `${c.code} ${car.tyreLaps}`);
       row.tyre.style.setProperty('--tyre', c.color);
       setText(row.pit, car.status === 'pit' ? 'PIT' : car.status === 'finished' ? '🏁' : car.stops ? String(car.stops) : '');
@@ -151,11 +200,14 @@ export class TimingTower {
     if (existing) return existing;
     const e = car.entrant;
     const span = (cls: string) => h('span', { class: cls });
+    const driver = h('span', { class: 'tw-driver' });
     const row: Row = {
       el: h('div', { class: 'tower-row', onclick: () => this.race.select(car.id, true), title: `${e.name}, ${e.team}` }),
       pos: span('tw-pos'),
+      cls: h('span', { class: 'tw-class', style: `--class:${car.cls.color}` }),
       moved: span('tw-moved'),
-      code: h('span', { class: 'tw-code' }, h('span', { class: 'tw-team', style: `background:${e.color}` }), e.code),
+      code: h('span', { class: 'tw-code' }, h('span', { class: 'tw-team', style: `background:${e.color}` }), e.code, driver),
+      driver,
       gap: span('tw-gap'),
       last: span('tw-time wide'),
       best: span('tw-time wide'),
@@ -163,14 +215,15 @@ export class TimingTower {
       tyre: span('tw-tyre'),
       pit: span('tw-pit'),
     };
-    row.el.append(row.pos, row.moved, row.code, row.gap, row.last, row.best, ...row.sectors, row.tyre, row.pit);
+    row.el.append(row.pos, row.cls, row.moved, row.code, row.gap, row.last, row.best, ...row.sectors, row.tyre, row.pit);
     this.rows.set(car.id, row);
     return row;
   }
 }
 
-function lapMark(sim: RaceSim, car: RaceCar): SectorMark | '' {
+function lapMark(car: RaceCar): SectorMark | '' {
   if (car.lastLap === null) return '';
-  if (sim.fastest && sim.fastest.car === car.id && sim.fastest.time === car.lastLap) return 'best';
+  const fastest = car.cls.fastest;
+  if (fastest && fastest.car === car.id && fastest.time === car.lastLap) return 'best';
   return car.lastLap === car.bestLap ? 'personal' : '';
 }

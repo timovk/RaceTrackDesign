@@ -20,10 +20,11 @@ const r1 = (v: number) => Math.round(v * 10) / 10;
 
 export function resultsCsv(sim: RaceSim): string {
   const winner = sim.order[0];
-  const rows: Cell[][] = [['Position', 'Number', 'Driver', 'Code', 'Team', 'Laps', 'Race time (s)', 'Gap (s)', 'Laps behind', 'Best lap (s)', 'Best lap on', 'Stops', 'Grid', 'Status']];
+  const rows: Cell[][] = [['Position', 'Number', 'Driver', 'Code', 'Team', 'Laps', 'Race time (s)', 'Gap (s)', 'Laps behind', 'Best lap (s)', 'Best lap on', 'Stops', 'Grid', 'Status', 'Class', 'Class position', 'Class gap (s)']];
   for (const car of sim.order) {
     const e = car.entrant;
     const g = sim.gap(car);
+    const cg = sim.classGap(car);
     let best: (typeof car.history)[number] | null = null;
     for (const h of car.history) if (!best || h.time < best.time) best = h;
     const status = car.status === 'retired' ? `DNF: ${car.retired?.reason ?? ''}` : car.status === 'finished' ? 'Finished' : 'Running';
@@ -33,23 +34,35 @@ export function resultsCsv(sim: RaceSim): string {
       car === winner ? 0 : g.kind === 'time' ? r3(g.value) : null,
       g.kind === 'laps' ? g.value : car === winner || g.kind === 'time' ? 0 : null,
       best ? r3(best.time) : null, best?.lap ?? null, car.stops, car.gridPosition, status,
+      car.cls.label, car.status === 'retired' ? null : car.classPosition, cg.kind === 'leader' ? 0 : cg.kind === 'time' ? r3(cg.value) : null,
     ]);
   }
   return toCsv(rows);
 }
 
 export function lapsCsv(sim: RaceSim): string {
-  const compounds = sim.model.rules.tyres.compounds;
-  const rows: Cell[][] = [['Number', 'Code', 'Lap', 'Lap time (s)', 'S1 (s)', 'S2 (s)', 'S3 (s)', 'Position', 'Gap to leader (s)', 'Race time (s)', 'Compound', 'Tyre laps', 'Tyre wear (%)', 'Fuel (kg)', 'Pit', 'Speed trap (km/h)']];
+  const rows: Cell[][] = [[
+    'Number', 'Code', 'Lap', 'Lap time (s)', 'S1 (s)', 'S2 (s)', 'S3 (s)', 'Position', 'Gap to class leader (s)', 'Race time (s)', 'Compound', 'Tyre laps',
+    'Tyre wear (%)', 'Fuel (kg)', 'Pit', 'Speed trap (km/h)', 'Class', 'Class position', 'Driver', 'Track wetness (%)', 'Neutralised',
+  ]];
   for (const car of sim.order) {
+    const compounds = car.rules.tyres.compounds;
     for (const h of car.history) {
       rows.push([
         car.entrant.number, car.entrant.code, h.lap, r3(h.time), r3(h.sectors[0]), r3(h.sectors[1]), r3(h.sectors[2]), h.position,
         r3(h.gap), r3(h.at), compounds[h.compound].name, h.tyreLaps, r1(h.wear * 100), r1(Math.max(0, h.fuel)), h.pit ? 'yes' : '',
         Number.isFinite(h.trap) ? r1(h.trap * 3.6) : null,
+        car.cls.label, h.classPosition, car.entrant.drivers[h.driver].name, Math.round(h.wet * 100), h.neutral ? 'yes' : '',
       ]);
     }
   }
+  return toCsv(rows);
+}
+
+/** The race feed: overtakes, stops, incidents, flags and weather. */
+export function eventsCsv(sim: RaceSim): string {
+  const rows: Cell[][] = [['Race time (s)', 'Lap', 'Kind', 'Car', 'Text']];
+  for (const e of sim.events) rows.push([r1(e.t), e.lap, e.kind, e.car >= 0 ? sim.cars[e.car].entrant.code : null, e.text]);
   return toCsv(rows);
 }
 

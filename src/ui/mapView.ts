@@ -622,7 +622,11 @@ export class MapView {
     }
 
     this.drawTrack();
-    if (this.store.mode === 'race') this.drawCars();
+    if (this.store.mode === 'race') {
+      this.drawRaceTrack();
+      this.drawCars();
+      this.drawRain();
+    }
     this.drawPoints();
     if (this.drag?.kind === 'freehand') this.drawStroke(this.drag.points);
     this.drawScaleBar();
@@ -986,7 +990,69 @@ export class MapView {
     else if (r.selected !== null && !r.follow) r.select(null);
   }
 
-  /** Cars as dots in their team colours, the leader drawn on top; retired cars as grey crosses where they stopped. */
+  /** A wet sheen on the track as it gets wet, and yellow flag zones along it. */
+  private drawRaceTrack(): void {
+    const sim = this.race?.sim;
+    const t = this.store.track;
+    if (!sim || !t || t.n !== sim.model.n) return;
+    const ctx = this.ctx;
+    let avgWidth = 0;
+    for (let k = 0; k < t.n; k++) avgWidth += t.width[k];
+    const basePx = this.trackPx(avgWidth / t.n);
+    if (sim.wetness > 0.02) {
+      ctx.beginPath();
+      this.pathRange(0, t.n - 1);
+      ctx.closePath();
+      ctx.strokeStyle = `rgba(70,140,220,${(0.12 + 0.4 * sim.wetness).toFixed(3)})`;
+      ctx.lineWidth = basePx;
+      ctx.stroke();
+    }
+    for (const z of sim.yellows) {
+      ctx.setLineDash(z.double ? [] : [6, 4]);
+      this.strokeRange(z.from, z.to, z.double ? 'rgba(255,214,10,0.95)' : 'rgba(255,214,10,0.7)', Math.max(4, basePx * 0.55));
+    }
+    ctx.setLineDash([]);
+    // A virtual safety car or full course yellow covers the whole lap.
+    if (sim.phase === 'vsc' || sim.phase === 'fcy') {
+      ctx.beginPath();
+      this.pathRange(0, t.n - 1);
+      ctx.closePath();
+      ctx.setLineDash([10, 8]);
+      ctx.strokeStyle = 'rgba(255,214,10,0.55)';
+      ctx.lineWidth = Math.max(2, basePx * 0.3);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  /** Rain over the map: a tint and falling streaks, stronger in heavier rain. */
+  private drawRain(): void {
+    const sim = this.race?.sim;
+    if (!sim || sim.rain < 0.05) return;
+    const ctx = this.ctx;
+    const a = Math.min(1, sim.rain);
+    ctx.fillStyle = `rgba(40,70,110,${(0.1 + 0.15 * a).toFixed(3)})`;
+    ctx.fillRect(0, 0, this.width, this.height);
+    ctx.strokeStyle = `rgba(190,215,240,${(0.1 + 0.2 * a).toFixed(3)})`;
+    ctx.lineWidth = 1;
+    const spacing = 38 - 16 * a;
+    const shift = (sim.t * 240) % spacing;
+    ctx.beginPath();
+    for (let x = -this.height; x < this.width; x += spacing) {
+      for (let y = -spacing + shift; y < this.height; y += spacing * 1.7) {
+        const jitter = ((x * 7 + Math.floor(y) * 13) % 11) - 5;
+        ctx.moveTo(x + y * 0.25 + jitter, y);
+        ctx.lineTo(x + y * 0.25 + jitter + 3, y + 10);
+      }
+    }
+    ctx.stroke();
+  }
+
+  /**
+   * Cars as dots in their team colours, the leader drawn on top, ringed in
+   * their class colour in a multi-class race; retired cars as grey crosses
+   * where they stopped; the safety car as a marked box.
+   */
   private drawCars(): void {
     const r = this.race;
     const sim = r?.sim;
@@ -1021,8 +1087,8 @@ export class MapView {
       ctx.globalAlpha = car.status === 'pit' ? 0.75 : 1;
       ctx.fill();
       ctx.globalAlpha = 1;
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = '#0b0d10';
+      ctx.lineWidth = sim.multiClass ? 2.5 : 1.5;
+      ctx.strokeStyle = sim.multiClass ? car.cls.color : '#0b0d10';
       ctx.stroke();
       if (car.position === 1) {
         ctx.beginPath();
@@ -1039,7 +1105,8 @@ export class MapView {
         ctx.stroke();
       }
       if (labels || selected) {
-        const text = selected ? `P${car.position} ${car.entrant.code}` : car.entrant.code;
+        const pos = sim.multiClass ? `${car.cls.label} P${car.classPosition}` : `P${car.position}`;
+        const text = selected ? `${pos} ${car.entrant.code}` : car.entrant.code;
         const w = ctx.measureText(text).width + 8;
         const lx = x + radius + 5;
         ctx.fillStyle = selected ? '#ffffff' : 'rgba(12,15,19,0.8)';
@@ -1049,6 +1116,23 @@ export class MapView {
         ctx.textAlign = 'left';
         ctx.fillText(text, lx + 4, y + 0.5);
       }
+    }
+    // The safety car on top, so the queue behind it does not hide it.
+    const sc = sim.safetyCarPose(r.alpha);
+    if (sc) {
+      const x = this.sx(sc.x);
+      const y = this.sy(sc.y);
+      const s = Math.max(8, radius + 3);
+      ctx.fillStyle = '#ffb020';
+      roundRect(ctx, x - s, y - s * 0.75, 2 * s, 1.5 * s, 3);
+      ctx.fill();
+      ctx.strokeStyle = '#0b0d10';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = '#0b0d10';
+      ctx.font = `800 ${Math.round(s * 0.9)}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('SC', x, y + 0.5);
     }
   }
 

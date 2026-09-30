@@ -30,10 +30,11 @@ src/
     race/
       rules.ts       race rules per class from data/racing.json
       model.ts       race lap, slipstream/wake/DRS ratios, fuel, tyres, pit lane, braking zones
-      field.ts       seeded teams and drivers
-      setup.ts       race settings, qualifying, grid
+      field.ts       seeded teams, drivers and crews
+      setup.ts       race settings (classes, length, grid, weather), qualifying, grid
       strategy.ts    tyre loss, stop cost, stint planning
-      sim.ts         the race: fixed-step simulation, timing, events, recording
+      sim.ts         the race: fixed-step simulation, classes, race control, timing, events, recording
+      weather.ts     seeded rain timeline, track wetness, grip, wear and risk per tyre type
       telemetry.ts   speed, pedals, gear and g-forces from a lap's sample times; lap deltas
       stats.ts       fastest laps, speed trap, overtakes, pit stops, chart series
       export.ts      CSV of results, laps and telemetry
@@ -44,14 +45,14 @@ src/
     profileView.ts   elevation profile and speed trace canvas
     facilityLayer.ts facilities and drag handles on the map
     raceController.ts runs and plays back a race, drops it when the track changes
-    raceTower.ts     timing tower over the map
-    raceDock.ts      telemetry, lap chart, gaps, lap times, stints and statistics under the map
+    raceTower.ts     timing tower over the map, with flags, weather and class tabs
+    raceDock.ts      telemetry, lap chart, gaps, lap times, stints, conditions and statistics under the map
     charts.ts        canvas chart helpers
     download.ts      saving files from the browser
     panels/          sidebar panels per mode
 data/
   vehicles.json      vehicle classes (edit to add or change classes)
-  racing.json        race rules per class: grid, length, tyres, fuel, stops, incidents
+  racing.json        race rules per class: grid, crews, length, start, tyres, fuel, stops, incidents, flags
   reference-laps.json  real qualifying laps with sources
   circuits/          TUMFTM racetrack database (LGPL-3.0)
 docs/CALIBRATION.md  generated calibration report
@@ -81,8 +82,8 @@ Track + metrics + VehicleClass[] + overrides --worker-->
     Performance (racing line, a LapResult per class, sectors)
     Facilities (grid, pit lane and time loss, speed trap, DRS, overtaking, marshals)
     Licence (FIA and FIM grade, checklist, run-off paths)
-Track + Performance + Facilities + class --buildRaceModel--> RaceModel
-RaceModel + RaceSettings (class, cars, length, grid, seed) --createRaceSetup--> RaceSetup (field, qualifying, grid)
+Track + Performance + Facilities + class --buildRaceModel--> RaceModel (one per class)
+RaceModel[] + RaceSettings (classes and cars, length, grid, weather, seed) --createRaceSetup--> RaceSetup (field, qualifying, grid, weather)
 RaceSetup --RaceSim.step() x N--> cars, timing, events, result
 ```
 
@@ -164,62 +165,88 @@ Run-off is checked per grade with the laps of the classes that need exactly that
 
 ### Before the start
 
-`buildRaceModel` runs the lap simulation a few more times for the class, all at the trim of its qualifying lap:
+A race has one or more classes. `buildRaceModel` builds a model per class; the track, racing line, timing lines, grid slots and pit lane geometry are shared, and everything else (race lap, ratios, fuel, tyres, braking zones, pit speed limit) belongs to the class. For each class it runs the lap simulation a few more times, all at the trim of its qualifying lap:
 
 - the **race lap**, without DRS, as a time per station segment;
 - the same lap with 25% less drag (**slipstream**, `air.towDragCut`), with less downforce (**wake**, `air.wakeDownforceLoss`) and with DRS open. Each becomes a per-station ratio to the race lap, so a car's segment time can be blended between them;
+- the lap at 75% and at 50% of the dry grip, for a **wet track**. These ratios are blended for any grip level (`gripBlend`: linear between the three laps, extrapolated below 50%), so rain slows the corners and the braking far more than the straights;
 - the lap 50 kg heavier, for the lap-time cost of fuel per kg.
 
-Fuel per lap is the class's typical kg/km scaled by this track's wheel energy per km (throttle times power, summed over the lap) against the class's average on the real circuits. Tyre wear is scaled the same way by tyre work, the squared total acceleration summed over distance, clamped to 0.5 to 2 times the reference. Passing zones are the braking onsets with more than 25 km/h lost; their quality grows with the speed lost and the flat-out run before them. The pit lane becomes a path with a speed limit between its ramps and a box per team. The launch curve (speed per metre from a standstill, traction then power limited) serves the start, the pit exit and pulling away from the box.
+Fuel per lap is the class's typical kg/km scaled by this track's wheel energy per km (throttle times power, summed over the lap) against the class's average on the real circuits. Tyre wear is scaled the same way by tyre work, the squared total acceleration summed over distance, clamped to 0.5 to 2 times the reference. Passing zones are the braking onsets with more than 25 km/h lost; their quality grows with the speed lost and the flat-out run before them. The pit lane becomes a path with a speed limit between its ramps and a box per team. The launch curve (speed per metre from a standstill, traction then power limited) serves the start, the pit exit and pulling away from the box or after a neutralisation.
 
-`createRaceSetup` draws the field from the seed (team pace, driver pace, consistency, tyre management, racecraft, error rate, start reaction, reliability), runs qualifying (the best of three laps at the qualifying time, scaled by pace, with scatter and the odd mistake) and sets the grid.
+`createRaceSetup` orders the classes by pace (fastest first; its rules set the start, the flags and the time limit) and draws each class's field from the seed: team pace and reliability, and per driver pace, consistency, tyre management, racecraft, error rate and start reaction. Endurance classes have crews of two or three drivers, fastest first; their cars are known by number. Numbers, driver codes and team names are unique across classes, and every team has its own pit box. Qualifying is the best of three laps at the qualifying time by the car's fastest driver, scaled by pace, with scatter and the odd mistake; the grid is class by class. The setup also builds the weather.
+
+### Weather
+
+`weather.ts` makes a seeded rain timeline in 10 s steps from an hour before the start: nothing when dry; one or more showers for changeable weather (more in a long race), each building up and easing off with a slow wobble; and for a wet race, rain from before the start that stops during the race six times in ten, sometimes with a later shower. Track wetness (0 dry, 1 standing water) follows the rain towards `rain^0.6`, with a time constant of 5 minutes when getting wetter and 16 minutes when drying.
+
+Per tyre type, wetness sets the grip (a share of a slick's in the dry: slicks fall from 1 to 0.52, intermediates from 0.9 to 0.65, wets from 0.82 to 0.74), an extra loss for aquaplaning on slicks (and on intermediates in standing water), tyre wear (wet tyres overheat and wear up to ten times faster on a drying track; slicks wear less in the wet) and the risk of mistakes (up to twenty-odd times higher on slicks in the wet). Slicks are best up to about 12% wetness, intermediates up to about 65%, then wets; classes without intermediates go straight from slicks to wets at about 28%.
 
 ### Stepping
 
-The simulation advances in fixed steps of 0.1 s, so a seed gives the same race at any playback speed. Randomness comes from one seeded generator per car and one for the race, and draws use only arithmetic (normal draws sum four uniforms), so every engine agrees.
+The simulation advances in fixed steps of 0.1 s, so a seed gives the same race at any playback speed. Randomness comes from one seeded generator per car, one for the race and one for race control, and draws use only arithmetic (normal draws sum four uniforms), so every engine agrees.
 
 A car's position is race progress in stations from the start line, negative on the grid. Within a step it walks station by station; each segment takes
 
-    race-lap segment × lap pace × (1 + tow × (towRatio − 1) + wake × (wakeRatio − 1) + DRS)
+    race-lap segment × lap pace × (1 + tow × (towRatio − 1) + wake × (wakeRatio − 1) + DRS) × wet-grip ratio
 
-where lap pace is car and driver pace times (1 + race pace + compound + tyre loss + fuel mass × sensitivity + fuel saving + cold tyres) times the lap's scatter, set at each lap start and after a stop. Speed caps apply on the launch curve and when braking for the pit entry. Every station crossed is checked against a per-station mark (timing line, sector line, timing loop every 100 m, pit decision point, pit entry, braking zone, DRS detection), and crossings are timed to the exact moment inside the step.
+where lap pace is car and driver pace times (1 + race pace + compound + tyre loss + fuel mass × sensitivity + fuel saving + cold tyres + aquaplaning) times the lap's scatter (larger on a wet track), set at each lap start and after a stop. Yellow flags slow the segments in their zone (6% single, 20% double). Under a neutralisation no car is faster than the VSC delta (the race lap `flags.vscPct` slower), the full course yellow limit (`flags.fcyKmh`) or the safety car delta (25% slower than the race lap), reached over 5 s. Speed caps apply on the launch curve and when braking for the pit entry. Every station crossed is checked against a per-station mark (timing line, sector line, timing loop every 100 m, pit decision point, pit entry, braking zone of any class, DRS detection, telemetry sample, speed trap), and crossings are timed to the exact moment inside the step.
 
-Cars move front to back, starting behind the biggest gap, so each car sees the car ahead already moved. A car stops a minimum gap (6 m + 0.12 s × speed) behind the car ahead unless that car does not block it: off the track, on the pit entry or exit road, being passed, or on the run from the grid to the first braking zone (so the start can shuffle the order). Slipstream is full within 0.3 s of the car ahead and gone at 1 s; the wake is full within 0.4 s and gone at 1.6 s.
+Cars move front to back, starting behind the biggest gap, so each car sees the car ahead already moved. A car stops a minimum gap (6 m + 0.12 s × the speed of the car ahead; 10 m + 0.25 s under a safety car) behind the car ahead unless that car does not block it: off the track, on the pit entry or exit road, being passed, or on the run from the grid to the first braking zone (so the start can shuffle the order). A car that would reach that gap within the step spreads its movement over the whole step, so its speed follows the car ahead instead of surging and stopping. Slipstream is full within 0.3 s of the car ahead and gone at 1 s; the wake is full within 0.4 s and gone at 1.6 s. A standing start launches from zero after each driver's reaction; a rolling start (endurance classes and IndyCar) launches from 100 km/h.
 
 ### Racing
 
-At a braking zone, a car within 0.6 s of the car ahead may attack. The advantage is the speed ratio at the braking point (the defender's speed taken where it crossed the same point) plus twice the pace difference; the chance is the zone quality × the class's overtaking factor × a ramp from 1.5% to 8.5% advantage × racecraft × closeness, capped at 80% (lap 1 × 1.3). A success lets the attacker through with a brief boost while the defender loses a quarter of a second; the defender cannot strike back for 15% of a lap. A failure costs the attacker 0.1 to 0.35 s and occasionally ends in contact (time lost for both, sometimes a retirement). A car a lap or more ahead passes a backmarker with a 90% chance at any braking zone.
+At a braking zone of its class, a car within 0.6 s of the car ahead may attack, unless the zone is under yellow, the race is neutralised or the car has not yet crossed the line after a restart. The advantage is the speed ratio at the braking point (the defender's speed taken where it crossed the same point) plus twice the pace difference; the chance is the zone quality × the class's overtaking factor × a ramp from 1.5% to 8.5% advantage × racecraft × closeness, capped at 80% (lap 1 × 1.3). A success lets the attacker through with a brief boost (up to its top speed) while the defender loses a quarter of a second; the defender cannot strike back for 15% of a lap. A failure costs the attacker 0.1 to 0.35 s and occasionally ends in contact (time lost for both, sometimes a retirement). A car a lap or more ahead passes a backmarker with a 90% chance at any braking zone, and a car of a faster class passes a slower-class car with 85%; neither counts as an overtake.
 
-DRS opens when the gap at the detection point, from each car's crossing times, is within the class's limit from the given lap.
+DRS opens when the gap at the detection point, from each car's crossing times, is within the class's limit from the given lap, on green and on a track less than 30% wet.
 
-Each lap draws at most one incident from the class's rates, scaled by the driver's error rate (and 1.5 times on tyres past their life): a technical failure (reliability per km), a crash, a trip off (3 to 10 s, off the racing line so others pass) or a small mistake (0.4 to 1.5 s).
+Each lap draws at most one incident from the class's rates, scaled by the driver's error rate, by 1.5 on tyres past their life and by the wet-weather risk of the tyres fitted: a technical failure (reliability per km), a crash, a trip off (3 to 10 s, off the racing line so others pass) or a small mistake (0.4 to 1.5 s). A failed car limps back to the pits (35%), parks where the marshals can leave it, or stops where it has to be recovered.
 
-### Tyres, fuel and stops
+### Race control
 
-A set loses `deg × wear` of lap time up to the end of its life (wear 1), then falls off a cliff: `deg × (1 + 6x + 20x²)` for x past it. Classes without refuelling plan before the start: a dynamic programme over (laps covered, compounds used) per number of stints finds the fastest split, with stints capped at 1.6 lives, the two-compound rule and mandatory stops enforced; the choice is random among plans within a small margin of the best, and the stop lap is spread by about 1.5 laps. At the decision point 500 m before the pit entry a car stops when the plan says so, when its tyres are past 1.08 lives, to cover a rival close behind who has just stopped, or to try the undercut after two laps stuck within a second of the car ahead. Classes with refuelling stop when less than 1.2 laps of fuel remain, fill up to what the rest of the race needs, and change tyres when the set would pass 0.9 of its life in the next stint.
+Race control follows the fastest class's `flags` rules and draws from its own random stream:
 
-In the pit lane a car brakes to the limit, drives to its team's box (waiting if a team-mate is still being served), stops for the service time (tyres, fuel at the refuelling rate, concurrently or one after the other, the minimum stationary time of a mandatory stop, and a 4% chance of a slow stop), pulls away on the launch curve and rejoins. Its race progress is the lane mapped onto the stretch of lap it bypasses, so timing lines inside the lane still count.
+- a trip off, contact or a parked car brings a single yellow (20 to 45 s) from 250 m before the spot to 60 m after it;
+- a crash or a car stopped on track brings a double yellow for the recovery (60 to 210 s) and may neutralise the race. A safety car comes out with a chance that grows with the speed at the spot (30% to 70% for a crash; less in series with a full course yellow, which keep it for barrier repairs); otherwise often a virtual safety car or full course yellow until the car is recovered. A series without a virtual safety car (IndyCar, TCR) uses the safety car more; bikes only wave yellows. Nothing is neutralised on the last lap or after the flag;
+- the safety car joins 150 m ahead of the leader, in a gap between cars, and runs at 70% of the fastest class's race speed (at most 198 km/h). Cars catch up at the safety car delta and queue behind it. Once the track is clear and it has led a full lap, it is "in this lap" at the line, leaves at the pit entry (or 400 m before the line), and the car behind it leads the field to the line, where racing resumes; nobody passes before crossing it;
+- when a VSC or full course yellow ends, or at the restart, every car pulls away from its current speed on the launch curve.
+
+The pit lane stays open throughout. A neutralised lap makes a stop cheap, so a car that still has to stop before the end (for fuel, tyres, the driver or its plan) takes it when the stop is due soon, the tyres are half worn, half the tank is gone or a driver change is near.
+
+### Tyres, fuel, drivers and stops
+
+A set loses `deg × wear` of lap time up to the end of its life (wear 1), then falls off a cliff: `deg × (1 + 6x + 20x²)` for x past it. Classes without refuelling plan before the start: a dynamic programme over (laps covered, compounds used) per number of stints finds the fastest split over the dry compounds, with stints capped at 1.6 lives, the two-compound rule (lifted once wet-weather tyres have been used) and mandatory stops enforced; the choice is random among plans within a small margin of the best, and the stop lap is spread by about 1.5 laps. At the decision point 500 m before the pit entry a car stops when the plan says so, when its tyres are past 1.08 lives, to cover a rival in its class close behind who has just stopped, to try the undercut after two laps stuck within a second of the car ahead, for a cheap stop under a neutralisation, or for the weather. Classes with refuelling stop when less than 1.2 laps of fuel remain, fill up to what the rest of the race needs, and change tyres when the set would pass 0.9 of its life in the next stint.
+
+The weather call compares the tyres fitted with the best type for the average wetness over the next two and a half laps (what a team sees on the radar). When the time gained over up to eight laps beats the cost of a stop, the car comes in; slicks on a wet track count half as much again, wet tyres overheating on a dry one add to it, and teams weigh the stop differently. A class that does not stop at all (MotoGP, Superbike, TCR) comes in only for the weather, as in flag-to-flag racing. A race that starts wet starts on wet-weather tyres, and the dry plan waits until the track dries.
+
+In a crew, the driver in the car hands over at a stop when their stint would pass the class's longest stint (`driverStintMinutes`) before the next stop, to the team-mate who has driven least. The change happens while refuelling (`driverChangeS`); tyres come afterwards, or at the same time in classes that do both at once.
+
+In the pit lane a car brakes to the limit, drives to its team's box (waiting if a team-mate is still being served), stops for the service time (tyres, fuel at the refuelling rate and the driver change, concurrently or one after the other, the minimum stationary time of a mandatory stop, and a 4% chance of a slow stop), pulls away on the launch curve and rejoins; under a full course yellow the limit holds out to the exit. Its race progress is the lane mapped onto the stretch of lap it bypasses, so timing lines inside the lane still count.
 
 ### Timing and the end
 
-Lap and sector times come from line crossings; sector colours compare with the car's and everyone's best. Gaps use the timing loops: each car keeps the last two laps of loop times, and a gap is the difference between two cars' times at the loop the rear car passed last. A car a full lap or more behind shows laps instead. The race order is race progress (finishers by finish time within a lap count, retired cars last).
+Lap and sector times come from line crossings; sector colours compare with the car's and its class's best. Gaps use the timing loops: each car keeps the last two laps of loop times, and a gap is the difference between two cars' times at the loop the rear car passed last. A car a full lap or more behind shows laps instead. The race order is race progress (finishers by finish time within a lap count, retired cars last); the class order is the race order filtered by class, with gaps and intervals to the class leader and to the car ahead in the class.
 
-A race by laps ends when the leader completes them, or at the class's time limit; a race by time at the leader's first crossing after the time. Everyone else finishes at their next crossing.
+A race by laps ends when the overall leader completes them, or at the time limit of the fastest class; a race by time at the leader's first crossing after the time. Everyone else, in every class, finishes at their next crossing, so slower classes run fewer laps; their fuel and strategy are planned for the laps they will actually get.
 
 ### Recording, telemetry and statistics
 
 Besides timing, the simulation records per car and lap:
 
-- a lap record: time, sectors, position, the race time at the line and the gap to the first car to complete that lap, compound, tyre age and wear, fuel, whether the car stopped, and its speed through the speed trap (timed over the last 20 m before the trap line);
+- a lap record: time, sectors, overall and class position, the race time at the line and the gap to the first car of the class to complete that lap, compound, tyre age and wear, fuel, whether the car stopped, its speed through the speed trap (timed over the last 20 m before the trap line), the driver, the track wetness and whether the lap was neutralised;
 - a telemetry trace: the time since the start of the lap at every sample station (every 5 m, coarser on laps over 5 km so a lap keeps at most about 1000 samples; a Float32Array per lap);
-- every pit stop: entry and exit times, time in the box (including waiting for a team-mate), tyres before and after, fuel and the reason.
+- every pit stop: entry and exit times, time in the box (including waiting for a team-mate), tyres before and after, fuel, the driver who took over and the reason.
 
-`telemetry.ts` turns a trace into channels. Speed is racing-line distance over time between the neighbouring samples; longitudinal acceleration is the change in speed over time; lateral acceleration is v² times the line's curvature at the sample; the gear comes from the gearing; throttle and brake come from the force balance of the lap simulation (mass with the fuel on board, drag and downforce at the class's trim, rolling resistance, gradient): the throttle is the share of power needed, the brake the share of the grip-limited braking force. A complete lap ends with a sample at the line at the lap time, so a delta between two laps (the difference of their sample times) ends at the lap-time difference.
+For the race it records every neutralisation (kind, start, end, reason), the yellow zones, and every half minute the rain, wetness, flag state and how many cars run on each tyre type.
 
-`stats.ts` reads the rankings and chart series from these records and the event log: fastest laps, best trap speeds (laps without a stop), overtakes made and lost (from 'overtake' events, so lapping backmarkers is not counted), pit stops, positions and gaps per lap, and tyre stints (a new stint where the compound changes or the tyre age drops back to one lap). `export.ts` writes them as RFC 4180 CSV.
+`telemetry.ts` turns a trace into channels. Speed is racing-line distance over time between the neighbouring samples; longitudinal acceleration is the change in speed over two samples either side; lateral acceleration is v² times the line's curvature at the sample; the gear comes from the gearing; throttle and brake come from the force balance of the lap simulation (mass with the fuel on board, drag and downforce at the class's trim, rolling resistance, gradient). The throttle is the share of power needed; the brake is the share of the grip-limited braking force, with the grip the fitted tyres have at that lap's wetness. A complete lap ends with a sample at the line at the lap time, so a delta between two laps (the difference of their sample times) ends at the lap-time difference.
+
+`stats.ts` reads the rankings and chart series from these records and the event log, for one class or class by class: fastest laps, best trap speeds (laps without a stop), overtakes made and lost (from 'overtake' events, so lapping and passing slower classes are not counted), pit stops, positions (overall or in the class) and gaps per lap, tyre stints (a new stint where the compound changes or the tyre age drops back to one lap), driver stints, and the neutralised periods as leader laps. `export.ts` writes results, laps, the feed and telemetry as RFC 4180 CSV.
 
 ### In the app
 
-`RaceController` builds the race from the store's current track, analysis and facilities, plays it back with requestAnimationFrame (simulated time = real time × speed, at most 12 ms of stepping per frame, positions interpolated between the last two steps), and skips to the end in 12 ms slices. It stops the race when the track or its analysis changes. A Formula 1 race runs to the end in about a quarter of a second, a six-hour Hypercar race in under a second. Structural changes go out as the store's `race` topic; per-frame updates reach the map, the tower, the panel and the dock through `onTick`, and they refresh a few times a second.
+`RaceController` builds a model per class from the store's current track, analysis and facilities, plays the race back with requestAnimationFrame (simulated time = real time × speed up to 1000×, at most 12 ms of stepping per frame, positions interpolated between the last two steps), and skips to the end in 12 ms slices. It stops the race when the track or its analysis changes. A Formula 1 race runs to the end in about a quarter of a second, a six-hour race with 54 cars in three classes in about three seconds. Structural changes go out as the store's `race` topic; per-frame updates reach the map, the tower, the panel and the dock through `onTick`, and they refresh a few times a second. The controller also holds the class shown in a multi-class race, which the tower's tabs and the dock's class picker share.
 
-`RaceDock` replaces the profile strip during a race. The controller holds the telemetry selection (car, lap, comparison), which the dock's selectors and the telemetry export share; picking a car on the map or in the tower sets it and opens the Telemetry tab. The dock redraws only when the recorded data moves on (a lap completed, a stop, a new selection; every second for the lap in progress) or on hover. Telemetry hover sets the store's hover station, so the map marks the spot; chart clicks select the car under the pointer.
+The map draws the cars in team colours (ringed in their class colour in a multi-class race), the safety car on top of its queue, yellow zones along the track, a dashed yellow lap under a VSC or full course yellow, a wet sheen on the track as it gets wet, and rain over the map.
+
+`RaceDock` replaces the profile strip during a race. The controller holds the telemetry selection (car, lap, comparison), which the dock's selectors and the telemetry export share; picking a car on the map or in the tower sets it and opens the Telemetry tab. The lap charts shade neutralised laps; Conditions plots rain, wetness, flags and the field's tyres against race time. The dock redraws only when the recorded data moves on (a lap completed, a stop, a new selection or class; every second for the lap in progress and the conditions) or on hover. Telemetry hover sets the store's hover station, so the map marks the spot; chart clicks select the car under the pointer.

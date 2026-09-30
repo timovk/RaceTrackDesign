@@ -8,10 +8,13 @@
  * - lateral acceleration from speed and the racing line's curvature;
  * - gear from speed and the gearing;
  * - throttle and brake from the force the change in speed needs against
- *   drag, rolling resistance and gradient, as in the lap simulation.
+ *   drag, rolling resistance and gradient, as in the lap simulation (with
+ *   the grip left on a wet track for the brake).
  */
 import { AIR_DENSITY, GRAVITY, gearAt, gearTopSpeeds } from '../lapSim.ts';
+import type { RaceModel } from './model.ts';
 import type { RaceCar, RaceSim } from './sim.ts';
+import { gripFactor } from './weather.ts';
 
 export type LapChoice = 'last' | 'best' | 'current' | number;
 
@@ -55,12 +58,14 @@ export function lapTelemetry(sim: RaceSim, car: RaceCar, choice: LapChoice): Tel
   const trace = done ? car.traces[lap - 1] : car.trace;
   if (!trace) return null;
   const record = done ? car.history[lap - 1] : null;
-  const fuel = record ? record.fuel + sim.model.fuelPerLap / 2 : car.fuel;
-  return channels(sim, car.id, lap, trace, record?.time ?? null, fuel);
+  const m = car.model;
+  const fuel = record ? record.fuel + m.fuelPerLap / 2 : car.fuel;
+  const compounds = m.rules.tyres.compounds;
+  const grip = record ? gripFactor(compounds[record.compound].type, record.wet) : gripFactor(car.tyreType, sim.wetness);
+  return channels(m, car.id, lap, trace, record?.time ?? null, fuel, grip);
 }
 
-function channels(sim: RaceSim, carId: number, lap: number, trace: Float32Array, lapTime: number | null, fuel: number): Telemetry {
-  const m = sim.model;
+function channels(m: RaceModel, carId: number, lap: number, trace: Float32Array, lapTime: number | null, fuel: number, gripScale: number): Telemetry {
   const track = m.track;
   const line = m.line;
   const car = m.vehicle;
@@ -111,8 +116,9 @@ function channels(sim: RaceSim, carId: number, lap: number, trace: Float32Array,
   for (let i = 0; i < count; i++) {
     const vi = v[i];
     if (!Number.isFinite(vi)) continue;
-    const a = Math.max(0, i - 1);
-    const b = Math.min(count - 1, i + 1);
+    // The change in speed over two samples either side, so a car held up in traffic, whose speed varies from step to step, does not flicker between throttle and brake.
+    const a = Math.max(0, i - 2);
+    const b = Math.min(count - 1, i + 2);
     const acc = b > a && t[b] > t[a] && Number.isFinite(v[a]) && Number.isFinite(v[b]) ? (v[b] - v[a]) / (t[b] - t[a]) : 0;
     const k = stationOf[i];
     lonG[i] = acc / GRAVITY;
@@ -128,7 +134,7 @@ function channels(sim: RaceSim, carId: number, lap: number, trace: Float32Array,
       brake[i] = 0;
     } else {
       throttle[i] = 0;
-      const grip = load * car.grip * Math.max(0.5, 1 - car.loadSensitivity * (load / weight - 1));
+      const grip = load * car.grip * gripScale * Math.max(0.5, 1 - car.loadSensitivity * (load / weight - 1));
       const limit = car.maxBrakeG !== null ? Math.min(grip, car.maxBrakeG * weight) : grip;
       brake[i] = -needed > 0.05 * weight ? Math.min(1, -needed / limit) : 0;
     }
