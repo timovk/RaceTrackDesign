@@ -94,6 +94,13 @@ export interface RaceModel {
   grid: GridStart[];
   /** Number of the corner each station is in, or the next one within 400 m; 0 for none. */
   cornerAt: Int16Array;
+  /** Aero trim the class runs here (from its qualifying lap), for telemetry. */
+  trim: number;
+  /** Telemetry: stations between samples and samples per lap. */
+  teleEvery: number;
+  samples: number;
+  /** Station of the speed trap. */
+  speedTrap: number;
 }
 
 export interface RaceModelInput {
@@ -111,6 +118,7 @@ const LAUNCH_LENGTH = 3000;
 /** Share of the tyre's grip usable when launching from a standstill (clutch slip, wheelspin). */
 const LAUNCH_GRIP = 0.85;
 const LOOP_SPACING = 100;
+const TELEMETRY_SPACING = 5;
 const PIT_RAMP = 120;
 const HEAVY = 50;
 
@@ -153,6 +161,8 @@ export function buildRaceModel(input: RaceModelInput): RaceModel {
     }
   }
 
+  // Telemetry every 5 m, or coarser on long laps so a lap has at most about 1000 samples.
+  const teleEvery = Math.max(1, Math.round(Math.max(TELEMETRY_SPACING, line.length / 1000) / track.ds));
   const energy = lapEnergy(base, line, car) / line.length;
   const work = lapTyreWork(base, line) / line.length;
   const energyScale = rules.reference.energy > 0 ? energy / rules.reference.energy : 1;
@@ -183,6 +193,10 @@ export function buildRaceModel(input: RaceModelInput): RaceModel {
     pit: pitModel(f, car, n),
     grid: gridStarts(track, line, input.gridSize),
     cornerAt: cornerLookup(n, track.ds, input.corners ?? []),
+    trim,
+    teleEvery,
+    samples: Math.ceil(n / teleEvery),
+    speedTrap: f.speedTrap.station,
   };
 }
 

@@ -12,8 +12,8 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | 2 | Lap-time model, vehicle classes, calibration on real circuits, timed sectors | **done** |
 | 3 | Start/finish, pit lane, other facilities, FIA grade estimate | **done** |
 | 4 | Race core, moving dots, timing tower | **done** |
-| 5 | Telemetry, charts, statistics, export | next |
-| 6 | Multi-class, safety car, endurance, weather | planned |
+| 5 | Telemetry, charts, statistics, export | **done** |
+| 6 | Multi-class, safety car, endurance, weather | next |
 
 ## Running it
 
@@ -61,6 +61,12 @@ The app works in four modes, in order. Everything downstream recalculates live w
 - The cars run as dots in their team colours, the leader ringed in yellow. The timing tower over the map shows position, places gained, gap (or interval, click the header), last and best lap, sector times in purple, green and yellow, tyres and stops; **Times** and **Less** switch the lap and sector columns.
 - Play, pause (P) and play at 1× to 500×, or **Finish now** to simulate the rest at once. Click a car on the map or in the tower for its position, gaps, laps, tyres and wear, fuel, stops, next planned stop and speed; **Follow** keeps the map on it.
 - The race feed lists overtakes, pit stops, fastest laps, trips off the track, contact and retirements; the result and the qualifying order follow at the end.
+- Under the map, the analysis dock replaces the profile strip during a race (drag its top edge to resize):
+  - *Telemetry*: speed, throttle and brake, gear, and lateral and longitudinal g over a lap, for any car and any lap (last, best, the lap in progress or a chosen one). Compare with the fastest lap of the race or another car's lap to see both traces and the time delta along the lap; hovering marks the spot on the map. Clicking a car on the map or in the tower opens its telemetry.
+  - *Positions* (a lap chart), *Gaps* to the leader and *Lap times* per lap; click a line to pick a car.
+  - *Stints*: every car's tyre sets, with pit stops and retirements.
+  - *Statistics*: fastest laps, speed-trap ranking, overtakes made and lost, and pit stops by time in the box and in the lane.
+- **Export** saves the results, every lap (times, sectors, position, gap, tyres, fuel, speed trap) and the telemetry shown as CSV files, and the map as a PNG image.
 - Changing the track stops the race, since it no longer fits the layout.
 
 Click any row to find it on the map. In Analyse, drag **Start**, **Pit in**, **Pit out** and **Speed** on the map to move them; **Automatic** puts them back.
@@ -124,6 +130,8 @@ Stops happen in the real pit lane: braking for the entry, the speed limit, the t
 
 The race rules per class (grid, default length, tyres, fuel, stops, DRS, slipstream, incident rates) live in [data/racing.json](data/racing.json); a class missing there gets generic defaults. The figures are approximate and meant to be edited.
 
-Limits of this milestone: no safety car, yellow flags or driver changes (milestone 6) and one class per race. Overtaking is only roughly tuned: in trials on the real circuits, Formula 1 races saw from under ten passes after lap 1 (Suzuka, Budapest) to about eighty (Monza, Bahrain), with Spa and Silverstone lower and Zandvoort (whose banking is not modelled) higher than in reality.
+Telemetry is recorded as the moment each car passes a sample point every 5 m or so (coarser on very long laps, so a lap has at most about a thousand points). Speed follows from distance over time, g-forces from the change in speed and the racing line's curvature, gear from the gearing, and throttle and brake from the force the change in speed needs against drag, rolling resistance and gradient, as in the lap-time model. So the pedal traces are the model's estimate, not recorded inputs, and a lap run through the pit lane shows the lane mapped onto the stretch of track it bypasses.
+
+Limits: no safety car, yellow flags or driver changes (milestone 6) and one class per race. Overtaking is only roughly tuned: in trials on the real circuits, Formula 1 races saw from under ten passes after lap 1 (Suzuka, Budapest) to about eighty (Monza, Bahrain), with Spa and Silverstone lower and Zandvoort (whose banking is not modelled) higher than in reality.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works inside.

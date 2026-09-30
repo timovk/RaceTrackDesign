@@ -181,7 +181,7 @@ export function simulateLapAtTrim(track: Track, line: RacingLine, car: VehicleCl
       brake[k] = Math.min(1, -needed / Math.max(1, brakeForce(k, v[k])));
     }
     if (throttle[k] >= 0.98) fullTime += dt;
-    gear[k] = gearFor(v[k], gearTops);
+    gear[k] = gearAt(v[k], gearTops);
     topSpeed = Math.max(topSpeed, v[k]);
     minSpeed = Math.min(minSpeed, v[k]);
   }
@@ -290,7 +290,8 @@ export function gearTopSpeeds(car: VehicleClass): Float64Array {
   return tops;
 }
 
-function gearFor(v: number, tops: Float64Array): number {
+/** Gear for a speed: the lowest whose top speed it is under, with a little margin. */
+export function gearAt(v: number, tops: Float64Array): number {
   for (let g = 0; g < tops.length; g++) if (v <= tops[g] * 0.97) return g + 1;
   return tops.length;
 }

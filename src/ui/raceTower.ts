@@ -152,7 +152,7 @@ export class TimingTower {
     const e = car.entrant;
     const span = (cls: string) => h('span', { class: cls });
     const row: Row = {
-      el: h('div', { class: 'tower-row', onclick: () => this.race.select(car.id), title: `${e.name}, ${e.team}` }),
+      el: h('div', { class: 'tower-row', onclick: () => this.race.select(car.id, true), title: `${e.name}, ${e.team}` }),
       pos: span('tw-pos'),
       moved: span('tw-moved'),
       code: h('span', { class: 'tw-code' }, h('span', { class: 'tw-team', style: `background:${e.color}` }), e.code),

@@ -10,12 +10,35 @@
 import { raceRules } from '../core/race/rules.ts';
 import { buildRaceModel } from '../core/race/model.ts';
 import { MAX_CARS, createRaceSetup } from '../core/race/setup.ts';
-import { DT, RaceSim } from '../core/race/sim.ts';
+import { DT, type RaceCar, RaceSim } from '../core/race/sim.ts';
+import { type LapChoice, type Telemetry, deltaTime, lapTelemetry, resolveLap } from '../core/race/telemetry.ts';
 import type { Store, Topic } from './store.ts';
 
 export const SPEEDS = [1, 5, 20, 100, 500];
 /** Work per frame, so playback and skipping never freeze the page. */
 const FRAME_BUDGET_MS = 12;
+
+export interface TelemetrySelection {
+  /** Car shown; null follows the selected car, or the leader. */
+  car: number | null;
+  lap: LapChoice;
+  /** Nothing, the fastest lap of the race, or a chosen car and lap. */
+  compare: 'none' | 'fastest' | 'car';
+  compareCar: number | null;
+  compareLap: LapChoice;
+}
+
+export interface TelemetryPair {
+  carA: RaceCar;
+  a: Telemetry | null;
+  carB: RaceCar | null;
+  b: Telemetry | null;
+  delta: Float64Array | null;
+  labelA: string;
+  labelB: string;
+}
+
+const NO_TELEMETRY: TelemetrySelection = { car: null, lap: 'last', compare: 'none', compareCar: null, compareLap: 'best' };
 
 export class RaceController {
   sim: RaceSim | null = null;
@@ -29,6 +52,9 @@ export class RaceController {
   skipping: number | null = null;
   /** Why the last race was stopped, if it was stopped from outside. */
   notice: string | null = null;
+  telemetry: TelemetrySelection = { ...NO_TELEMETRY };
+  /** Set when a car is picked on the map or in the tower: the dock opens its telemetry. */
+  wantsTelemetry = false;
 
   private readonly store: Store;
   private readonly tickListeners = new Set<() => void>();
@@ -71,6 +97,7 @@ export class RaceController {
     this.selected = null;
     this.notice = null;
     this.skipping = null;
+    this.telemetry = { ...NO_TELEMETRY };
     this.acc = 0;
     this.alpha = 1;
     this.play();
@@ -112,10 +139,45 @@ export class RaceController {
     this.store.emit('race');
   }
 
-  select(id: number | null): void {
+  /** Selects a car (or clears the selection when it is already selected); `open` asks the dock to show its telemetry. */
+  select(id: number | null, open = false): void {
     this.selected = this.selected === id ? null : id;
+    if (this.selected !== null) {
+      this.telemetry.car = this.selected;
+      this.wantsTelemetry = open;
+    }
     this.store.emit('race');
     this.tick();
+  }
+
+  setTelemetry(changes: Partial<TelemetrySelection>): void {
+    Object.assign(this.telemetry, changes);
+    this.store.emit('race');
+  }
+
+  /** The telemetry to show: the chosen car and lap, and the comparison with its delta. */
+  telemetryPair(): TelemetryPair | null {
+    const sim = this.sim;
+    if (!sim) return null;
+    const sel = this.telemetry;
+    const carA = sim.cars[sel.car ?? this.selected ?? sim.order[0].id];
+    const a = lapTelemetry(sim, carA, sel.lap);
+    let carB: RaceCar | null = null;
+    let lapB: LapChoice = sel.compareLap;
+    if (sel.compare === 'fastest' && sim.fastest) {
+      carB = sim.cars[sim.fastest.car];
+      lapB = sim.fastest.lap;
+    } else if (sel.compare === 'car' && sel.compareCar !== null) {
+      carB = sim.cars[sel.compareCar];
+    }
+    const b = carB ? lapTelemetry(sim, carB, lapB) : null;
+    const label = (car: RaceCar, lap: number | null) => `${car.entrant.code}${lap !== null ? ` L${lap}` : ''}`;
+    return {
+      carA, a, carB, b,
+      delta: a && b ? deltaTime(a, b) : null,
+      labelA: label(carA, a?.lap ?? resolveLap(carA, sel.lap)),
+      labelB: carB ? label(carB, b?.lap ?? null) : '',
+    };
   }
 
   setFollow(on: boolean): void {

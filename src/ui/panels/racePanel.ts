@@ -1,11 +1,13 @@
 /** Race mode: set up a race, control playback, follow a car, read the race feed and the results. */
 import { formatLapTime } from '../../core/calibration.ts';
+import { lapsCsv, resultsCsv, telemetryCsv } from '../../core/race/export.ts';
 import { raceRules } from '../../core/race/rules.ts';
 import { MAX_CARS, MAX_LAPS, MAX_MINUTES } from '../../core/race/setup.ts';
 import type { Gap, RaceSim } from '../../core/race/sim.ts';
 import { randomSeedString } from '../../core/rng.ts';
 import { type Control, section, segmented, slider } from '../controls.ts';
 import { h, isEditing, setChildren, setText } from '../dom.ts';
+import { download, slug } from '../download.ts';
 import * as fmt from '../format.ts';
 import { type RaceController, SPEEDS } from '../raceController.ts';
 import type { Store, Topic } from '../store.ts';
@@ -33,9 +35,12 @@ export class RacePanel {
   private lastLive = 0;
   private feedCount = -1;
 
-  constructor(store: Store, race: RaceController) {
+  private readonly exportMap: () => void;
+
+  constructor(store: Store, race: RaceController, exportMap: () => void) {
     this.store = store;
     this.race = race;
+    this.exportMap = exportMap;
     const settings = () => store.raceSettings;
 
     this.vehicleSelect = h('select', {
@@ -189,9 +194,29 @@ export class RacePanel {
         h('button', { class: 'btn', disabled: done || skipping, onclick: () => r.finishNow(), title: 'Simulate the rest of the race at once' }, 'Finish now'),
         h('button', { class: 'btn subtle', onclick: () => r.stop() }, 'End')),
       h('div', { class: 'field' }, h('span', null, 'Speed'), speeds.el),
-      h('p', { class: 'hint' }, 'Click a car on the map or in the timing tower to follow it.'),
-    ));
+      h('p', { class: 'hint' }, 'Click a car on the map or in the timing tower to follow it and see its telemetry below the map.'),
+    ), this.exportSection(sim));
     this.updateResults(sim);
+  }
+
+  private exportSection(sim: RaceSim): HTMLElement {
+    const name = slug(this.store.project.name);
+    const tag = `${name}-${sim.setup.settings.vehicleId}-${sim.setup.settings.seed}`;
+    const telemetry = () => {
+      const pair = this.race.telemetryPair();
+      if (!pair?.a) {
+        alert('No telemetry yet: the car has not completed a lap.');
+        return;
+      }
+      download(`${tag}-telemetry-${pair.labelA.replace(/\s+/g, '')}.csv`, telemetryCsv(pair.a, pair.b, pair.delta, pair.labelA, pair.labelB));
+    };
+    return section('Export',
+      h('div', { class: 'row' },
+        h('button', { class: 'btn small', title: 'Classification as CSV', onclick: () => download(`${tag}-results.csv`, resultsCsv(sim)) }, 'Results'),
+        h('button', { class: 'btn small', title: 'Every lap of every car as CSV', onclick: () => download(`${tag}-laps.csv`, lapsCsv(sim)) }, 'Laps'),
+        h('button', { class: 'btn small', title: 'The telemetry shown below the map as CSV', onclick: telemetry }, 'Telemetry'),
+        h('button', { class: 'btn small', title: 'The map as it is on screen, as a PNG image', onclick: () => this.exportMap() }, 'Map image')),
+      h('p', { class: 'hint' }, 'CSV files open in any spreadsheet. Results and laps cover the race so far.'));
   }
 
   /** Status, selected car and feed: cheap enough to refresh a few times a second. */

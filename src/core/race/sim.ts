@@ -43,6 +43,27 @@ export interface LapRecord {
   wear: number;
   fuel: number;
   pit: boolean;
+  /** Race time at the line. */
+  at: number;
+  /** Seconds behind the first car to complete this lap. */
+  gap: number;
+  /** Speed through the speed trap on this lap, m/s (NaN if not measured). */
+  trap: number;
+}
+
+export interface PitStopRecord {
+  car: number;
+  lap: number;
+  /** Race time at the pit entry and exit (NaN until the car is out). */
+  entry: number;
+  exit: number;
+  /** Time standing in the box, including waiting for a team-mate (NaN until done). */
+  stationary: number;
+  from: number;
+  /** Compound fitted, or null when the tyres stayed on. */
+  to: number | null;
+  fuel: number;
+  reason: string;
 }
 
 export type RaceEventKind = 'start' | 'overtake' | 'pit' | 'fastest' | 'off' | 'contact' | 'retired' | 'chequered' | 'finish';
@@ -64,8 +85,10 @@ interface PitState {
   uEntry: number;
   stopped: boolean;
   stoppedUntil: number;
+  stopStart: number;
   done: boolean;
   service: { compound: number | null; fuel: number; time: number; reason: string };
+  record: PitStopRecord;
 }
 
 export class RaceCar {
@@ -103,6 +126,13 @@ export class RaceCar {
   finishTime: number | null = null;
   retired: { reason: string; lap: number; x: number; y: number } | null = null;
   history: LapRecord[] = [];
+  /**
+   * Telemetry: for each completed lap, the time since the start of the lap
+   * at every sample station (NaN where not reached), and the same for the
+   * lap in progress.
+   */
+  traces: Float32Array[] = [];
+  trace: Float32Array;
 
   // Internal state.
   startDelay = 0;
@@ -133,12 +163,15 @@ export class RaceCar {
   incident: { u: number; kind: 'mistake' | 'off' | 'crash' | 'failure' } | null = null;
   trackIndex = 0;
   loopTimes: Float64Array;
+  trapT0 = NaN;
+  trapV = NaN;
   readonly rng: () => number;
 
-  constructor(entrant: Entrant, loops: number, drsRegions: number, seed: string) {
+  constructor(entrant: Entrant, loops: number, drsRegions: number, samples: number, seed: string) {
     this.entrant = entrant;
     this.id = entrant.index;
     this.loopTimes = new Float64Array(2 * loops).fill(NaN);
+    this.trace = new Float32Array(samples).fill(NaN);
     this.drsCross = new Float64Array(drsRegions).fill(-Infinity);
     this.rng = mulberry32(hashSeed(`${seed}:car:${entrant.index}`));
   }
@@ -158,6 +191,11 @@ const DECIDE = 8;
 const PIT_IN = 16;
 const ZONE = 32;
 const DRS = 64;
+const TELE = 128;
+const TRAP_START = 256;
+const TRAP = 512;
+/** The speed trap measures over the last this many metres before its line. */
+const TRAP_BASE = 20;
 
 const CONTINUE = 0;
 const STOP = 1;
@@ -189,12 +227,18 @@ export class RaceSim {
   events: RaceEvent[] = [];
   fastest: { car: number; time: number; lap: number } | null = null;
   bestSectors = [Infinity, Infinity, Infinity];
+  /** Every pit stop, in the order they started. */
+  stops: PitStopRecord[] = [];
+  /** Race time at which the first car completed each lap (index = lap - 1). */
+  lapLeaders: number[] = [];
 
   private readonly rules: RaceRules;
   private readonly n: number;
   private readonly ds: number;
   private readonly lineDs: Float64Array;
-  private readonly mark: Uint8Array;
+  private readonly mark: Uint16Array;
+  /** Racing-line distance over which the speed trap measures. */
+  private readonly trapBase: number;
   private readonly zoneAt: Int16Array;
   private readonly drsAt: Int16Array;
   private readonly rng: () => number;
@@ -219,11 +263,16 @@ export class RaceSim {
     this.qualiFuel = Math.min(this.rules.fuel.capacity, 3 * m.fuelPerLap);
 
     const n = this.n;
-    this.mark = new Uint8Array(n);
+    this.mark = new Uint16Array(n);
     this.mark[0] |= LINE;
     this.mark[m.sectors[0]] |= SECTOR;
     this.mark[m.sectors[1]] |= SECTOR;
     for (let k = 0; k < n; k += m.loopEvery) this.mark[k] |= LOOP;
+    for (let k = 0; k < n; k += m.teleEvery) this.mark[k] |= TELE;
+    const trapStart = mod(m.speedTrap - Math.max(1, Math.round(TRAP_BASE / this.ds)), n);
+    this.mark[trapStart] |= TRAP_START;
+    this.mark[m.speedTrap] |= TRAP;
+    this.trapBase = mod(m.line.s[m.speedTrap] - m.line.s[trapStart], m.line.length);
     this.zoneAt = new Int16Array(n).fill(-1);
     m.zones.forEach((z, i) => {
       this.zoneAt[z.station] = i;
@@ -241,7 +290,7 @@ export class RaceSim {
 
     this.firstZoneU = m.zones.length ? m.zones[0].station : Math.round(n / 4);
     this.pitSide = pitSide(m);
-    this.cars = setup.entrants.map((e) => new RaceCar(e, m.loops, m.drs.length, setup.settings.seed));
+    this.cars = setup.entrants.map((e) => new RaceCar(e, m.loops, m.drs.length, m.samples, setup.settings.seed));
     const lapsEstimate = this.lapsLeftAtStart();
     setup.grid.forEach((index, slot) => {
       const car = this.cars[index];
@@ -526,6 +575,7 @@ export class RaceSim {
         ps.p = ps.box;
         this.updatePitU(car, t);
         ps.stopped = true;
+        ps.stopStart = t;
         // Wait for a team-mate still in the box.
         let start = t;
         for (const o of this.cars) {
@@ -541,7 +591,7 @@ export class RaceSim {
         ps.p = pit.length;
         this.updatePitU(car, t);
         if (car.status !== 'pit') return;
-        this.exitPit(car, v);
+        this.exitPit(car, v, t);
         this.walk(car, budget, t, Infinity);
         return;
       }
@@ -597,6 +647,10 @@ export class RaceSim {
     if (m & LINE && u > 0) {
       if (this.lapLine(car, u, t)) return STOP;
     }
+    // Telemetry and the speed trap (after the line, so a new lap's trace starts at zero).
+    if (m & TELE) car.trace[k / this.model.teleEvery] = t - car.lapStart;
+    if (m & TRAP_START) car.trapT0 = t;
+    if (m & TRAP && t > car.trapT0) car.trapV = this.trapBase / (t - car.trapT0);
     if (car.status !== 'running') return CONTINUE;
     if (m & DECIDE) this.decide(car, t);
     if (m & PIT_IN && car.pitRequest) {
@@ -646,10 +700,14 @@ export class RaceSim {
     car.lapsDone = lap;
     car.lastLap = time;
     if (car.bestLap === null || time < car.bestLap) car.bestLap = time;
+    if (this.lapLeaders.length < lap) this.lapLeaders[lap - 1] = t;
     car.history.push({
       lap, time, sectors: [s1, s2, s3], position: car.position, compound: car.compound, tyreLaps: car.tyreLaps,
-      wear: car.wear, fuel: car.fuel, pit: car.pittedThisLap,
+      wear: car.wear, fuel: car.fuel, pit: car.pittedThisLap, at: t, gap: t - this.lapLeaders[lap - 1], trap: car.trapV,
     });
+    car.trapV = NaN;
+    car.traces.push(car.trace);
+    car.trace = new Float32Array(this.model.samples).fill(NaN);
     if (lap > 1 && (!this.fastest || time < this.fastest.time)) {
       const beaten = this.fastest !== null;
       this.fastest = { car: car.id, time, lap };
@@ -899,15 +957,20 @@ export class RaceSim {
     const ahead = this.order[car.position - 2];
     const iv = ahead ? this.gapBetween(car, ahead) : null;
     if (ahead && ahead.status === 'running' && iv?.kind === 'time' && iv.value < 3) ahead.threatLap = car.lapsDone + 1;
+    const service = this.planService(car, car.pitRequest ?? 'plan');
+    const record: PitStopRecord = {
+      car: car.id, lap: car.lapsDone + 1, entry: t, exit: NaN, stationary: NaN,
+      from: car.compound, to: service.compound, fuel: service.fuel, reason: service.reason,
+    };
+    this.stops.push(record);
     car.status = 'pit';
-    car.pit = { p: 0, prevP: 0, box, uEntry: u, stopped: false, stoppedUntil: 0, done: false, service: this.planService(car, car.pitRequest ?? 'plan') };
+    car.pit = { p: 0, prevP: 0, box, uEntry: u, stopped: false, stoppedUntil: 0, stopStart: t, done: false, service, record };
     car.pittedThisLap = true;
     car.drsUntilU = -Infinity;
     car.passing = null;
     car.offTrack = false;
     car.delay = 0;
     car.incident = null;
-    void t;
   }
 
   /** What the crew does: tyres (and which compound), fuel, and how long it takes. */
@@ -941,6 +1004,7 @@ export class RaceSim {
 
   private finishService(car: RaceCar, t: number): void {
     const s = car.pit!.service;
+    car.pit!.record.stationary = t - car.pit!.stopStart;
     const lap = car.lapsDone + 1;
     const r = this.rules;
     const old = r.tyres.compounds[car.compound];
@@ -967,7 +1031,8 @@ export class RaceSim {
     }
   }
 
-  private exitPit(car: RaceCar, v: number): void {
+  private exitPit(car: RaceCar, v: number, t: number): void {
+    car.pit!.record.exit = t;
     car.status = 'running';
     car.pit = null;
     car.accruedU = car.u;

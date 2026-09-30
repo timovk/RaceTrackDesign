@@ -2,6 +2,7 @@
 import { newProject, parseProject } from '../core/project.ts';
 import { randomSeedString } from '../core/rng.ts';
 import { h, isTyping } from './dom.ts';
+import { download, slug } from './download.ts';
 import { MapView } from './mapView.ts';
 import { AnalysePanel } from './panels/analysePanel.ts';
 import { DesignPanel } from './panels/designPanel.ts';
@@ -9,6 +10,7 @@ import { RacePanel } from './panels/racePanel.ts';
 import { TerrainPanel } from './panels/terrainPanel.ts';
 import { ProfileView } from './profileView.ts';
 import { RaceController } from './raceController.ts';
+import { RaceDock } from './raceDock.ts';
 import { TimingTower } from './raceTower.ts';
 import type { Mode, Store, Topic } from './store.ts';
 
@@ -28,8 +30,9 @@ export function mountApp(root: HTMLElement, store: Store): void {
     terrain: new TerrainPanel(store).el,
     design: new DesignPanel(store, locate).el,
     analyse: new AnalysePanel(store, locate).el,
-    race: new RacePanel(store, race).el,
+    race: new RacePanel(store, race, () => map.exportImage(`${slug(store.project.name)}-map.png`)).el,
   };
+  const dock = new RaceDock(store, race);
 
   const name = h('input', {
     class: 'project-name', type: 'text', spellcheck: false, 'aria-label': 'Project name',
@@ -54,10 +57,7 @@ export function mountApp(root: HTMLElement, store: Store): void {
   }
 
   function saveFile(): void {
-    const blob = new Blob([store.serialize()], { type: 'application/json' });
-    const a = h('a', { href: URL.createObjectURL(blob), download: `${slug(store.project.name)}.rtd.json` });
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    download(`${slug(store.project.name)}.rtd.json`, new Blob([store.serialize()], { type: 'application/json' }));
   }
 
   function newFile(): void {
@@ -86,13 +86,15 @@ export function mountApp(root: HTMLElement, store: Store): void {
   );
 
   map.el.append(new TimingTower(store, race).el);
-  root.append(sidebar, h('main', { class: 'workspace' }, map.el, profile.el));
+  root.append(sidebar, h('main', { class: 'workspace' }, map.el, profile.el, dock.el));
 
   const update = (topics: Set<Topic>) => {
     if (topics.has('mode')) {
       tabs.forEach((tab, i) => tab.classList.toggle('on', MODES[i].mode === store.mode));
       for (const [mode, el] of Object.entries(panels)) el.hidden = mode !== store.mode;
     }
+    // During a race the analysis dock takes the place of the profile strip.
+    if (topics.has('mode') || topics.has('race')) profile.el.hidden = store.mode === 'race' && !!race.sim;
     if (topics.has('project') && document.activeElement !== name) name.value = store.project.name;
     if (topics.has('history') || topics.has('project')) {
       undo.disabled = !store.canUndo;
@@ -132,8 +134,4 @@ export function mountApp(root: HTMLElement, store: Store): void {
       race.togglePlay();
     }
   });
-}
-
-function slug(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'circuit';
 }

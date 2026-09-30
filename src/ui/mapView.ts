@@ -13,6 +13,7 @@ import { formatLapTime } from '../core/calibration.ts';
 import { type Handle, drawFacilities, drawHandles, handleStations } from './facilityLayer.ts';
 import { ASPHALT, COLOR_BY_LABELS, type ColorBy, buckets, stationBuckets } from './colors.ts';
 import { h, isTyping, setChildren, setText } from './dom.ts';
+import { download } from './download.ts';
 import * as fmt from './format.ts';
 import type { RaceController } from './raceController.ts';
 import type { Store, Topic } from './store.ts';
@@ -159,6 +160,14 @@ export class MapView {
     this.invalidate();
   }
 
+  /** Saves the map as it is on screen (terrain, track, facilities and cars) as a PNG. */
+  exportImage(filename: string): void {
+    this.draw();
+    this.canvas.toBlob((blob) => {
+      if (blob) download(filename, blob);
+    }, 'image/png');
+  }
+
   /** Centres the view on a station, zooming in if the map is zoomed far out. */
   centreOn(station: number): void {
     const t = this.store.track;
@@ -231,8 +240,8 @@ export class MapView {
     if (topics.has('mode')) this.updateCursor();
     if (topics.has('race') && this.race && this.race.sim !== this.raceShown) {
       this.raceShown = this.race.sim;
-      // A new race: once the timing tower is laid out, show the whole track beside it.
-      if (this.race.sim) requestAnimationFrame(() => this.fitTrackBesideTower());
+      // A new race: once the timing tower and the dock are laid out (and the map resized to fit), show the whole track.
+      if (this.race.sim) requestAnimationFrame(() => requestAnimationFrame(() => this.fitTrackBesideTower()));
     }
     this.invalidate();
   }
@@ -973,7 +982,7 @@ export class MapView {
         best = car.id;
       }
     }
-    if (best !== null) r.select(best);
+    if (best !== null) r.select(best, true);
     else if (r.selected !== null && !r.follow) r.select(null);
   }
 

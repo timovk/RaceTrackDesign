@@ -1,50 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { analyseTrack } from '../src/core/analysis.ts';
-import { placeFacilities } from '../src/core/facilities.ts';
-import { analysePerformance } from '../src/core/performance.ts';
 import { generateField } from '../src/core/race/field.ts';
-import { buildRaceModel, launchCurve, type RaceModel } from '../src/core/race/model.ts';
-import { parseRaceRules, raceRules, type RaceRules } from '../src/core/race/rules.ts';
-import { MAX_CARS, type RaceSettings, createRaceSetup, defaultRaceSettings, parseRaceSettings } from '../src/core/race/setup.ts';
+import { launchCurve } from '../src/core/race/model.ts';
+import { parseRaceRules, raceRules } from '../src/core/race/rules.ts';
+import { createRaceSetup, defaultRaceSettings, parseRaceSettings } from '../src/core/race/setup.ts';
 import { RaceSim } from '../src/core/race/sim.ts';
 import { planStrategy, popcount, tyreLoss } from '../src/core/race/strategy.ts';
 import { seededRandom } from '../src/core/rng.ts';
-import { placeStartFinish, rotateTrack } from '../src/core/startFinish.ts';
-import { buildTrack } from '../src/core/track.ts';
-import { VEHICLES, type VehicleClass } from '../src/core/vehicles.ts';
-import { bigRectangle, design } from './helpers.ts';
-
-const raw = buildTrack(design(bigRectangle(), { smoothing: 0, maxCutFill: 0 }), () => 100)!;
-const sf = placeStartFinish(raw);
-const track = rotateTrack(raw, sf.station);
-const metrics = analyseTrack(track);
-const performance = analysePerformance(track, VEHICLES);
-const facilities = placeFacilities({
-  track, startFinish: sf, performance, vehicles: VEHICLES, heightAt: () => 100, waterLevel: -Infinity, extent: 8192, overrides: {},
-});
-const car = (id: string) => VEHICLES.find((v) => v.id === id)!;
-
-function model(vehicle: VehicleClass, rules: RaceRules = raceRules(vehicle)): RaceModel {
-  return buildRaceModel({ track, performance, facilities, vehicle, rules, gridSize: MAX_CARS, corners: metrics.corners });
-}
-
-function race(vehicle: VehicleClass, changes: Partial<RaceSettings> = {}, rules?: RaceRules): RaceSim {
-  const m = model(vehicle, rules);
-  const settings = { ...defaultRaceSettings(vehicle, m.rules, m.line.length, m.lapTime, '11'), ...changes };
-  const sim = new RaceSim(createRaceSetup(m, settings));
-  while (!sim.finished) sim.step();
-  return sim;
-}
+import { VEHICLES } from '../src/core/vehicles.ts';
+import { calm, car, model, race } from './raceFixture.ts';
 
 /** Finished, or out after contact in a failed pass (which calm rules do not switch off). */
 const finishedOrContact = (c: { status: string; retired: { reason: string } | null }) =>
   c.status === 'finished' || c.retired?.reason === 'collision damage';
-
-/** Rules with no incidents, so tests are about racing alone. */
-function calm(vehicle: VehicleClass, extra: Record<string, unknown> = {}): RaceRules {
-  const r = raceRules(vehicle);
-  return { ...r, incidents: { mistake: 0, off: 0, crash: 0, dnfPerMetre: 0 }, ...extra } as RaceRules;
-}
 
 describe('race rules', () => {
   it('has rules for every built-in class, in SI units and fractions', () => {

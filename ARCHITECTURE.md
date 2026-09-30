@@ -33,7 +33,10 @@ src/
       field.ts       seeded teams and drivers
       setup.ts       race settings, qualifying, grid
       strategy.ts    tyre loss, stop cost, stint planning
-      sim.ts         the race: fixed-step simulation, timing, events
+      sim.ts         the race: fixed-step simulation, timing, events, recording
+      telemetry.ts   speed, pedals, gear and g-forces from a lap's sample times; lap deltas
+      stats.ts       fastest laps, speed trap, overtakes, pit stops, chart series
+      export.ts      CSV of results, laps and telemetry
   worker/          terrain generation, and lap times + facilities + licence, off the main thread
   ui/              plain TypeScript and canvas, no framework
     store.ts         state, derived data, undo, autosave
@@ -42,6 +45,9 @@ src/
     facilityLayer.ts facilities and drag handles on the map
     raceController.ts runs and plays back a race, drops it when the track changes
     raceTower.ts     timing tower over the map
+    raceDock.ts      telemetry, lap chart, gaps, lap times, stints and statistics under the map
+    charts.ts        canvas chart helpers
+    download.ts      saving files from the browser
     panels/          sidebar panels per mode
 data/
   vehicles.json      vehicle classes (edit to add or change classes)
@@ -200,6 +206,20 @@ Lap and sector times come from line crossings; sector colours compare with the c
 
 A race by laps ends when the leader completes them, or at the class's time limit; a race by time at the leader's first crossing after the time. Everyone else finishes at their next crossing.
 
+### Recording, telemetry and statistics
+
+Besides timing, the simulation records per car and lap:
+
+- a lap record: time, sectors, position, the race time at the line and the gap to the first car to complete that lap, compound, tyre age and wear, fuel, whether the car stopped, and its speed through the speed trap (timed over the last 20 m before the trap line);
+- a telemetry trace: the time since the start of the lap at every sample station (every 5 m, coarser on laps over 5 km so a lap keeps at most about 1000 samples; a Float32Array per lap);
+- every pit stop: entry and exit times, time in the box (including waiting for a team-mate), tyres before and after, fuel and the reason.
+
+`telemetry.ts` turns a trace into channels. Speed is racing-line distance over time between the neighbouring samples; longitudinal acceleration is the change in speed over time; lateral acceleration is v² times the line's curvature at the sample; the gear comes from the gearing; throttle and brake come from the force balance of the lap simulation (mass with the fuel on board, drag and downforce at the class's trim, rolling resistance, gradient): the throttle is the share of power needed, the brake the share of the grip-limited braking force. A complete lap ends with a sample at the line at the lap time, so a delta between two laps (the difference of their sample times) ends at the lap-time difference.
+
+`stats.ts` reads the rankings and chart series from these records and the event log: fastest laps, best trap speeds (laps without a stop), overtakes made and lost (from 'overtake' events, so lapping backmarkers is not counted), pit stops, positions and gaps per lap, and tyre stints (a new stint where the compound changes or the tyre age drops back to one lap). `export.ts` writes them as RFC 4180 CSV.
+
 ### In the app
 
-`RaceController` builds the race from the store's current track, analysis and facilities, plays it back with requestAnimationFrame (simulated time = real time × speed, at most 12 ms of stepping per frame, positions interpolated between the last two steps), and skips to the end in 12 ms slices. It stops the race when the track or its analysis changes. A Formula 1 race runs to the end in about a quarter of a second, a six-hour Hypercar race in under a second. Structural changes go out as the store's `race` topic; per-frame updates reach the map, the tower and the panel through `onTick`, and the tower and panel refresh a few times a second.
+`RaceController` builds the race from the store's current track, analysis and facilities, plays it back with requestAnimationFrame (simulated time = real time × speed, at most 12 ms of stepping per frame, positions interpolated between the last two steps), and skips to the end in 12 ms slices. It stops the race when the track or its analysis changes. A Formula 1 race runs to the end in about a quarter of a second, a six-hour Hypercar race in under a second. Structural changes go out as the store's `race` topic; per-frame updates reach the map, the tower, the panel and the dock through `onTick`, and they refresh a few times a second.
+
+`RaceDock` replaces the profile strip during a race. The controller holds the telemetry selection (car, lap, comparison), which the dock's selectors and the telemetry export share; picking a car on the map or in the tower sets it and opens the Telemetry tab. The dock redraws only when the recorded data moves on (a lap completed, a stop, a new selection; every second for the lap in progress) or on hover. Telemetry hover sets the store's hover station, so the map marks the spot; chart clicks select the car under the pointer.
