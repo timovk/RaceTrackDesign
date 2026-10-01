@@ -427,6 +427,13 @@ export function buildPitBuilding(pit: PitLane, road: Road): { mesh: MeshData; fo
   wallCuts.push(w1);
   const wall = along(pit.x, pit.y, road.z, wallCuts);
   const concrete = [0.78, 0.79, 0.8];
+  // The apron in front of the garages: paved from the lane's edge to the doors.
+  const apron = [0.33, 0.34, 0.36];
+  for (let i = 0; i + 1 < frames.length; i++) {
+    const a = frames[i];
+    const b = frames[i + 1];
+    mb.face([at(a, halfLane - 0.05, 0.012), at(b, halfLane - 0.05, 0.012), at(b, front, 0.012), at(a, front, 0.012)], UP, apron);
+  }
   const inner = -(halfLane + 0.7);
   const outer = inner - 0.4;
   for (let i = 0; i + 1 < wall.length; i++) {

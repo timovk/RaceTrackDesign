@@ -15,7 +15,8 @@
  * In Race mode the race runs on it (ui/carLayer.ts): every car drawn as its
  * model where the race puts it, under sun shadows around what the camera
  * looks at; the camera can follow the selected car, and clicking a car
- * selects it.
+ * selects it. TV shows it as a broadcast (ui/tvBroadcast.ts): trackside
+ * cameras and the helicopter, chosen by a director, with captions.
  *
  * It follows the store: rebuilt shortly after the terrain, the track or the
  * facilities change, recoloured when the track colouring changes. It draws
@@ -39,7 +40,9 @@ import { buckets, stationBuckets } from './colors.ts';
 import { h, setChildren, setText } from './dom.ts';
 import { download, slug } from './download.ts';
 import * as fmt from './format.ts';
+import { type TvCamera, tvCameras } from '../core/broadcast.ts';
 import { CarLayer } from './carLayer.ts';
+import { TvBroadcast } from './tvBroadcast.ts';
 import type { RaceController } from './raceController.ts';
 import type { Store, Topic } from './store.ts';
 
@@ -91,6 +94,11 @@ export class View3D {
   /** Driver codes over the cars near the camera (and the selected car), by car id (-1 the safety car). */
   private carLabels = new Map<number, { el: HTMLElement; text: string; p: THREE.Vector3; shown: boolean }>();
   private downAt: { x: number; y: number } | null = null;
+  private tv: TvBroadcast | null = null;
+  private readonly tvButton: HTMLButtonElement;
+  /** The trackside cameras, worked out once per track, facilities and height exaggeration. */
+  private tvCams: { input: unknown; relief: number; cams: TvCamera[] } | null = null;
+  private lastStep = 0;
   private readonly canvas: HTMLCanvasElement;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
@@ -150,6 +158,9 @@ export class View3D {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // A film-like picture, as on television.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.25;
     // Shadows only while cars are shown: the sun casts them over a patch round what the camera looks at.
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -177,7 +188,9 @@ export class View3D {
     });
     this.sizeSelect = h('select', { title: 'Image size' },
       h('option', { value: 'screen' }, 'Screen'), h('option', { value: '2x' }, '2×'), h('option', { value: '4k' }, '4K'));
+    this.tvButton = h('button', { class: 'chip map3d-tv', hidden: true, title: 'Watch the race as on television: trackside cameras and the helicopter, chosen by a director', onclick: () => this.toggleTv() }, 'TV');
     this.toolbar = h('div', { class: 'map3d-tools' },
+      this.tvButton,
       this.shotSelect,
       h('button', { class: 'chip', title: 'Save the view as a PNG image', onclick: () => this.saveImage(this.sizeSelect.value as ImageSize) }, 'Save image'),
       this.sizeSelect);
@@ -225,9 +238,10 @@ export class View3D {
     this.controls = c;
 
     this.canvas.addEventListener('pointerdown', (e) => {
-      // Taking hold of the camera ends a move or a path where the camera is.
+      // Taking hold of the camera ends a move, a path or the broadcast where the camera is.
       this.glide = null;
       if (this.path) this.stopPath();
+      if (this.tv) this.stopTv();
       this.downAt = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
     });
     this.canvas.addEventListener('pointerup', (e) => {
@@ -252,6 +266,7 @@ export class View3D {
     store.subscribe((topics) => this.onStore(topics));
     race?.onTick(() => {
       if (this.raceActive) this.requestRender();
+      this.tvButton.hidden = !this.raceActive;
     });
   }
 
@@ -506,6 +521,13 @@ export class View3D {
   /** Advances a path or a glide; returns whether the camera keeps moving. */
   private stepCamera(): boolean {
     const now = performance.now();
+    const dt = this.lastStep ? Math.min(0.1, (now - this.lastStep) / 1000) : 0;
+    this.lastStep = now;
+    if (this.tv) {
+      this.tv.update(dt);
+      setText(this.playerLabel, `TV · ${this.tv.label}`);
+      return true;
+    }
     if (this.path) {
       const p = this.path;
       if (!p.paused) {
@@ -544,6 +566,10 @@ export class View3D {
     }
     if (topics.has('vehicle') || topics.has('performance')) this.updateShotMenu();
     if (topics.has('mode') || topics.has('view')) this.note.hidden = this.store.mode !== 'design';
+    if (topics.has('mode') || topics.has('race')) {
+      this.tvButton.hidden = !this.raceActive;
+      if (this.tv && !this.raceActive) this.stopTv();
+    }
     this.requestRender();
   }
 
@@ -813,6 +839,80 @@ export class View3D {
     for (const obj of this.meshes.values()) reanchor(obj, r);
     for (const l of this.labels) l.p.y = l.base + LABEL_LIFT / r;
     this.updateShots();
+    // The broadcast's cameras stand on the drawn ground: set them up again.
+    if (this.tv) {
+      this.stopTv();
+      this.startTv();
+    }
+  }
+
+  // ---- broadcast ------------------------------------------------------------------
+
+  private toggleTv(): void {
+    if (this.tv) this.stopTv();
+    else this.startTv();
+  }
+
+  /** Hands the camera to the broadcast director. */
+  private startTv(): void {
+    const r = this.race;
+    const input = this.shotInput;
+    const t = this.store.track;
+    if (!r?.sim || !this.raceActive || !input || !t || !this.earth) return;
+    if (this.path) this.stopPath();
+    this.glide = null;
+    const relief = this.store.view.relief;
+    if (!this.tvCams || this.tvCams.input !== input || this.tvCams.relief !== relief) {
+      this.tvCams = { input, relief, cams: tvCameras({ ...input, display: this.drawn }) };
+    }
+    const earth = this.earth;
+    this.tv = new TvBroadcast({
+      camera: this.camera,
+      overlay: this.el,
+      car: (id) => {
+        const s = this.cars?.shown.find((c) => c.id === id);
+        if (!s) return null;
+        const m = s.matrix.elements;
+        return { position: s.position, heading: Math.atan2(m[2], m[0]), length: s.look.set.model.length };
+      },
+      fromDrawn: (p) => this.fromDrawn(p),
+      groundY: (x, z) => {
+        const local = this.world.worldToLocal(new THREE.Vector3(x, 0, z));
+        if (local.x < 0 || local.z < 0 || local.x > this.extent || local.z > this.extent) return null;
+        return (earth.height(local.x, local.z) - this.zRef) * this.store.view.relief;
+      },
+      size: () => {
+        // The timing tower covers the left of the map.
+        const tower = this.el.parentElement?.querySelector<HTMLElement>('.tower');
+        const covered = tower && !tower.hidden ? Math.min(tower.offsetLeft + tower.offsetWidth + 8, this.width * 0.6) : 0;
+        return { width: this.width, height: this.height, covered };
+      },
+    }, r, this.tvCams.cams, t.n, t.ds);
+    this.controls.enabled = false;
+    this.marker.visible = false;
+    this.player.hidden = false;
+    this.player.classList.add('tv-mode');
+    this.tvButton.classList.add('on');
+    this.lastStep = 0;
+    this.requestRender();
+  }
+
+  /** Back to the orbit camera, looking where the broadcast looked. */
+  private stopTv(): void {
+    const tv = this.tv;
+    if (!tv) return;
+    this.tv = null;
+    tv.dispose();
+    this.camera.clearViewOffset();
+    this.camera.fov = FOV;
+    this.camera.updateProjectionMatrix();
+    this.controls.target.copy(tv.focus);
+    this.controls.enabled = true;
+    this.controls.update();
+    this.player.hidden = true;
+    this.player.classList.remove('tv-mode');
+    this.tvButton.classList.remove('on');
+    this.requestRender();
   }
 
   /** The shots for the current height exaggeration. */
@@ -866,19 +966,19 @@ export class View3D {
       if (line) line.visible = this.store.view.line;
     }
     let moving = this.stepCamera();
-    if (!this.path) {
+    if (!this.path && !this.tv) {
       moving = this.controls.update() || moving;
       this.keepAboveGround();
     }
-    // Depth precision: the near plane follows the distance to what the camera looks at.
-    const d = this.path ? 60 : this.camera.position.distanceTo(this.controls.target);
-    this.camera.near = Math.max(0.1, Math.min(20, d / 800));
+    // Depth precision: the near plane follows the distance to what the camera looks at (the broadcast sets its own).
+    const d = this.tv ? this.camera.position.distanceTo(this.tv.focus) : this.path ? 60 : this.camera.position.distanceTo(this.controls.target);
+    if (!this.tv) this.camera.near = Math.max(0.1, Math.min(20, d / 800));
     this.camera.far = d * 4 + this.extent * 3;
     this.camera.updateProjectionMatrix();
     this.updateMarker(d);
     if (this.sun.castShadow) {
       // The sun's shadows cover a patch round what the camera looks at.
-      const focus = this.path ? this.camera.position.clone().add(this.camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(40)) : this.controls.target.clone();
+      const focus = this.tv ? this.tv.focus.clone() : this.path ? this.camera.position.clone().add(this.camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(40)) : this.controls.target.clone();
       this.sun.target.position.copy(focus);
       this.sun.position.copy(focus).addScaledVector(SUN, 600);
       this.sun.target.updateMatrixWorld();
@@ -913,7 +1013,7 @@ export class View3D {
       sceneY: (z) => (z - this.zRef) * relief,
       pitSide: this.store.facilities?.pitLane?.side ?? 1,
     }, this.camera, this.height);
-    if (r.follow && r.selected !== null && !this.path) {
+    if (r.follow && r.selected !== null && !this.path && !this.tv) {
       const p = this.cars.positionOf(r.selected);
       if (p) {
         const delta = p.clone().sub(this.controls.target);
@@ -962,7 +1062,8 @@ export class View3D {
   }
 
   private updateLabels(): void {
-    const show = this.store.view.labels;
+    // A broadcast has its own graphics.
+    const show = this.store.view.labels && !this.tv;
     this.labelLayer.hidden = !show;
     if (!show) return;
     const v = new THREE.Vector3();

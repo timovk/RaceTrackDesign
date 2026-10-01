@@ -189,7 +189,8 @@ describe('race cars in 3D', () => {
   it('eases cars aside at a few metres per second of race time, and keeps a car on a narrow track', () => {
     const cars = [{ id: 0, u: 10, lateral: 0, length: 5, width: 2 }, { id: 1, u: 10.2, lateral: 0, length: 5, width: 2 }];
     const first = spreadCars(cars, track, new Map([[0, 0], [1, 0]]), 0.1);
-    expect(Math.abs(first.get(0)!)).toBeLessThanOrEqual(0.3 + 1e-9);
+    expect(Math.abs(first.get(0)!)).toBeLessThanOrEqual(0.5 + 1e-9);
+    expect(Math.abs(first.get(0)!)).toBeGreaterThan(0);
     const narrow = { ...track, width: new Float64Array(1000).fill(3) };
     const squeezed = spreadCars(cars, narrow, new Map(), Infinity);
     for (const c of cars) expect(Math.abs(c.lateral + squeezed.get(c.id)!)).toBeLessThanOrEqual(1.5 - 1 + 1e-9);

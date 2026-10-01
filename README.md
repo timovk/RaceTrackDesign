@@ -17,8 +17,8 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | 7a | 3D view: terrain with the track's earthworks, track and pit lane, orbit camera | **done** |
 | 7b | 3D dressing (kerbs, run-off, buildings, trees), camera shots, image export | **done** |
 | 8a | The race in 3D: detailed cars for every class, liveries, shadows | **done** |
-| 8b | Broadcast look: trackside and helicopter cameras, a director, on-screen graphics | next |
-| 9 | Rain and flag visuals in 3D | later |
+| 8b | Broadcast look: trackside and helicopter cameras, a director, on-screen graphics | **done** |
+| 9 | Rain and flag visuals in 3D | next |
 
 ## Running it
 
@@ -90,6 +90,7 @@ Warnings flag corners tighter than the track is wide, very tight corners, steep 
 - **Save image** saves the view as a PNG at the screen size, twice it, or 4K (3840 × 2160), with the labels drawn in.
 - The track colouring, **Contours**, **Labels** (corner numbers and the start) and **Line** (the racing line) work in 3D too. Hovering the track marks it on the elevation profile, and hovering the profile marks the spot in 3D; the readout shows the position and height under the cursor.
 - Editing happens in 2D. In Race mode **Map image** saves the 3D view.
+- The 3D view (three.js) loads the first time it is opened. It needs WebGL.
 
 **The race in 3D.** In Race mode the 3D view shows the race: every car as a model of its class (Formula 1, Formula 2 and IndyCar single-seaters, Hypercar and LMP2 prototypes, GT3, GT4 and TCR cars, MotoGP and Superbike bikes with their riders, and the safety car), at its real size and in its team's livery, where the race puts it.
 - Liveries come from each team's colour: a second colour, an accent and one of five patterns, the same for both cars of a team. Single-seaters carry their number on the nose and the engine cover, closed cars in a roundel on the doors and the bonnet (in the class colour in a multi-class race), bikes on the fairing and the tail; team names are on the rear wing endplates.
@@ -97,7 +98,15 @@ Warnings flag corners tighter than the track is wide, very tight corners, steep 
 - Cars that would overlap (at the start, while passing, when lapping) are drawn side by side; the race itself is unchanged.
 - Click a car to select it, as in the timing tower; with **Follow** on, the camera keeps the selected car in view. The driver codes and positions show over the cars nearest the camera.
 - Cars cast shadows in the sun around what the camera looks at, and keep their size whatever the **Height**.
-- The 3D view (three.js) loads the first time it is opened. It needs WebGL.
+
+**TV.** In Race mode the **TV** button in the 3D toolbar shows the race as a broadcast, with a director choosing what to show and from where.
+- Cameras stand where a circuit puts them: a tower beyond the run-off at every corner, one behind the grid, one over the pit lane, one beside every long straight, and more wherever the track would otherwise be out of sight. Each pans and zooms with its car through a long lens; the helicopter hangs high off to one side, circles slowly and climbs when a hill gets in the way.
+- Each shot holds five to twelve seconds, then cuts. Close battles come first, then incidents, overtakes, the leaders, pit stops and the rest of the field; a car you pick (in the tower or by clicking it) is shown most, with its battle when it is in one. A shot ends early when its car leaves the camera's sight.
+- A caption names the car or the battle when the camera picks it up: position, driver, number, team, gap and tyre. Overtakes and pit stops among the first ten, fastest laps, incidents and retirements pop up as they happen, and so do the sector and lap times of the car on screen (purple for the best of all, green for its own best).
+- Shots last as long at any playback speed. At high speeds the cars go by a trackside camera too fast to hold, so the helicopter takes over; at 1× you get the whole broadcast.
+- Drag the view or press **Stop** to take the camera back. **Save image** saves the broadcast frame.
+
+The 3D view has a film-like picture (ACES tone mapping), as on television.
 
 | Shortcut | Action |
 |---|---|

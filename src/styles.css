@@ -963,6 +963,169 @@ input[type='range'] {
   max-width: 180px;
 }
 
+.map3d-player.tv-mode .map3d-player-time,
+.map3d-player.tv-mode .segmented,
+.map3d-player.tv-mode > button:not(:last-child) {
+  display: none;
+}
+
+.map3d-tv.on {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ---- broadcast graphics ---- */
+
+.tv {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.tv-lower {
+  position: absolute;
+  left: var(--tv-centre, 50%);
+  bottom: 62px;
+  transform: translateX(-50%);
+}
+
+.tv-lower.in {
+  animation: tv-slide 0.35s ease-out;
+}
+
+@keyframes tv-slide {
+  from { opacity: 0; transform: translate(-50%, 14px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.tv-card {
+  min-width: 300px;
+  background: rgba(10, 12, 16, 0.88);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.tv-card-head {
+  padding: 3px 12px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tv-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  color: #f4f6f8;
+}
+
+.tv-row + .tv-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.tv-pos {
+  min-width: 26px;
+  padding: 2px 0;
+  border-radius: 3px;
+  background: #f4f6f8;
+  color: #0b0d10;
+  font-size: 14px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.tv-team {
+  width: 4px;
+  align-self: stretch;
+  border-radius: 2px;
+}
+
+.tv-name {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.tv-driver {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.tv-sub {
+  font-size: 11px;
+  color: #aeb6c0;
+}
+
+.tv-gap {
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.tv-tyre {
+  width: 20px;
+  height: 20px;
+  border: 3px solid;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 900;
+  background: #0b0d10;
+}
+
+.tv-pops {
+  position: absolute;
+  right: 14px;
+  top: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+.tv-pop {
+  padding: 6px 12px;
+  border-radius: 5px;
+  background: rgba(10, 12, 16, 0.88);
+  border-left: 4px solid var(--accent);
+  color: #f4f6f8;
+  font-size: 13px;
+  font-weight: 700;
+  animation: tv-pop 0.3s ease-out;
+}
+
+.tv-pop.fastest,
+.tv-pop.best {
+  border-left-color: #b14cff;
+}
+
+.tv-pop.personal {
+  border-left-color: #3ad06b;
+}
+
+.tv-pop.sector {
+  border-left-color: #ffd60a;
+}
+
+.tv-pop.off,
+.tv-pop.contact,
+.tv-pop.retired {
+  border-left-color: #ffd60a;
+}
+
+@keyframes tv-pop {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 .map3d-player {
   position: absolute;
   left: 50%;

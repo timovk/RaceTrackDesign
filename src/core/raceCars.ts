@@ -115,9 +115,9 @@ export interface SpreadTrack {
 }
 
 /** Sideways clearance kept between two cars, metres. */
-const CLEARANCE = 0.35;
+const CLEARANCE = 0.6;
 /** How fast a car moves aside, metres per second of race time. */
-const ASIDE_RATE = 3;
+const ASIDE_RATE = 5;
 
 /**
  * Extra sideways offsets that keep overlapping cars side by side: for cars
