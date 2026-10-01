@@ -1,25 +1,38 @@
 /**
  * The map in 3D: the terrain with the track's earthworks, the track and pit
  * lane, water, and the sides of the map as on a model, under a sky, with an
- * orbit camera. The geometry comes from core/scene3d.ts; the ground takes its
- * colour in the shader from height and slope, as the flat map does, with
- * embankments as grass and cuttings as bare earth.
+ * orbit camera. On it the scenery: kerbs, run-off, the pit building and pit
+ * wall, grandstands, the grid boxes and trees. The geometry comes from
+ * core/scene3d.ts and core/scenery.ts; the ground takes its colour in the
+ * shader from height and slope, as the flat map does, with embankments as
+ * grass and cuttings as bare earth.
+ *
+ * Camera shots (core/shots.ts) glide the camera to a spot; the flyover and
+ * the hot lap move it along the track, and can be paused to look around or
+ * save an image. Images are saved at the screen size, twice that or 4K, with
+ * the labels drawn in.
  *
  * It follows the store: rebuilt shortly after the terrain, the track or the
  * facilities change, recoloured when the track colouring changes. It draws
- * only when something changed (the camera, the data, the hover).
+ * only when something changed or moves (the camera, the data, the hover).
  *
  * Scene coordinates: x east, y up, z south, in metres. The model sits in a
  * group that scales heights (vertical exaggeration) around the lowest point.
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { COLORS, Earthworks, type MeshData, type Road, VERGE, buildRoads, buildSides, buildTerrain, pitRoad, startLine, trackRoad } from '../core/scene3d.ts';
+import {
+  type Footprint, type RunoffArea, TrackIndex, type Trees, buildGrandstands, buildGridMarks, buildKerbs, buildPitBuilding, buildRunoff, forest, inside, kerbRuns,
+  placeGrandstands, placeTrees, runoffAreas, runoffTest,
+} from '../core/scenery.ts';
+import { type Pose, type Shot, type Vec3, flyoverDuration, flyoverPose, hotLapPose, trackShots } from '../core/shots.ts';
 import { RAMP, RAMP_MIN_RANGE, ROCK, contourInterval } from '../core/terrainImage.ts';
 import type { Track } from '../core/track.ts';
 import { buckets, stationBuckets } from './colors.ts';
-import { h, setText } from './dom.ts';
-import { download } from './download.ts';
+import { h, setChildren, setText } from './dom.ts';
+import { download, slug } from './download.ts';
 import * as fmt from './format.ts';
 import type { Store, Topic } from './store.ts';
 
@@ -30,9 +43,28 @@ const HORIZON = 0xc9dbea;
 const FOV = 45;
 const MARKER = 0x3fb6ff;
 const LINE = 0xff5a36;
+/** Seconds for a camera move to a shot. */
+const GLIDE = 1.4;
+const SPEEDS = [0.5, 1, 2, 4];
+
+export type ImageSize = 'screen' | '2x' | '4k';
+
+/** A flyover or hot lap in progress. */
+interface Path {
+  kind: 'fly' | 'hot';
+  label: string;
+  time: number;
+  duration: number;
+  speed: number;
+  paused: boolean;
+  last: number;
+  pose: (time: number) => Pose;
+}
 
 export class View3D {
   readonly el: HTMLElement;
+  /** Shots, playback and image controls, for the map's toolbar. */
+  readonly toolbar: HTMLElement;
   private readonly store: Store;
   private readonly readout: HTMLElement;
   private readonly canvas: HTMLCanvasElement;
@@ -45,6 +77,13 @@ export class View3D {
   private readonly labelLayer: HTMLElement;
   private readonly note: HTMLElement;
   private readonly marker: THREE.Group;
+  private readonly shotSelect: HTMLSelectElement;
+  private readonly sizeSelect: HTMLSelectElement;
+  private readonly player: HTMLElement;
+  private readonly playerLabel: HTMLElement;
+  private readonly playerTime: HTMLElement;
+  private readonly playButton: HTMLButtonElement;
+  private readonly speedButtons: HTMLButtonElement[];
   private readonly terrainUniforms = {
     uLandMin: { value: 0 },
     uRampRange: { value: RAMP_MIN_RANGE },
@@ -53,10 +92,15 @@ export class View3D {
     uContours: { value: 1 },
   };
   private readonly terrainMaterial: THREE.MeshLambertMaterial;
+  private readonly treeMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+  private readonly treeShapes: [THREE.BufferGeometry, THREE.BufferGeometry];
   private readonly surfaceMaterial = (offset: number) => new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: offset, polygonOffsetUnits: offset });
   private readonly meshes = new Map<string, THREE.Object3D>();
   private earth: Earthworks | null = null;
-  private labels: { el: HTMLElement; p: THREE.Vector3 }[] = [];
+  private labels: { el: HTMLElement; text: string; cls: string; p: THREE.Vector3; shown: boolean }[] = [];
+  private shots: Shot[] = [];
+  private trees: Trees | null = null;
+  private forestCache: { hm: unknown; seed: string; data: Float32Array } | null = null;
   private visible = false;
   private needsBuild = true;
   private needsRoads = false;
@@ -67,7 +111,8 @@ export class View3D {
   private height = 1;
   private frame = 0;
   private rebuildTimer = 0;
-  private fly: { start: number; from: THREE.Vector3; to: THREE.Vector3; cam: THREE.Vector3 } | null = null;
+  private glide: { start: number; seconds: number; fromCam: THREE.Vector3; fromTarget: THREE.Vector3; toCam: THREE.Vector3; toTarget: THREE.Vector3 } | null = null;
+  private path: Path | null = null;
   private pendingPointer: { x: number; y: number } | null = null;
 
   constructor(store: Store, readout: HTMLElement) {
@@ -80,7 +125,33 @@ export class View3D {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.labelLayer = h('div', { class: 'map3d-labels' });
     this.note = h('div', { class: 'map3d-note', hidden: true }, 'Switch to 2D to edit the track.');
-    this.el = h('div', { class: 'map3d', hidden: true }, this.canvas, this.labelLayer, this.note);
+
+    this.playerLabel = h('span', { class: 'strong' });
+    this.playerTime = h('span', { class: 'map3d-player-time' });
+    this.playButton = h('button', { class: 'chip', onclick: () => this.togglePath() }, 'Pause');
+    this.speedButtons = SPEEDS.map((v) => h('button', { class: 'segment', onclick: () => this.setPathSpeed(v) }, `×${v}`));
+    this.player = h('div', { class: 'map3d-player', hidden: true },
+      this.playerLabel, this.playerTime, this.playButton,
+      h('div', { class: 'segmented' }, ...this.speedButtons),
+      h('button', { class: 'chip', title: 'Stop and look around from here', onclick: () => this.stopPath() }, 'Stop'));
+    this.el = h('div', { class: 'map3d', hidden: true }, this.canvas, this.labelLayer, this.note, this.player);
+
+    this.shotSelect = h('select', {
+      title: 'Camera shots',
+      onchange: () => {
+        const id = this.shotSelect.value;
+        this.shotSelect.value = '';
+        this.shotSelect.blur();
+        this.goTo(id);
+      },
+    });
+    this.sizeSelect = h('select', { title: 'Image size' },
+      h('option', { value: 'screen' }, 'Screen'), h('option', { value: '2x' }, '2×'), h('option', { value: '4k' }, '4K'));
+    this.toolbar = h('div', { class: 'map3d-tools' },
+      this.shotSelect,
+      h('button', { class: 'chip', title: 'Save the view as a PNG image', onclick: () => this.saveImage(this.sizeSelect.value as ImageSize) }, 'Save image'),
+      this.sizeSelect);
+    this.updateShotMenu();
 
     this.scene.background = skyTexture();
     this.scene.fog = new THREE.Fog(HORIZON, 10_000, 40_000);
@@ -94,6 +165,7 @@ export class View3D {
     this.terrainMaterial = new THREE.MeshLambertMaterial();
     this.terrainMaterial.onBeforeCompile = (shader) => terrainShader(shader, this.terrainUniforms);
     this.terrainMaterial.customProgramCacheKey = () => 'terrain';
+    this.treeShapes = [conifer(), broadleaf()];
 
     this.marker = new THREE.Group();
     const pinMaterial = new THREE.MeshLambertMaterial({ color: MARKER, emissive: MARKER, emissiveIntensity: 0.35 });
@@ -110,12 +182,18 @@ export class View3D {
     c.dampingFactor = 0.12;
     c.screenSpacePanning = false;
     c.zoomToCursor = true;
+    c.zoomSpeed = 1.5;
     c.maxPolarAngle = Math.PI * 0.47;
     c.minDistance = 15;
     c.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     c.addEventListener('change', () => this.requestRender());
     this.controls = c;
 
+    this.canvas.addEventListener('pointerdown', () => {
+      // Taking hold of the camera ends a move or a path where the camera is.
+      this.glide = null;
+      if (this.path) this.stopPath();
+    });
     this.canvas.addEventListener('pointermove', (e) => {
       this.pendingPointer = { x: e.clientX, y: e.clientY };
       this.requestRender();
@@ -135,7 +213,10 @@ export class View3D {
   setVisible(on: boolean): void {
     this.visible = on;
     this.el.hidden = !on;
-    if (!on) return;
+    if (!on) {
+      if (this.path) this.stopPath();
+      return;
+    }
     this.resize();
     if (this.needsBuild) this.build();
     this.requestRender();
@@ -143,9 +224,21 @@ export class View3D {
 
   /** Shows the whole track (or map) from the south, a little above, beside `left` pixels covered on the left (the timing tower). */
   fit(left = 0): void {
+    const pose = this.overview(left);
+    if (!pose) return;
+    if (this.path) this.stopPath();
+    this.glide = null;
+    this.controls.target.copy(pose.target);
+    this.camera.position.copy(pose.camera);
+    this.controls.update();
+    this.fitted = true;
+    this.requestRender();
+  }
+
+  private overview(left = 0): { camera: THREE.Vector3; target: THREE.Vector3 } | null {
     const s = this.store;
     const hm = s.terrain?.heightmap;
-    if (!hm) return;
+    if (!hm) return null;
     const t = s.track;
     let minX = 0;
     let maxX = hm.extent;
@@ -176,19 +269,198 @@ export class View3D {
     // Looking north from the south, east is to the right: move the target west to centre it in the free part.
     const metresPerPixel = (2 * dist * Math.tan(fov / 2)) / this.height;
     target.x -= (left / 2) * metresPerPixel;
-    this.controls.target.copy(target);
-    this.camera.position.set(target.x, target.y + Math.sin(elevation) * dist, target.z + Math.cos(elevation) * dist);
-    this.controls.update();
-    this.fitted = true;
+    const camera = new THREE.Vector3(target.x, target.y + Math.sin(elevation) * dist, target.z + Math.cos(elevation) * dist);
+    return { camera, target };
+  }
+
+  /**
+   * Saves the view as a PNG, with the labels drawn in: at the screen size,
+   * twice it, or 4K (3840 x 2160, the view widened or narrowed to 16:9).
+   */
+  saveImage(size: ImageSize = 'screen', name?: string): void {
+    const w = this.width;
+    const hgt = this.height;
+    const ratio = this.renderer.getPixelRatio();
+    const max = Math.min(8192, this.renderer.capabilities.maxTextureSize);
+    let W = Math.min(max, Math.round(w * ratio * (size === '2x' ? 2 : 1)));
+    let H = Math.round((W * hgt) / w);
+    if (size === '4k') {
+      W = 3840;
+      H = 2160;
+    }
+    const marker = this.marker.visible;
+    this.marker.visible = false;
+    this.renderer.setPixelRatio(1);
+    this.renderer.setSize(W, H, false);
+    this.camera.aspect = W / H;
+    this.camera.updateProjectionMatrix();
+    this.renderer.render(this.scene, this.camera);
+    const out = document.createElement('canvas');
+    out.width = W;
+    out.height = H;
+    const ctx = out.getContext('2d')!;
+    ctx.drawImage(this.canvas, 0, 0);
+    if (this.store.view.labels) this.drawLabels(ctx, W, H, size === '4k' ? 2 : W / w);
+    this.renderer.setPixelRatio(ratio);
+    this.renderer.setSize(w, hgt, false);
+    this.camera.aspect = w / hgt;
+    this.camera.updateProjectionMatrix();
+    this.marker.visible = marker;
+    this.requestRender();
+    const file = name ?? `${slug(this.store.project.name)}-3d${size === 'screen' ? '' : `-${size}`}.png`;
+    out.toBlob((blob) => {
+      if (blob) download(file, blob);
+    }, 'image/png');
+  }
+
+  /** Labels as on screen, for a saved image W x H pixels, `scale` times their size on screen. */
+  private drawLabels(ctx: CanvasRenderingContext2D, W: number, H: number, scale: number): void {
+    ctx.textBaseline = 'middle';
+    ctx.font = `700 ${Math.round(11 * scale)}px system-ui, sans-serif`;
+    const v = new THREE.Vector3();
+    const eye = this.world.worldToLocal(this.camera.position.clone());
+    for (const l of this.labels) {
+      v.copy(l.p);
+      this.world.localToWorld(v);
+      v.project(this.camera);
+      if (v.z > 1 || Math.abs(v.x) > 1.1 || Math.abs(v.y) > 1.1 || this.blocked(eye, l.p)) continue;
+      const x = ((v.x + 1) / 2) * W;
+      const y = ((1 - v.y) / 2) * H;
+      const tw = ctx.measureText(l.text).width;
+      const pw = tw + 10 * scale;
+      const ph = 16 * scale;
+      ctx.fillStyle = l.cls === 'start' ? '#f1f3f5' : 'rgba(12,15,19,0.8)';
+      ctx.beginPath();
+      ctx.roundRect(x - pw / 2, y - ph, pw, ph, 4 * scale);
+      ctx.fill();
+      ctx.fillStyle = l.cls === 'start' ? '#111' : '#f1f3f5';
+      ctx.textAlign = 'center';
+      ctx.fillText(l.text, x, y - ph / 2);
+    }
+  }
+
+  // ---- shots and paths -------------------------------------------------------------
+
+  private updateShotMenu(): void {
+    const s = this.store;
+    const lapReady = !!s.lap && !!s.performance && s.performanceCurrent;
+    const options: (HTMLElement | null)[] = [
+      h('option', { value: '' }, 'Shots…'),
+      h('option', { value: 'overview' }, 'Overview'),
+      ...this.shots.map((shot) => h('option', { value: shot.id }, shot.label)),
+      s.track ? h('option', { value: 'fly' }, 'Flyover') : null,
+      lapReady ? h('option', { value: 'hot' }, `Hot lap: ${s.vehicle.name}`) : null,
+    ];
+    setChildren(this.shotSelect, ...options);
+    this.shotSelect.value = '';
+  }
+
+  /** Moves to a shot, the overview, or starts the flyover or the hot lap. */
+  goTo(id: string): void {
+    if (id === 'fly' || id === 'hot') {
+      this.startPath(id);
+      return;
+    }
+    if (this.path) this.stopPath();
+    let pose: { camera: THREE.Vector3; target: THREE.Vector3 } | null = null;
+    if (id === 'overview') pose = this.overview();
+    const shot = this.shots.find((x) => x.id === id);
+    if (shot) pose = { camera: this.fromWorld(shot.camera), target: this.fromWorld(shot.target) };
+    if (!pose) return;
+    this.glide = {
+      start: performance.now(), seconds: GLIDE,
+      fromCam: this.camera.position.clone(), fromTarget: this.controls.target.clone(),
+      toCam: pose.camera, toTarget: pose.target,
+    };
     this.requestRender();
   }
 
-  /** Saves the view as a PNG. */
-  exportImage(filename: string): void {
-    this.render();
-    this.canvas.toBlob((blob) => {
-      if (blob) download(filename, blob);
-    }, 'image/png');
+  private startPath(kind: 'fly' | 'hot'): void {
+    const s = this.store;
+    const t = s.track;
+    const earth = this.earth;
+    if (!t || !earth) return;
+    this.glide = null;
+    let path: Path | null = null;
+    if (kind === 'fly') {
+      path = { kind, label: 'Flyover', time: 0, duration: flyoverDuration(t), speed: 1, paused: false, last: performance.now(), pose: (time) => flyoverPose(t, (time / flyoverDuration(t)) * t.length, (x, y) => earth.height(x, y)) };
+    } else {
+      const lap = s.lap;
+      const line = s.performance?.line;
+      if (!lap || !line || !s.performanceCurrent || line.n !== t.n) return;
+      const eye = s.vehicle.kind === 'bike' ? 1.15 : 0.95;
+      path = { kind, label: `Hot lap: ${s.vehicle.name}`, time: 0, duration: lap.time, speed: 1, paused: false, last: performance.now(), pose: (time) => hotLapPose(t, line, lap, time, eye) };
+    }
+    this.path = path;
+    this.controls.enabled = false;
+    this.player.hidden = false;
+    setText(this.playerLabel, path.label);
+    this.setPathSpeed(1);
+    this.updatePlayer();
+    this.requestRender();
+  }
+
+  private togglePath(): void {
+    const p = this.path;
+    if (!p) return;
+    p.paused = !p.paused;
+    p.last = performance.now();
+    this.updatePlayer();
+    this.requestRender();
+  }
+
+  private setPathSpeed(v: number): void {
+    if (this.path) this.path.speed = v;
+    this.speedButtons.forEach((b, i) => b.classList.toggle('on', SPEEDS[i] === v));
+  }
+
+  /** Ends the path and hands the camera back, looking where it looked. */
+  private stopPath(): void {
+    const p = this.path;
+    if (!p) return;
+    const pose = p.pose(p.time);
+    this.path = null;
+    this.player.hidden = true;
+    this.controls.target.copy(this.fromWorld(pose.target));
+    this.controls.enabled = true;
+    this.controls.update();
+    this.requestRender();
+  }
+
+  private updatePlayer(): void {
+    const p = this.path;
+    if (!p) return;
+    setText(this.playButton, p.paused ? 'Play' : 'Pause');
+    setText(this.playerTime, `${clock(p.time)} / ${clock(p.duration)}`);
+  }
+
+  /** Advances a path or a glide; returns whether the camera keeps moving. */
+  private stepCamera(): boolean {
+    const now = performance.now();
+    if (this.path) {
+      const p = this.path;
+      if (!p.paused) {
+        p.time = (p.time + ((now - p.last) / 1000) * p.speed) % p.duration;
+        p.last = now;
+      }
+      const pose = p.pose(p.time);
+      this.camera.position.copy(this.fromWorld(pose.camera));
+      this.camera.lookAt(this.fromWorld(pose.target));
+      this.updatePlayer();
+      return !p.paused;
+    }
+    if (this.glide) {
+      const g = this.glide;
+      const k = Math.min(1, (now - g.start) / 1000 / g.seconds);
+      const e = k * k * (3 - 2 * k);
+      // Rise over the middle of a long move, so the camera arcs over the landscape instead of through it.
+      const lift = Math.sin(Math.PI * e) * Math.min(1500, g.fromCam.distanceTo(g.toCam) * 0.25);
+      this.camera.position.lerpVectors(g.fromCam, g.toCam, e).y += lift;
+      this.controls.target.lerpVectors(g.fromTarget, g.toTarget, e);
+      if (k >= 1) this.glide = null;
+      return true;
+    }
+    return false;
   }
 
   // ---- store ---------------------------------------------------------------------
@@ -201,6 +473,7 @@ export class View3D {
       this.applyRelief();
       this.needsRoads = true;
     }
+    if (topics.has('vehicle') || topics.has('performance')) this.updateShotMenu();
     if (topics.has('mode') || topics.has('view')) this.note.hidden = this.store.mode !== 'design';
     this.requestRender();
   }
@@ -222,6 +495,8 @@ export class View3D {
     const hm = s.terrain?.heightmap;
     for (const key of [...this.meshes.keys()]) this.remove(key);
     this.earth = null;
+    this.trees = null;
+    if (this.path) this.stopPath();
     if (!hm) return;
     // A map of another size needs a new overview.
     if (hm.extent !== this.extent) this.fitted = false;
@@ -233,8 +508,9 @@ export class View3D {
     const roads: Road[] = [];
     const track = t ? trackRoad(t) : null;
     if (track) roads.push(track);
-    // The pit lane once the facilities belong to this version of the track.
-    const pitLane = t && s.performanceCurrent ? s.facilities?.pitLane ?? null : null;
+    // The facilities, licence and racing line once they belong to this version of the track.
+    const ready = !!t && s.performanceCurrent && !!s.facilities && !!s.metrics;
+    const pitLane = ready ? s.facilities!.pitLane : null;
     const pit = t && pitLane ? pitRoad(pitLane, t) : null;
     if (pit) roads.push(pit);
     const earth = new Earthworks(hm, roads);
@@ -264,7 +540,41 @@ export class View3D {
     }
     this.buildRoads(t, pit);
     this.buildLine(t);
+
+    // Scenery, once the analysis belongs to this track.
+    const footprints: Footprint[] = [];
+    let areas: RunoffArea[] = [];
+    let index: TrackIndex | null = null;
+    if (t && ready) {
+      const metrics = s.metrics!;
+      index = new TrackIndex(t);
+      this.add('kerbs', new THREE.Mesh(geometry(buildKerbs(t, kerbRuns(t, s.performance!.line, metrics.corners))), this.surfaceMaterial(-2)));
+      areas = s.licence ? runoffAreas(t, metrics.corners, s.licence.runoff, earth, index) : [];
+      // Run-off lies beyond the verges and never overlaps a road, so it can win over the ground by a wide margin.
+      if (areas.length) this.add('runoff', new THREE.Mesh(geometry(buildRunoff(t, areas, earth)), this.surfaceMaterial(-4)));
+      if (pitLane && pit) {
+        const building = buildPitBuilding(pitLane, pit);
+        footprints.push(building.footprint);
+        this.add('pitBuilding', new THREE.Mesh(geometry(building.mesh), new THREE.MeshLambertMaterial({ vertexColors: true })));
+      }
+      const stands = placeGrandstands(t, metrics.corners, s.facilities!.overtaking, pitLane, areas, earth, footprints);
+      footprints.push(...stands.map((x) => x.footprint));
+      if (stands.length) this.add('stands', new THREE.Mesh(geometry(buildGrandstands(stands)), new THREE.MeshLambertMaterial({ vertexColors: true })));
+      this.add('grid', new THREE.Mesh(geometry(buildGridMarks(t, s.facilities!.grid, index)), this.surfaceMaterial(-4)));
+    }
+    const onRunoff = t && index && areas.length ? runoffTest(t, areas, index) : null;
+    this.trees = placeTrees(earth, this.forestFor(hm), (x, y) => (onRunoff?.(x, y, 10) ?? false) || footprints.some((f) => inside(f, x, y, 8)));
+    this.buildTrees();
     this.buildLabels(t);
+
+    this.shots = t && s.metrics
+      ? trackShots({
+          track: t, metrics: s.metrics, pit: pitLane, height: (x, y) => earth.height(x, y),
+          // The deepest run-off of the corner there, so the camera stands beyond all of it.
+          runoff: (k, side) => Math.max(0, ...areas.filter((r) => r.side === side && r.stations.includes(k)).map((r) => Math.max(...r.depth))),
+        })
+      : [];
+    this.updateShotMenu();
 
     const fog = this.scene.fog as THREE.Fog;
     fog.near = hm.extent * 0.9;
@@ -272,6 +582,57 @@ export class View3D {
     this.controls.maxDistance = hm.extent * 2.5;
     if (!this.fitted) this.fit();
     this.requestRender();
+  }
+
+  /** Where trees could grow, kept per terrain: it depends only on the heightmap and the seed. */
+  private forestFor(hm: NonNullable<Store['terrain']>['heightmap']): Float32Array {
+    const seed = this.store.project.terrain.seed;
+    if (this.forestCache?.hm !== hm || this.forestCache.seed !== seed) this.forestCache = { hm, seed, data: forest(hm, seed) };
+    return this.forestCache.data;
+  }
+
+  /** Trees as two instanced meshes (conifers and broadleaves), sized and turned per tree; not stretched by the height exaggeration. */
+  private buildTrees(): void {
+    this.remove('conifers');
+    this.remove('broadleaves');
+    const trees = this.trees;
+    if (!trees || !trees.count) return;
+    const counts = [0, 0];
+    for (let i = 0; i < trees.count; i++) counts[trees.data[i * 5 + 4]]++;
+    const meshes = [0, 1].map((kind) => {
+      const mesh = new THREE.InstancedMesh(this.treeShapes[kind], this.treeMaterial, Math.max(1, counts[kind]));
+      mesh.count = counts[kind];
+      mesh.frustumCulled = false;
+      return mesh;
+    });
+    const filled = [0, 0];
+    const color = new THREE.Color();
+    const relief = this.store.view.relief;
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const axis = new THREE.Vector3(0, 1, 0);
+    for (let i = 0; i < trees.count; i++) {
+      const d = trees.data;
+      const kind = d[i * 5 + 4];
+      const size = d[i * 5 + 3];
+      const turn = ((i * 2654435761) % 1000) / 1000;
+      q.setFromAxisAngle(axis, turn * Math.PI * 2);
+      m.compose(new THREE.Vector3(d[i * 5], d[i * 5 + 1], d[i * 5 + 2]), q, new THREE.Vector3(size, size / relief, size));
+      const mesh = meshes[kind];
+      mesh.setMatrixAt(filled[kind], m);
+      // Slightly different greens, darker for conifers.
+      const shade = 0.85 + 0.3 * (((i * 40503) % 997) / 997);
+      if (kind === 0) color.setRGB(0.13 * shade, 0.27 * shade, 0.15 * shade, THREE.SRGBColorSpace);
+      else color.setRGB(0.3 * shade, 0.45 * shade, 0.18 * shade, THREE.SRGBColorSpace);
+      mesh.setColorAt(filled[kind], color);
+      filled[kind]++;
+    }
+    for (const mesh of meshes) {
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
+    this.add('conifers', meshes[0]);
+    this.add('broadleaves', meshes[1]);
   }
 
   private buildRoads(t: Track | null, pit: Road | null): void {
@@ -337,7 +698,7 @@ export class View3D {
     const at = (k: number, text: string, cls = '') => {
       const el = h('div', { class: `map3d-label ${cls}` }, text);
       this.labelLayer.append(el);
-      this.labels.push({ el, p: new THREE.Vector3(t.x[k], t.z[k] + 8, t.y[k]) });
+      this.labels.push({ el, text, cls, p: new THREE.Vector3(t.x[k], t.z[k] + 8, t.y[k]), shown: false });
     };
     at(0, 'Start', 'start');
     for (const c of m?.corners ?? []) at(c.apex, `T${c.number}`);
@@ -356,22 +717,34 @@ export class View3D {
     this.meshes.delete(key);
     obj.traverse((o) => {
       const mesh = o as THREE.Mesh;
+      if (mesh instanceof THREE.InstancedMesh) {
+        mesh.dispose();
+        return;
+      }
       mesh.geometry?.dispose();
       const mat = mesh.material as THREE.Material | undefined;
-      if (mat && mat !== this.terrainMaterial) mat.dispose();
+      if (mat && mat !== this.terrainMaterial && mat !== this.treeMaterial) mat.dispose();
     });
   }
 
   private applyRelief(): void {
     const r = this.store.view.relief;
+    const changed = this.world.scale.y !== r;
     this.world.scale.set(1, r, 1);
     this.world.position.set(0, -this.zRef * r, 0);
     this.world.updateMatrixWorld(true);
+    // Trees keep their height whatever the exaggeration.
+    if (changed && this.trees) this.buildTrees();
   }
 
   /** A model point (x east, height, y south) in scene coordinates. */
   private toScene(x: number, z: number, y: number): THREE.Vector3 {
     return this.world.localToWorld(new THREE.Vector3(x, z, y));
+  }
+
+  /** A world point from core (x east, y south, z up) in scene coordinates. */
+  private fromWorld(p: Vec3): THREE.Vector3 {
+    return this.toScene(p[0], p[2], p[1]);
   }
 
   // ---- drawing -------------------------------------------------------------------
@@ -404,11 +777,13 @@ export class View3D {
       const line = this.meshes.get('line');
       if (line) line.visible = this.store.view.line;
     }
-    let moving = this.controls.update();
-    if (this.fly) moving = this.stepFly() || moving;
-    this.keepAboveGround();
+    let moving = this.stepCamera();
+    if (!this.path) {
+      moving = this.controls.update() || moving;
+      this.keepAboveGround();
+    }
     // Depth precision: the near plane follows the distance to what the camera looks at.
-    const d = this.camera.position.distanceTo(this.controls.target);
+    const d = this.path ? 60 : this.camera.position.distanceTo(this.controls.target);
     this.camera.near = Math.max(0.1, Math.min(20, d / 800));
     this.camera.far = d * 4 + this.extent * 3;
     this.camera.updateProjectionMatrix();
@@ -434,7 +809,7 @@ export class View3D {
   private updateMarker(dist: number): void {
     const t = this.store.track;
     const k = this.store.hover;
-    this.marker.visible = !!t && k !== null && k < t.n;
+    this.marker.visible = !!t && k !== null && k < t.n && !this.path;
     if (!this.marker.visible || !t || k === null) return;
     this.marker.position.copy(this.toScene(t.x[k], t.z[k], t.y[k]));
     // Roughly the same size on screen at any distance.
@@ -442,22 +817,42 @@ export class View3D {
     this.marker.scale.setScalar(scale);
   }
 
+  /** A model point on screen in CSS pixels, or null behind the camera or off screen. */
+  private project(p: THREE.Vector3, v: THREE.Vector3): { x: number; y: number } | null {
+    v.copy(p);
+    this.world.localToWorld(v);
+    v.project(this.camera);
+    if (v.z > 1 || v.x < -1.1 || v.x > 1.1 || v.y < -1.1 || v.y > 1.1) return null;
+    return { x: ((v.x + 1) / 2) * this.width, y: ((1 - v.y) / 2) * this.height };
+  }
+
   private updateLabels(): void {
     const show = this.store.view.labels;
     this.labelLayer.hidden = !show;
     if (!show) return;
     const v = new THREE.Vector3();
+    const eye = this.world.worldToLocal(this.camera.position.clone());
     for (const l of this.labels) {
-      v.copy(l.p);
-      this.world.localToWorld(v);
-      v.project(this.camera);
-      const off = v.z > 1 || v.x < -1.1 || v.x > 1.1 || v.y < -1.1 || v.y > 1.1;
-      l.el.hidden = off;
-      if (off) continue;
-      const x = ((v.x + 1) / 2) * this.width;
-      const y = ((1 - v.y) / 2) * this.height;
-      l.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -100%)`;
+      const p = this.project(l.p, v);
+      // Hidden behind a hill: the ground rises above the line from the camera to the label.
+      l.shown = !!p && !this.blocked(eye, l.p);
+      l.el.hidden = !l.shown;
+      if (!l.shown || !p) continue;
+      l.el.style.transform = `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px) translate(-50%, -100%)`;
     }
+  }
+
+  /** Whether the ground blocks the line between two model points. */
+  private blocked(a: THREE.Vector3, b: THREE.Vector3): boolean {
+    for (let i = 1; i < 32; i++) {
+      const f = i / 32;
+      if (f > 0.95) break;
+      const x = a.x + (b.x - a.x) * f;
+      const y = a.z + (b.z - a.z) * f;
+      const g = this.ground(x, y);
+      if (g !== null && g > a.y + (b.y - a.y) * f + 1) return true;
+    }
+    return false;
   }
 
   // ---- picking -------------------------------------------------------------------
@@ -513,6 +908,7 @@ export class View3D {
   }
 
   private hoverAt(clientX: number, clientY: number): void {
+    if (this.path) return;
     const p = this.pick(clientX, clientY);
     const t = this.store.track;
     if (!p) {
@@ -543,19 +939,14 @@ export class View3D {
   private flyToPoint(clientX: number, clientY: number): void {
     const p = this.pick(clientX, clientY);
     if (!p) return;
-    this.fly = { start: performance.now(), from: this.controls.target.clone(), to: this.world.localToWorld(p.clone()), cam: this.camera.position.clone() };
+    const to = this.world.localToWorld(p.clone());
+    const shift = to.clone().sub(this.controls.target);
+    this.glide = {
+      start: performance.now(), seconds: 0.6,
+      fromCam: this.camera.position.clone(), fromTarget: this.controls.target.clone(),
+      toCam: this.camera.position.clone().add(shift), toTarget: to,
+    };
     this.requestRender();
-  }
-
-  private stepFly(): boolean {
-    const f = this.fly!;
-    const k = Math.min(1, (performance.now() - f.start) / 600);
-    const e = k * k * (3 - 2 * k);
-    const shift = f.to.clone().sub(f.from).multiplyScalar(e);
-    this.controls.target.copy(f.from).add(shift);
-    this.camera.position.copy(f.cam).add(shift);
-    if (k >= 1) this.fly = null;
-    return true;
   }
 }
 
@@ -574,6 +965,29 @@ function geometry(m: MeshData): THREE.BufferGeometry {
   return g;
 }
 
+/** Paints a geometry one colour (as vertex colours, linear). */
+function painted(g: THREE.BufferGeometry, rgb: readonly number[]): THREE.BufferGeometry {
+  const n = g.getAttribute('position').count;
+  const c = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) for (let j = 0; j < 3; j++) c[i * 3 + j] = srgbToLinear(rgb[j]);
+  g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  return g;
+}
+
+/** A conifer one unit high: a trunk and a cone, the foliage white for the tree's own colour to tint. */
+function conifer(): THREE.BufferGeometry {
+  const trunk = painted(new THREE.CylinderGeometry(0.035, 0.045, 0.25, 5, 1, true).translate(0, 0.125, 0), [0.55, 0.42, 0.3]);
+  const crown = painted(new THREE.ConeGeometry(0.24, 0.86, 7, 1).translate(0, 0.57, 0), [1, 1, 1]);
+  return mergeGeometries([trunk.toNonIndexed(), crown.toNonIndexed()])!;
+}
+
+/** A broadleaf tree one unit high: a trunk and a rounded crown. */
+function broadleaf(): THREE.BufferGeometry {
+  const trunk = painted(new THREE.CylinderGeometry(0.04, 0.05, 0.42, 5, 1, true).translate(0, 0.21, 0), [0.55, 0.42, 0.3]);
+  const crown = painted(new THREE.IcosahedronGeometry(0.3, 0).scale(1, 0.85, 1).translate(0, 0.68, 0), [1, 1, 1]);
+  return mergeGeometries([trunk.toNonIndexed(), crown.toNonIndexed()])!;
+}
+
 function srgbToLinear(c: number): number {
   return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
 }
@@ -581,6 +995,11 @@ function srgbToLinear(c: number): number {
 function hexToRgb(hex: string): number[] {
   const v = parseInt(hex.slice(1), 16);
   return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
+}
+
+function clock(seconds: number): string {
+  const s = Math.max(0, seconds);
+  return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
 }
 
 function skyTexture(): THREE.Texture {

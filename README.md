@@ -15,7 +15,7 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | 5 | Telemetry, charts, statistics, export | **done** |
 | 6 | Multi-class, safety car, endurance, weather | **done** |
 | 7a | 3D view: terrain with the track's earthworks, track and pit lane, orbit camera | **done** |
-| 7b | 3D dressing (kerbs, run-off, buildings, trees), camera shots, image export | next |
+| 7b | 3D dressing (kerbs, run-off, buildings, trees), camera shots, image export | **done** |
 
 ## Running it
 
@@ -79,9 +79,12 @@ The strip under the map has two views that share hover with the map: the elevati
 
 Warnings flag corners tighter than the track is wide, very tight corners, steep and too-steep gradients, crossings and overlaps, parts of the track too close together for barriers, water, and track off the map.
 
-**3D view.** The **2D / 3D** switch under the map toolbar (or V) shows the map as a model: the terrain with the earthworks the track needs (grass embankments where it is built up, bare-earth cuttings where it is dug in), the track with its edge lines, verges and start line, the pit lane, water, and the sides of the map, under a sky.
+**3D view.** The **2D / 3D** switch under the map toolbar (or V) shows the map as a model: the terrain with the earthworks the track needs (grass embankments where it is built up, bare-earth cuttings where it is dug in), the track with its edge lines, verges and start line, the pit lane, water, and the sides of the map, under a sky. The circuit is dressed from its analysis: kerbs where the racing line runs to the edge in a corner, run-off outside each corner as deep as its escape paths allow (asphalt then gravel at fast corners, gravel elsewhere), the pit building with a garage per box, grandstands on the start straight and at the best overtaking spots, grid boxes, and woods that keep clear of all of it.
 - Drag to orbit, right-drag to pan, scroll to zoom towards the cursor, double-click to centre on a spot, F to see the whole track again.
 - **Height** exaggerates the relief (×1 to ×3), so gentle slopes show.
+- **Shots** moves the camera to the overview, the start and grid, the pit lane, each numbered corner (from a camera tower beyond its run-off), the steepest climb and drop (from their foot, looking up) and the highest point. A view that a hill would block is raised until it sees over it.
+- **Flyover** follows the track as a drone; **Hot lap** rides the racing line at the pace of the class picked in Analyse, at the driver's eye height. Pause, play at ×0.5 to ×4, or **Stop** to look around from where the camera is; dragging the view stops it too.
+- **Save image** saves the view as a PNG at the screen size, twice it, or 4K (3840 × 2160), with the labels drawn in.
 - The track colouring, **Contours**, **Labels** (corner numbers and the start) and **Line** (the racing line) work in 3D too. Hovering the track marks it on the elevation profile, and hovering the profile marks the spot in 3D; the readout shows the position and height under the cursor.
 - Editing happens in 2D. In Race mode the 3D view shows the track without the cars, and **Map image** saves the 3D view.
 - The 3D view (three.js) loads the first time it is opened. It needs WebGL.

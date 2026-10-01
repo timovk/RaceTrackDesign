@@ -948,8 +948,45 @@ input[type='range'] {
 }
 
 .map:not(.is-3d) .map-relief,
+.map:not(.is-3d) .map3d-tools,
 .map.is-3d .only-2d {
   display: none;
+}
+
+.map3d-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.map3d-tools select {
+  max-width: 180px;
+}
+
+.map3d-player {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(12, 15, 19, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.map3d-player .segment {
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+.map3d-player-time {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  color: var(--muted);
 }
 
 /* 3D view */

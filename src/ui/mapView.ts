@@ -74,6 +74,7 @@ export class MapView {
   private readonly facilityToggle: HTMLButtonElement;
   private readonly dimensionButtons: HTMLButtonElement[];
   private readonly reliefSelect: HTMLSelectElement;
+  private readonly viewBar: HTMLElement;
   /** The 3D view, loaded (with three.js) the first time it is shown. */
   private view3d: View3D | null = null;
   private view3dLoading = false;
@@ -107,6 +108,7 @@ export class MapView {
     const viewBar = h('div', { class: 'map-toolbar map-viewbar' },
       h('label', { class: 'map-toolbar-label map-relief' }, 'Height', this.reliefSelect),
       h('div', { class: 'segmented map-dimension' }, ...this.dimensionButtons));
+    this.viewBar = viewBar;
     const toolbar = h('div', { class: 'map-toolbar' },
       h('label', { class: 'map-toolbar-label' }, 'Colour', this.colorSelect),
       this.contourToggle,
@@ -209,6 +211,7 @@ export class MapView {
       .then(({ View3D }) => {
         this.view3d = new View3D(this.store, this.readout);
         this.canvas.after(this.view3d.el);
+        this.viewBar.prepend(this.view3d.toolbar);
         this.view3d.setVisible(this.is3d);
       })
       .catch((err: unknown) => {
@@ -224,7 +227,7 @@ export class MapView {
   /** Saves the map as it is on screen (terrain, track, facilities and cars, or the 3D view) as a PNG. */
   exportImage(filename: string): void {
     if (this.is3d && this.view3d) {
-      this.view3d.exportImage(filename);
+      this.view3d.saveImage('screen', filename);
       return;
     }
     this.draw();

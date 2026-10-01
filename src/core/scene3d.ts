@@ -184,6 +184,28 @@ export class Earthworks {
     return sampleHeight(this.hm, x, y);
   }
 
+  /** Distance from a point to the nearest road edge (negative on a road), or Infinity when no road is within its reach. */
+  clearance(x: number, y: number): number {
+    const bi = Math.floor(x / BUCKET);
+    const bj = Math.floor(y / BUCKET);
+    if (bi < 0 || bj < 0 || bi >= this.nb || bj >= this.nb) return Infinity;
+    const b = bj * this.nb + bi;
+    let best = Infinity;
+    for (let q = this.start[b]; q < this.start[b + 1]; q++) {
+      const s = this.items[q];
+      const ax = this.ax[s];
+      const ay = this.ay[s];
+      const dx = this.bx[s] - ax;
+      const dy = this.by[s] - ay;
+      const len2 = dx * dx + dy * dy;
+      let f = len2 > 0 ? ((x - ax) * dx + (y - ay) * dy) / len2 : 0;
+      f = f < 0 ? 0 : f > 1 ? 1 : f;
+      const d = Math.hypot(x - (ax + dx * f), y - (ay + dy * f)) - (this.ha[s] + (this.hb[s] - this.ha[s]) * f);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
   height(x: number, y: number): number {
     const g = sampleHeight(this.hm, x, y);
     this.lastBank = 0;
@@ -607,6 +629,24 @@ export class MeshBuilder {
   quad(a: number, b: number, c: number, d: number): void {
     // Left to right across, then forward: anticlockwise seen from above (y up, z south).
     this.idx.push(a, b, c, b, d, c);
+  }
+
+  /**
+   * A flat face with one colour, from corners in order around it, turned so
+   * that it faces along `normal` (its own vertices, so edges stay sharp).
+   */
+  face(corners: readonly (readonly [number, number, number])[], normal: readonly [number, number, number], color: readonly number[]): void {
+    const [a, b, c] = corners;
+    const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+    const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+    const along = (uy * vz - uz * vy) * normal[0] + (uz * vx - ux * vz) * normal[1] + (ux * vy - uy * vx) * normal[2];
+    const len = Math.hypot(normal[0], normal[1], normal[2]) || 1;
+    const first = this.vertexCount;
+    for (const p of corners) this.vertex(p[0], p[1], p[2], normal[0] / len, normal[1] / len, normal[2] / len, color);
+    for (let i = 1; i + 1 < corners.length; i++) {
+      if (along >= 0) this.tri(first, first + i, first + i + 1);
+      else this.tri(first, first + i + 1, first + i);
+    }
   }
 
   build(): MeshData {

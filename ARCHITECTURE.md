@@ -28,6 +28,8 @@ src/
     calibration.ts   reference laps, error, parameter fitting
     project.ts       project file format
     scene3d.ts       3D geometry: earthworks, terrain patches, road surfaces, the model's sides
+    scenery.ts       3D dressing: kerbs, run-off, pit building, grandstands, grid marks, trees
+    shots.ts         3D camera shots, the hot lap and flyover camera paths
     race/
       rules.ts       race rules per class from data/racing.json
       model.ts       race lap, slipstream/wake/DRS ratios, fuel, tyres, pit lane, braking zones
@@ -43,7 +45,7 @@ src/
   ui/              plain TypeScript and canvas (three.js for the 3D view), no framework
     store.ts         state, derived data, undo, autosave
     mapView.ts       map canvas: camera, drawing, editing tools, overlays, the 2D/3D switch
-    view3d.ts        the 3D view: scene, terrain shader, orbit camera, picking (loaded on demand)
+    view3d.ts        the 3D view: scene, terrain shader, orbit camera, shots and camera paths, picking, image saving (loaded on demand)
     profileView.ts   elevation profile and speed trace canvas
     facilityLayer.ts facilities and drag handles on the map
     raceController.ts runs and plays back a race, drops it when the track changes
@@ -176,6 +178,21 @@ Run-off is checked per grade with the laps of the classes that need exactly that
 **The model.** The map's sides go down from the ground (or up to the water level where the edge is under water) to a base below the lowest point, as on a model. Water is a translucent plane at the water level.
 
 **Drawing.** The ground takes its colour in the shader: the flat map's height ramp, bare rock on steep slopes, grass on embankments and earth in cuttings (from how far the earthworks moved the ground at each vertex), a darker bed under water, and contour lines from the height with screen-space derivatives. Light comes from a sun in the north-west (as the flat map's hillshade) and a sky-and-ground hemisphere; a gradient sky and haze sit behind. Heights can be exaggerated by scaling the model vertically around its lowest point. The view draws only when something changed; the orbit camera keeps above the ground, and its near plane follows the distance to what it looks at, for depth precision. Hover and double-click find the ground under the cursor by marching along the view ray through the shaped ground (the same height function as the mesh) and refining the crossing, so no triangles are tested; a point on the track sets the store's hover station, which the profile shares.
+
+**Scenery.** `scenery.ts` dresses the circuit from the analysis, all in plain geometry (one mesh per kind, vertex colours):
+
+- *Kerbs*, red and white in 2 m blocks, 1.1 m wide and 5 cm proud, wherever the racing line comes within 2 m of an edge at a corner: on the inside through the apex, 44 m on the outside where the line first reaches it after the apex, and the last 34 m on the outside before the turn-in. Runs on the same side that overlap (a chicane) merge.
+- *Run-off* outside each corner, from 30 m before it to 30 m after, tapering at the ends. Its depth is three quarters of the deepest escape path the licence check traced for the corner (as far as it was free, up to what it needed), stopped short of water, the map edge and other parts of the track. Corners that need 80 m or more get 25 m of asphalt before the gravel. The surface follows the shaped ground just above it, starting level with the verge's edge.
+- The *pit building* behind the boxes, 16 m deep and 8 m high, with a 7 m garage door and a 1.5 m pillar in turn along its front, a roof reaching out over the lane, and the pit wall between lane and track. Its footprint keeps stands and trees off it.
+- *Grandstands* of seven stepped rows under a roof: the main one along the first 130 m of the start straight (across from the pits when they are beside it), and up to three at the corners after the biggest braking zones, beyond the run-off. A stand needs dry, fairly level ground on the map, clear of every road and footprint; otherwise it is left out.
+- A white line at the front of every *grid box*.
+- *Trees*: `forest` scatters candidates over the terrain from its seed (woods where a slow noise says so, single trees elsewhere, fewer on steep or high ground, none in water, conifers higher up), cached per terrain. `placeTrees` keeps those at least 20 m from every road edge, off the run-off (tested against the nearest station's run-off depth, with a coarse grid that rejects points far from the track at once) and off the footprints, and thins them evenly beyond 40,000. They are drawn as two instanced meshes (conifer and broadleaf), stretched against the relief exaggeration so they keep their shape.
+
+On the 13 km test track the scene has about 3.2 million triangles in 16 draw calls; the scenery builds in about 85 ms on top of the terrain.
+
+**Shots and camera paths.** `shots.ts` places fixed shots in world coordinates: the start from 240 m behind the line and 22 m up; the pit boxes from beyond their exit end, above the pit wall, facing the garages; each numbered corner from a camera tower 15 m beyond its run-off, 16 m above the ground there and at least 12 m above the apex; the steepest climb and drop (the largest gradient over 40 m) from beside the bottom of the slope on its lower side, looking up the road; and the highest point from 150 m out. `clearView` raises a camera in 6 m steps until the ground no longer blocks its line of sight. The view glides between shots, rising over the middle of the move. The hot lap rides the racing line at the time of the selected class's flying lap, at eye height (0.95 m in a car, 1.15 m on a bike), looking at the average of the points 25, 45 and 65 m ahead; the flyover follows the centreline at 60 m/s, 40 m up and 60 m behind, looking 40 to 160 m ahead. Both play in the view's animation loop and can be paused, sped up or stopped.
+
+**Saving images.** The view renders once more at the chosen size (the screen's pixels, twice that, or 3840 × 2160 with the camera's aspect set to 16:9), copies the frame to a 2D canvas, draws the visible labels on it at the matching scale, and restores the view.
 
 ## Races
 
