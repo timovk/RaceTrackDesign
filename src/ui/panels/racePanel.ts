@@ -154,7 +154,7 @@ export class RacePanel {
   }
 
   private update(topics: Set<Topic>): void {
-    if (topics.has('project') || topics.has('race') || topics.has('performance') || topics.has('track')) this.updateSetup();
+    if (topics.has('project') || topics.has('race') || topics.has('performance') || topics.has('track') || topics.has('layout')) this.updateSetup();
     if (topics.has('race') || topics.has('mode')) {
       this.updateSession();
       this.live(true);
@@ -186,6 +186,8 @@ export class RacePanel {
         hint = `About ${Math.round((set.minutes * 60) / (lap.time * 1.03))} laps of ${fmt.km(length)}${of}.`;
       }
       if (vehicles.length > 1) hint += ` The flag falls for the overall leader; the fastest class's rules (${lead.name}) set the start and the flags.`;
+      // Each layout keeps its own race setup.
+      if (s.project.layouts.length) hint = `${s.layoutName(s.shownLayout)}: ${hint}`;
     }
     setText(this.lengthHint, hint);
 
@@ -194,7 +196,9 @@ export class RacePanel {
       const lic = s.licence?.classes.find((c) => c.id === vehicle.id);
       if (lic && !lic.allowed) notes.push(`${vehicle.name} needs ${lic.needs}; this circuit is estimated lower. The race runs anyway.`);
     }
-    if (s.facilities && !s.facilities.pitLane && vehicles.some((v) => raceRules(v).pit.stops)) notes.push('No pit lane on this circuit, so nobody can stop: tyres and fuel have to last.');
+    if (s.facilities && !s.facilities.pitLane && vehicles.some((v) => raceRules(v).pit.stops)) {
+      notes.push(s.shownLayout ? 'This layout skips the pit lane, so nobody can stop: tyres and fuel have to last.' : 'No pit lane on this circuit, so nobody can stop: tyres and fuel have to last.');
+    }
     if (new Set(vehicles.map((v) => v.kind)).size > 1) notes.push('Cars and bikes never race together in reality; the race runs anyway.');
     setChildren(this.warnings, ...notes.map((n) => h('p', { class: 'race-warning' }, n)));
 

@@ -2,6 +2,7 @@ import type { TrackMetrics } from '../core/analysis.ts';
 import type { Facilities, Overrides } from '../core/facilities.ts';
 import type { Heightmap } from '../core/heightmap.ts';
 import type { Licence } from '../core/licence.ts';
+import type { PitLane } from '../core/pitLane.ts';
 import type { Performance } from '../core/performance.ts';
 import type { StartFinish } from '../core/startFinish.ts';
 import type { TerrainImages } from '../core/terrainImage.ts';
@@ -21,6 +22,8 @@ export interface PerformanceRequest {
   issues: Issue[];
   startFinish: StartFinish;
   overrides: Overrides;
+  /** A layout's pit lane (the full circuit's), or null for none; absent for the full circuit, whose pit lane is placed. */
+  pitLane?: PitLane | null;
   vehicles: readonly VehicleClass[];
   /** The heightmap is sent only when it changed; the worker keeps the last one by id. */
   terrainId: number;

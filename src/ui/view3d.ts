@@ -23,6 +23,10 @@
  * their posts and show the flags and boards race control calls for
  * (ui/flagLayer.ts).
  *
+ * With layouts, the track is the layout shown; the rest of the circuit and
+ * the other layouts' links are built as plain roads round it, so the ground
+ * is shaped for all of them.
+ *
  * It follows the store: rebuilt shortly after the terrain, the track or the
  * facilities change, recoloured when the track colouring changes. It draws
  * only when something changed or moves (the camera, the data, the hover).
@@ -69,7 +73,7 @@ const SUN = new THREE.Vector3(-1, 1.3, -1).normalize();
 /** Half the side of the patch the sun's shadows cover, metres. */
 const SHADOW_REACH = 70;
 /** What receives the sun's shadows (when cars are shown). */
-const SHADOW_RECEIVERS = new Set(['terrain', 'track', 'trackVerges', 'pit', 'pitVerges', 'start', 'kerbs', 'runoff', 'grid', 'pitBuilding', 'stands', 'posts']);
+const SHADOW_RECEIVERS = new Set(['terrain', 'track', 'trackVerges', 'pit', 'pitVerges', 'otherRoads', 'otherVerges', 'start', 'kerbs', 'runoff', 'grid', 'pitBuilding', 'stands', 'posts']);
 /** Driver codes show over this many cars nearest the camera, within this distance (metres). */
 const CAR_LABELS = 12;
 const CAR_LABEL_REACH = 400;
@@ -148,6 +152,8 @@ export class View3D {
   private readonly surfaceMaterial = (offset: number, gloss = 1, racingLine = false) => wetSurfaceMaterial(offset, gloss, this.weather.wet, this.weather.envMap, racingLine);
   private readonly meshes = new Map<string, THREE.Object3D>();
   private earth: Earthworks | null = null;
+  /** The roads round the track shown: the rest of the full circuit and the other layouts' links. */
+  private otherRoads: Road[] = [];
   /** Labels stand LABEL_LIFT metres over the track height `base`. */
   private labels: { el: HTMLElement; text: string; cls: string; p: THREE.Vector3; base: number; shown: boolean }[] = [];
   private shots: Shot[] = [];
@@ -631,6 +637,8 @@ export class View3D {
     const pitLane = ready ? s.facilities!.pitLane : null;
     const pit = t && pitLane ? pitRoad(pitLane, t) : null;
     if (pit) roads.push(pit);
+    this.otherRoads = this.roundRoads();
+    roads.push(...this.otherRoads);
     const earth = new Earthworks(hm, roads);
     this.earth = earth;
 
@@ -667,7 +675,10 @@ export class View3D {
       const metrics = s.metrics!;
       index = new TrackIndex(t);
       this.add('kerbs', new THREE.Mesh(geometry(buildKerbs(t, kerbRuns(t, s.performance!.line, metrics.corners))), this.surfaceMaterial(-2)));
-      areas = s.licence ? runoffAreas(t, metrics.corners, s.licence.runoff, earth, index) : [];
+      // Run-off stops at the other roads: a gravel trap ends where the rest of the circuit carries on.
+      const others = this.otherRoads.length ? new Earthworks(hm, this.otherRoads) : null;
+      const blocked = others ? (x: number, y: number) => others.clearance(x, y) < VERGE + 2 : undefined;
+      areas = s.licence ? runoffAreas(t, metrics.corners, s.licence.runoff, earth, index, blocked) : [];
       // Run-off lies beyond the verges and never overlaps a road, so it can win over the ground by a wide margin.
       if (areas.length) this.add('runoff', new THREE.Mesh(geometry(buildRunoff(t, areas, earth)), this.surfaceMaterial(-4, 0.5)));
       if (pitLane && pit) {
@@ -762,13 +773,45 @@ export class View3D {
     this.add('broadleaves', meshes[1]);
   }
 
+  /**
+   * The roads round the track shown: the stretches of the full circuit a
+   * layout shown skips (each from the station where its link leaves to the
+   * one where it joins), and the links of the other layouts.
+   */
+  private roundRoads(): Road[] {
+    const s = this.store;
+    const shown = s.shownLayout;
+    const out: Road[] = [];
+    const full = s.fullTrack;
+    if (shown !== 0 && full) {
+      for (const l of s.layoutStates[shown - 1]?.build.links ?? []) {
+        const count = ((l.to - l.from + full.n) % full.n) + 1;
+        const pick = (src: Float64Array, f = 1) => Float64Array.from({ length: count }, (_, i) => src[(l.from + i) % full.n] * f);
+        out.push({ x: pick(full.x), y: pick(full.y), z: pick(full.z), half: pick(full.width, 0.5), closed: false });
+      }
+    }
+    s.layoutStates.forEach((state, i) => {
+      if (i + 1 === shown) return;
+      for (const l of state.build.links) out.push({ x: l.x, y: l.y, z: l.z, half: Float64Array.from(l.width, (w) => w / 2), closed: false });
+    });
+    return out;
+  }
+
   private buildRoads(t: Track | null, pit: Road | null): void {
     this.remove('track');
     this.remove('trackVerges');
     this.remove('pit');
     this.remove('pitVerges');
+    this.remove('otherRoads');
+    this.remove('otherVerges');
     this.remove('start');
     if (!t) return;
+    if (this.otherRoads.length) {
+      // Under the track where they share it.
+      const other = buildRoads(this.otherRoads.map((road) => ({ road, style: { surface: COLORS.asphalt, lines: true } })));
+      this.add('otherRoads', new THREE.Mesh(geometry(other.paved), this.surfaceMaterial(-2)));
+      this.add('otherVerges', new THREE.Mesh(geometry(other.verges), this.surfaceMaterial(-1, 0.15)));
+    }
     const main = buildRoads([{ road: trackRoad(t), style: { surface: this.surfaceColors(t), lines: true } }]);
     // The track wins over the pit lane where they meet, and both over the verges.
     const paved = geometry(main.paved);

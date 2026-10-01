@@ -2012,3 +2012,75 @@ input[type='range'] {
 .stat-block .table th {
   padding: 2px 6px;
 }
+
+/* Layouts in Design: one row each, the picked one ringed. */
+.layout-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.layout-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.layout-row:hover {
+  background: var(--panel-3);
+}
+
+.layout-row.on {
+  border-color: rgba(125, 249, 255, 0.6);
+}
+
+.layout-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.layout-name {
+  font-weight: 700;
+}
+
+input.layout-name {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 1px 4px;
+  margin-left: -5px;
+  min-width: 0;
+}
+
+input.layout-name:hover,
+input.layout-name:focus {
+  border-color: var(--border);
+  background: var(--panel);
+  outline: none;
+}
+
+.layout-status {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.layout-row.error .layout-status {
+  color: #ff8a8c;
+}
+
+.link-status {
+  color: #7df9ff;
+  font-size: 12px;
+  margin: 0;
+}
+
+.map-layout select {
+  max-width: 160px;
+}

@@ -26,7 +26,7 @@ scope.onmessage = (event: MessageEvent<PerformanceRequest>) => {
     const performance = analysePerformance(req.track, req.vehicles);
     const facilities = placeFacilities({
       track: req.track, startFinish: req.startFinish, performance, vehicles: req.vehicles,
-      heightAt: (x, y) => sampleHeight(hm, x, y), waterLevel: hm.waterLevel, extent: hm.extent, overrides: req.overrides,
+      heightAt: (x, y) => sampleHeight(hm, x, y), waterLevel: hm.waterLevel, extent: hm.extent, overrides: req.overrides, pitLane: req.pitLane,
     });
     const licence = assessLicence({
       track: req.track, metrics: req.metrics, issues: req.issues, performance, facilities, heightmap: hm, vehicles: req.vehicles,

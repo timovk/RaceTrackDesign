@@ -14,17 +14,21 @@ export class PerformanceClient {
   private sentHeightmap: Heightmap | null = null;
   private terrainId = 0;
 
-  constructor(onResult: (analysis: Analysis | null, error: string | null) => void) {
+  /** What the latest request was for (the caller's tag), handed back with its result. */
+  private tag = 0;
+
+  constructor(onResult: (analysis: Analysis | null, error: string | null, tag: number) => void) {
     this.worker.onmessage = (event: MessageEvent<PerformanceResponse>) => {
       const msg = event.data;
       if (msg.id !== this.latest) return;
-      if (msg.type === 'done') onResult({ performance: msg.performance, facilities: msg.facilities, licence: msg.licence }, null);
-      else onResult(null, msg.message);
+      if (msg.type === 'done') onResult({ performance: msg.performance, facilities: msg.facilities, licence: msg.licence }, null, this.tag);
+      else onResult(null, msg.message, this.tag);
     };
-    this.worker.onerror = (event) => onResult(null, event.message || 'Analysis worker failed.');
+    this.worker.onerror = (event) => onResult(null, event.message || 'Analysis worker failed.', this.tag);
   }
 
-  request(req: AnalysisRequest, heightmap: Heightmap): void {
+  request(req: AnalysisRequest, heightmap: Heightmap, tag = 0): void {
+    this.tag = tag;
     const fresh = heightmap !== this.sentHeightmap;
     if (fresh) {
       this.sentHeightmap = heightmap;

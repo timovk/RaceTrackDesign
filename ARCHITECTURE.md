@@ -13,6 +13,7 @@ src/
     terrainImage.ts  hillshade, colour ramp, water and contour images
     geometry.ts      spline, smoothing, simplification, intersections, spatial grid
     track.ts         control points -> stations; elevation grading
+    layouts.ts       other layouts of a circuit: links off the full circuit, the layout's stations and shared pit lane
     analysis.ts      metrics, corners, straights
     validate.ts      design warnings
     racingLine.ts    minimum-curvature racing line
@@ -176,6 +177,16 @@ Sectors split the lap of a reference class (GT3) into thirds of time, each line 
 This is an estimate from the geometry alone: barriers, kerbs, medical centre and buildings are not modelled, and real homologation needs an inspection. The run-off depth and the crest limit (cars keep at least half their weight) are this tool's own assumptions, since the regulations set run-off per circuit.
 
 Run-off is checked per grade with the laps of the classes that need exactly that grade. Each corner gets two escape paths: straight on from the turn-in point, at the fastest speed in the 100 m before it, and along the apex tangent at apex speed. A path starts where it leaves the track surface and runs until it meets water, the map edge or another part of the track (not the stretch within 300 m of the corner). It passes when it is free for the required depth: 30 m at 100 km/h rising to 100 m at 300 km/h for cars, and 1.3 times that (40 to 130 m) for bikes. The ground slope along it is reported against the FIA (25% up, 3% down) and FIM (10% up, 3% down) limits.
+
+## Layouts
+
+A layout is the full circuit with links taken (`layouts.ts`). A link is stored as its two ends (world positions) and its control points; each end snaps to the full circuit's nearest station (within 25 m of the edge), and the link is taken the way round that follows the direction of travel at both ends (a link drawn backwards is turned round). It skips the full circuit's stations between where it leaves and where it joins; the stretches skipped must miss the start line and each other.
+
+**Building.** The layout walks the full circuit (rotated, so station 0 is the start line) from station 0, keeping its stations exactly (position, width, terrain and graded height), and where a link leaves, follows the link: an open centripetal Catmull-Rom spline through the link's points (`sampleOpenSpline`), whose end tangents are the track's heading at both ends, so it leaves and joins without a kink, resampled at the station spacing and widened from the track's width to the link's. The layout's profile is graded with every shared station pinned to the full circuit's height (`gradeProfile` with fixed heights), so the link meets the track at both ends and the rest is untouched. Heading, curvature, gradient and edges come from the stations as for any track (`finishTrack`). The layout keeps, per station, the full circuit's station it runs on, or -1 on a link. A link that crosses the full circuit away from its ends is a warning, a level crossing.
+
+**Facilities.** A layout shares the full circuit's start line (station 0) and pit lane: `layoutPitLane` maps the pit lane's entry and exit to the layout's stations when the layout keeps every station of the track beside it, else the layout has none. `placeFacilities` takes such a pit lane as given instead of placing one; everything else (grid, speed trap, DRS, overtaking, marshal posts) is placed for the layout, and the licence is assessed for it.
+
+**In the app.** The store builds the full circuit and every layout whenever the design changes. Design edits the full circuit, so there `track` is the full circuit; Analyse and Race show the layout picked, and `track` and everything derived from it (metrics, warnings, lap times, facilities, licence) belong to that layout. Analyses are kept per layout until the design changes, so switching layouts or modes is instant once each is done; for a layout the full circuit is analysed first, for its pit lane. Each layout keeps its own race setup. A race belongs to its layout: it stops when that layout's track or analysis changes or another layout is picked, not when Design shows the full circuit. The map greys out the rest of the circuit round the layout shown; the 3D view builds the skipped stretches of the full circuit and the other layouts' links as plain roads (the ground is shaped for all roads, and run-off stops at them). Link points are kept to the centimetre as they are placed, as the project file stores them, so a layout drawn and the same layout loaded from its file give the same lap times.
 
 ## 3D view
 

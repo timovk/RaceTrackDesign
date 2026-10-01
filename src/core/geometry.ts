@@ -77,6 +77,59 @@ export function sampleClosedSpline(pts: readonly Vec2[], maxStep = 0.5): SplineS
 }
 
 /**
+ * Samples an open centripetal Catmull-Rom spline through `pts`, leaving the
+ * first point along `startDir` and arriving at the last along `endDir` (unit
+ * vectors), so it joins a road it branches from and meets without a kink.
+ * Each sample carries its segment and the parameter within it; the last
+ * point closes the list.
+ */
+export function sampleOpenSpline(pts: readonly Vec2[], startDir: Vec2, endDir: Vec2, maxStep = 0.5): SplineSample[] {
+  const n = pts.length;
+  const out: SplineSample[] = [];
+  for (let i = 0; i + 1 < n; i++) {
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const d12 = Math.max(1e-4, Math.sqrt(dist(p1.x, p1.y, p2.x, p2.y)));
+    const chordLen = d12 * d12;
+    let m1x: number;
+    let m1y: number;
+    if (i === 0) {
+      m1x = startDir.x * chordLen;
+      m1y = startDir.y * chordLen;
+    } else {
+      const p0 = pts[i - 1];
+      const d01 = Math.max(1e-4, Math.sqrt(dist(p0.x, p0.y, p1.x, p1.y)));
+      m1x = ((p1.x - p0.x) / d01 - (p2.x - p0.x) / (d01 + d12) + (p2.x - p1.x) / d12) * d12;
+      m1y = ((p1.y - p0.y) / d01 - (p2.y - p0.y) / (d01 + d12) + (p2.y - p1.y) / d12) * d12;
+    }
+    let m2x: number;
+    let m2y: number;
+    if (i + 2 >= n) {
+      m2x = endDir.x * chordLen;
+      m2y = endDir.y * chordLen;
+    } else {
+      const p3 = pts[i + 2];
+      const d23 = Math.max(1e-4, Math.sqrt(dist(p2.x, p2.y, p3.x, p3.y)));
+      m2x = ((p2.x - p1.x) / d12 - (p3.x - p1.x) / (d12 + d23) + (p3.x - p2.x) / d23) * d12;
+      m2y = ((p2.y - p1.y) / d12 - (p3.y - p1.y) / (d12 + d23) + (p3.y - p2.y) / d23) * d12;
+    }
+    const steps = Math.max(8, Math.ceil((1.5 * chordLen) / maxStep));
+    for (let k = 0; k < steps; k++) {
+      const u = k / steps;
+      const u2 = u * u;
+      const u3 = u2 * u;
+      const h00 = 2 * u3 - 3 * u2 + 1;
+      const h10 = u3 - 2 * u2 + u;
+      const h01 = -2 * u3 + 3 * u2;
+      const h11 = u3 - u2;
+      out.push({ x: h00 * p1.x + h10 * m1x + h01 * p2.x + h11 * m2x, y: h00 * p1.y + h10 * m1y + h01 * p2.y + h11 * m2y, seg: i, u });
+    }
+  }
+  out.push({ x: pts[n - 1].x, y: pts[n - 1].y, seg: n - 2, u: 1 });
+  return out;
+}
+
+/**
  * Heading (radians) and signed curvature (1/m, positive turning right with y
  * pointing south) of a closed polyline. Curvature is the change in chord
  * heading divided by the mean length of the two chords, smoothed over

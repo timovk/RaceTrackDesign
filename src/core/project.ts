@@ -8,6 +8,7 @@ import {
 } from './terrain.ts';
 import { type ControlPoint, type TrackDesign, DEFAULT_GRADING, DEFAULT_WIDTH, emptyDesign } from './track.ts';
 import type { Overrides } from './facilities.ts';
+import type { LayoutDesign, LinkDesign } from './layouts.ts';
 import { type RaceSettings, parseRaceSettings } from './race/setup.ts';
 import { VEHICLES } from './vehicles.ts';
 
@@ -22,6 +23,8 @@ export interface Project {
   overrides: Overrides;
   /** Race setup with its own seed, so a saved project reproduces the race; null until a race is set up. */
   race: RaceSettings | null;
+  /** Other layouts of the circuit, each the full circuit with links taken, with its own race setup. */
+  layouts: LayoutDesign[];
 }
 
 export function newProject(seed: string, preset: TerrainPreset = 'rolling'): Project {
@@ -32,6 +35,7 @@ export function newProject(seed: string, preset: TerrainPreset = 'rolling'): Pro
     track: emptyDesign(),
     overrides: {},
     race: null,
+    layouts: [],
   };
 }
 
@@ -40,8 +44,12 @@ export function serializeProject(p: Project): string {
     ...p,
     track: {
       ...p.track,
-      points: p.track.points.map((pt) => ({ x: round(pt.x, 2), y: round(pt.y, 2), width: round(pt.width, 2) })),
+      points: p.track.points.map(roundPoint),
     },
+    layouts: p.layouts.map((l) => ({
+      ...l,
+      links: l.links.map((k) => ({ from: roundXY(k.from), to: roundXY(k.to), points: k.points.map(roundPoint) })),
+    })),
   };
   return JSON.stringify(rounded, null, 2);
 }
@@ -98,7 +106,33 @@ export function parseProject(text: string): Project {
     track,
     overrides: parseOverrides(raw.overrides),
     race: parseRaceSettings(raw.race, VEHICLES.map((v) => v.id)),
+    layouts: parseLayouts(raw.layouts),
   };
+}
+
+/** Layouts with their links; a link without both ends is dropped, a layout without links too. */
+function parseLayouts(raw: unknown): LayoutDesign[] {
+  if (!Array.isArray(raw)) return [];
+  const xy = (v: unknown) => (isObject(v) && isNum(v.x) && isNum(v.y) ? { x: v.x, y: v.y } : null);
+  const out: LayoutDesign[] = [];
+  raw.forEach((l, i) => {
+    if (!isObject(l) || !Array.isArray(l.links)) return;
+    const links: LinkDesign[] = [];
+    for (const k of l.links) {
+      if (!isObject(k)) continue;
+      const from = xy(k.from);
+      const to = xy(k.to);
+      if (!from || !to) continue;
+      const points = Array.isArray(k.points)
+        ? k.points.filter((p) => isObject(p) && isNum(p.x) && isNum(p.y)).map((p) => ({ x: p.x as number, y: p.y as number, width: isNum(p.width) && p.width > 0 ? p.width : DEFAULT_WIDTH }))
+        : [];
+      links.push({ from, to, points });
+    }
+    if (!links.length) return;
+    const name = typeof l.name === 'string' && l.name.trim() ? l.name : `Layout ${i + 2}`;
+    out.push({ name, links, race: parseRaceSettings(l.race, VEHICLES.map((v) => v.id)) });
+  });
+  return out;
 }
 
 /** Keeps only well-formed overrides; anything else falls back to automatic placement. */
@@ -125,6 +159,14 @@ function isObject(v: unknown): v is Record<string, unknown> {
 
 function isNum(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
+}
+
+function roundPoint(pt: ControlPoint): ControlPoint {
+  return { x: round(pt.x, 2), y: round(pt.y, 2), width: round(pt.width, 2) };
+}
+
+function roundXY(p: { x: number; y: number }): { x: number; y: number } {
+  return { x: round(p.x, 2), y: round(p.y, 2) };
 }
 
 function round(v: number, digits: number): number {

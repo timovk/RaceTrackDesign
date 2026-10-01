@@ -63,7 +63,7 @@ export class RaceController {
   private acc = 0;
   private lastFrame = 0;
   private frame = 0;
-  private builtFrom: { track: unknown; performance: unknown; facilities: unknown } | null = null;
+  private builtFrom: { layout: number; track: unknown; performance: unknown; facilities: unknown } | null = null;
 
   constructor(store: Store) {
     this.store = store;
@@ -89,7 +89,7 @@ export class RaceController {
     if (this.blocker) return;
     const settings = s.raceSettings;
     // Save the settings with the project, so the file reproduces this race.
-    if (!s.project.race) s.setRaceSettings({});
+    if (!s.raceSettingsSaved) s.setRaceSettings({});
     const models = settings.classes.map((c) => {
       const vehicle = s.vehicles.find((v) => v.id === c.vehicleId)!;
       return buildRaceModel({
@@ -98,7 +98,7 @@ export class RaceController {
       });
     });
     this.sim = new RaceSim(createRaceSetup(models, settings));
-    this.builtFrom = { track: s.track, performance: s.performance, facilities: s.facilities };
+    this.builtFrom = { layout: s.shownLayout, track: s.track, performance: s.performance, facilities: s.facilities };
     this.selected = null;
     this.notice = null;
     this.skipping = null;
@@ -262,13 +262,22 @@ export class RaceController {
     for (const fn of this.tickListeners) fn();
   }
 
-  /** A race belongs to the track it was built on: drop it when the track or its analysis changes. */
+  /**
+   * A race belongs to the layout and track it was built on: drop it when
+   * that track or its analysis changes, or another layout is picked. Design
+   * shows the full circuit, which leaves a race on a layout running.
+   */
   private onStore(topics: Set<Topic>): void {
     if (!this.sim || !this.builtFrom) return;
-    if (!topics.has('track') && !topics.has('performance')) return;
+    if (!topics.has('track') && !topics.has('performance') && !topics.has('layout')) return;
     const s = this.store;
     const b = this.builtFrom;
-    if (s.track !== b.track || (s.performance && s.performance !== b.performance) || (s.facilities && s.facilities !== b.facilities)) {
+    if (s.layout !== b.layout && s.shownLayout !== b.layout) {
+      this.stop('Another layout was picked, so the race was stopped. Start it again to race on it.');
+      return;
+    }
+    const shown = s.shownLayout === b.layout;
+    if (s.trackOf(b.layout) !== b.track || (shown && ((s.performance && s.performance !== b.performance) || (s.facilities && s.facilities !== b.facilities)))) {
       this.stop('The track changed, so the race was stopped. Start it again to race on the new layout.');
     }
   }

@@ -216,10 +216,13 @@ export interface RunoffArea {
 /**
  * Run-off outside each corner, from 30 m before the turn-in to 30 m after
  * the exit, as deep as the corner's escape paths are free (up to what they
- * need), tapering at the ends, and stopping short of water, the map edge and
- * other parts of the track.
+ * need), tapering at the ends, and stopping short of water, the map edge,
+ * other parts of the track and anywhere `blocked` says (another road: the
+ * rest of the circuit round a layout).
  */
-export function runoffAreas(t: Track, corners: readonly Corner[], rays: readonly RunoffRay[], earth: Earthworks, index: TrackIndex): RunoffArea[] {
+export function runoffAreas(
+  t: Track, corners: readonly Corner[], rays: readonly RunoffRay[], earth: Earthworks, index: TrackIndex, blocked?: (x: number, y: number) => boolean,
+): RunoffArea[] {
   const n = t.n;
   const out: RunoffArea[] = [];
   const hm = earth.ground;
@@ -254,6 +257,7 @@ export function runoffAreas(t: Track, corners: readonly Corner[], rays: readonly
         if (earth.natural(x, y) < hm.waterLevel) break;
         const other = index.nearest(x, y, 40, (j) => index.near(j, k, local));
         if (other && other.d < t.width[other.k] / 2 + VERGE + 3) break;
+        if (blocked?.(x, y)) break;
       }
       return Math.max(0, Math.min(d, want));
     });

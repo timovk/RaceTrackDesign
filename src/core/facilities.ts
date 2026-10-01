@@ -57,6 +57,12 @@ export interface FacilityInput {
   waterLevel: number;
   extent: number;
   overrides: Overrides;
+  /**
+   * A layout's pit lane: the full circuit's, with its entry and exit as
+   * stations of this track, or null when the layout skips it. When absent,
+   * the pit lane is placed for this track.
+   */
+  pitLane?: PitLane | null;
 }
 
 const MAX_OVERTAKING_ZONES = 4;
@@ -66,7 +72,7 @@ export function placeFacilities(input: FacilityInput): Facilities {
   const fastest = fastestLap(perf.laps);
   const firstCorner = firstCornerIsRight(t);
 
-  const pitLane = fastest
+  const pitLane = input.pitLane !== undefined ? input.pitLane : fastest
     ? placePitLane({
         track: t, line: perf.line, reference: fastest, heightAt: input.heightAt,
         waterLevel: input.waterLevel, extent: input.extent, override: input.overrides.pitLane ?? null,

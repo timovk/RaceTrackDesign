@@ -123,7 +123,12 @@ export function mountApp(root: HTMLElement, store: Store): void {
     } else if ((key === 'delete' || key === 'backspace') && store.mode === 'design' && store.selected !== null) {
       e.preventDefault();
       store.deletePoint(store.selected);
+    } else if ((key === 'delete' || key === 'backspace') && store.mode === 'design' && store.linkSelected) {
+      e.preventDefault();
+      store.deleteLinkPoint(store.linkSelected);
     } else if (key === 'escape') {
+      store.cancelLink();
+      store.selectLinkPoint(null);
       store.select(null);
       store.setFocus(null);
     } else if (key === 'f') {

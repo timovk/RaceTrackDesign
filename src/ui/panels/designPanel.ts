@@ -1,4 +1,5 @@
-/** Design mode: drawing tools, the selected point, track width and grading. */
+/** Design mode: drawing tools, the selected point, track width and grading, and the circuit's layouts. */
+import { formatLapTime } from '../../core/calibration.ts';
 import { sampleHeight } from '../../core/heightmap.ts';
 import { type Control, section, segmented, slider } from '../controls.ts';
 import { h, setChildren } from '../dom.ts';
@@ -17,6 +18,12 @@ const HELP: Record<Tool, string[]> = {
     'Drag to sketch a loop; it closes by itself.',
     'The sketch replaces the current track and turns into editable points.',
   ],
+  link: [
+    'Click the track where the link leaves it.',
+    'Click the ground to lead it across.',
+    'Click the track again where it joins: the layout runs round the circuit to the link, along it, and on from where it joins.',
+    'Esc or right-click stops drawing.',
+  ],
 };
 
 export class DesignPanel {
@@ -30,6 +37,8 @@ export class DesignPanel {
   private readonly pointInfo: HTMLElement;
   private readonly pointWidth: Control;
   private readonly checks: HTMLElement;
+  private readonly layouts: HTMLElement;
+  private readonly linkStatus: HTMLElement;
 
   constructor(store: Store, onLocate: (station: number) => void) {
     this.store = store;
@@ -85,6 +94,8 @@ export class DesignPanel {
     this.controls.push(tools, width, smoothing, cutFill, this.pointWidth);
 
     this.checks = h('div');
+    this.layouts = h('div', { class: 'layout-list' });
+    this.linkStatus = h('p', { class: 'link-status', hidden: true });
 
     this.el = h('div', { class: 'panel' },
       section('Tool', tools.el, this.help),
@@ -95,6 +106,10 @@ export class DesignPanel {
           h('button', { class: 'btn', title: 'Drive the other way round', onclick: () => this.reverse() }, 'Reverse direction'))),
       section('Grading', smoothing.el, cutFill.el,
         h('p', { class: 'hint' }, 'The track follows the ground, evened out over the smoothing length, but is never dug in or raised more than the limit.')),
+      section('Layouts', this.layouts, this.linkStatus,
+        h('div', { class: 'row' },
+          h('button', { class: 'btn', title: 'Draw a link from the track to another part of it: a new layout takes it', onclick: () => store.beginLink(null) }, 'Add layout')),
+        h('p', { class: 'hint' }, 'A layout is the full circuit with a shortcut or an extra loop: draw a link from the track to another part of it, and the layout skips the stretch in between. Every layout keeps the start/finish line and shares the pit lane. Analyse and Race show the layout picked here or above the map.')),
       section('Checks', this.checks),
       h('div', { class: 'row' },
         h('button', { class: 'btn danger subtle', onclick: () => { store.edit((x) => { x.points = []; }); store.select(null); } }, 'Clear track'),
@@ -103,6 +118,43 @@ export class DesignPanel {
 
     store.subscribe((topics) => this.update(topics));
     this.update(new Set<Topic>(['project', 'selection', 'mode', 'track']));
+  }
+
+  /** The full circuit and each layout: its length and lap time for the class picked, or why it cannot be built. */
+  private updateLayouts(): void {
+    const s = this.store;
+    const row = (i: number) => {
+      const state = i === 0 ? null : s.layoutStates[i - 1];
+      const t = i === 0 ? s.fullTrack : state?.built?.track ?? null;
+      const lap = s.analysisOf(i)?.performance.laps.find((l) => l.vehicleId === s.vehicleId);
+      const error = t ? null : state?.build.errors[0] ?? 'Draw a closed track first.';
+      const status = t ? `${fmt.km(t.length)}${lap ? ` · ${s.vehicle.name} ${formatLapTime(lap.time)}` : ''}` : error ?? '';
+      const name = i === 0
+        ? h('span', { class: 'layout-name' }, 'Full circuit')
+        : h('input', {
+          type: 'text', class: 'layout-name', value: s.layoutName(i), title: 'Rename the layout',
+          onclick: (e: Event) => e.stopPropagation(),
+          onchange: (e: Event) => s.renameLayout(i, (e.target as HTMLInputElement).value),
+        });
+      return h('div', {
+        class: `layout-row${s.layout === i ? ' on' : ''}${error && i > 0 ? ' error' : ''}`,
+        title: i === 0 ? 'The whole circuit' : 'Show this layout in Analyse and Race',
+        onclick: () => s.selectLayout(i),
+      },
+      h('div', { class: 'layout-main' }, name, h('span', { class: 'layout-status' }, status)),
+      i > 0 ? h('button', { class: 'btn small', title: 'Draw another link for this layout', onclick: (e: Event) => { e.stopPropagation(); s.beginLink(i); } }, 'Add link') : null,
+      i > 0 ? h('button', { class: 'icon-btn', title: 'Delete this layout', onclick: (e: Event) => { e.stopPropagation(); s.deleteLayout(i); } }, '\u00d7') : null);
+    };
+    setChildren(this.layouts, ...[0, ...s.project.layouts.map((_, j) => j + 1)].map(row));
+    const drawing = s.tool === 'link';
+    this.linkStatus.hidden = !drawing;
+    if (drawing) {
+      const d = s.linkDraft;
+      const target = s.linkTarget !== null ? ` for ${s.layoutName(s.linkTarget)}` : '';
+      this.linkStatus.textContent = d
+        ? `Drawing a link${target}: ${d.points.length} point${d.points.length === 1 ? '' : 's'}. Click the track where it joins; Esc stops.`
+        : `Drawing a link${target}: click the track where it leaves.`;
+    }
   }
 
   private startHere(): void {
@@ -122,6 +174,7 @@ export class DesignPanel {
   private update(topics: Set<Topic>): void {
     const s = this.store;
     if (topics.has('mode')) setChildren(this.help, ...HELP[s.tool].map((line) => h('li', null, line)));
+    if (['project', 'layout', 'track', 'performance', 'vehicle', 'mode'].some((t) => topics.has(t as Topic))) this.updateLayouts();
     if (topics.has('project') || topics.has('selection') || topics.has('mode')) for (const c of this.controls) c.update();
     if (topics.has('project') || topics.has('selection') || topics.has('track')) {
       const i = s.selected;

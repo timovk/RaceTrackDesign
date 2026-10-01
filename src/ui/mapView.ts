@@ -4,6 +4,11 @@
  *
  * World coordinates are metres (x east, y south); the camera maps them to
  * CSS pixels. Drawing happens on demand, at most once per animation frame.
+ *
+ * Layouts: in Design the links of every layout are drawn as roads off the
+ * full circuit, with their points to drag, and the Link tool draws new ones;
+ * the layout picked glows underneath. In Analyse and Race the layout shown
+ * is the track, and the rest of the circuit lies greyed out around it.
  */
 import { CORNER_LABELS } from '../core/analysis.ts';
 import { dist, simplifyPolyline, type Vec2 } from '../core/geometry.ts';
@@ -30,12 +35,26 @@ type Drag =
   | { kind: 'pan'; startX: number; startY: number; camX: number; camY: number; button: number; moved: boolean }
   | { kind: 'point'; index: number; dx: number; dy: number; moved: boolean }
   | { kind: 'freehand'; points: Vec2[] }
-  | { kind: 'handle'; handle: Handle; station: number; moved: boolean };
+  | { kind: 'handle'; handle: Handle; station: number; moved: boolean }
+  /** A link's point (its ends are -1 where it leaves the track and -2 where it joins). */
+  | { kind: 'linkPoint'; layout: number; link: number; point: number; moved: boolean };
+
+/** A link's point on the map: the layout (1-based), the link, and the point (-1, -2 for its ends). */
+interface LinkHit {
+  layout: number;
+  link: number;
+  point: number;
+}
 
 const SEVERITY_COLORS = { error: 'rgba(255, 77, 79, 0.75)', warning: 'rgba(245, 177, 76, 0.7)', info: 'rgba(111, 179, 255, 0.55)' };
 const ACCENT = '#ff5a36';
 const HOVER = '#3fb6ff';
 const SECTOR = '#ffd60a';
+/** The rest of the circuit, around the layout shown: faded. */
+const OTHER_ROAD = 'rgba(150, 156, 164, 0.4)';
+const OTHER_EDGE = 'rgba(18, 20, 24, 0.45)';
+const LAYOUT_GLOW = 'rgba(125, 249, 255, 0.32)';
+const LINK_POINT = '#7df9ff';
 const POINT_HIT_PX = 10;
 const TRACK_HIT_PX = 12;
 const MAX_SCALE = 10;
@@ -74,6 +93,8 @@ export class MapView {
   private readonly facilityToggle: HTMLButtonElement;
   private readonly dimensionButtons: HTMLButtonElement[];
   private readonly reliefSelect: HTMLSelectElement;
+  private readonly layoutSelect: HTMLSelectElement;
+  private readonly layoutLabel: HTMLElement;
   private readonly viewBar: HTMLElement;
   /** The 3D view, loaded (with three.js) the first time it is shown. */
   private view3d: View3D | null = null;
@@ -105,11 +126,20 @@ export class MapView {
         this.reliefSelect.blur();
       },
     }, ...[1, 1.5, 2, 3].map((r) => h('option', { value: String(r) }, `×${r}`)));
+    this.layoutSelect = h('select', {
+      title: 'The layout Analyse and Race show',
+      onchange: () => {
+        store.selectLayout(Number(this.layoutSelect.value));
+        this.layoutSelect.blur();
+      },
+    });
+    this.layoutLabel = h('label', { class: 'map-toolbar-label map-layout', hidden: true }, 'Layout', this.layoutSelect);
     const viewBar = h('div', { class: 'map-toolbar map-viewbar' },
       h('label', { class: 'map-toolbar-label map-relief' }, 'Height', this.reliefSelect),
       h('div', { class: 'segmented map-dimension' }, ...this.dimensionButtons));
     this.viewBar = viewBar;
     const toolbar = h('div', { class: 'map-toolbar' },
+      this.layoutLabel,
       h('label', { class: 'map-toolbar-label' }, 'Colour', this.colorSelect),
       this.contourToggle,
       this.labelToggle,
@@ -294,6 +324,7 @@ export class MapView {
       setText(this.progressLabel, s.terrainError ? `Terrain failed: ${s.terrainError}` : `Generating terrain  ${Math.round(s.progress * 100)}%`);
       this.progressBar.style.width = `${Math.round(s.progress * 100)}%`;
     }
+    if (topics.has('project') || topics.has('layout') || topics.has('track')) this.updateLayoutSelect();
     if (topics.has('view')) {
       this.colorSelect.value = s.view.colorBy;
       this.reliefSelect.value = String(s.view.relief);
@@ -315,6 +346,20 @@ export class MapView {
       if (this.race.sim) requestAnimationFrame(() => requestAnimationFrame(() => (this.is3d ? this.fit() : this.fitTrackBesideTower())));
     }
     this.invalidate();
+  }
+
+  /** The layout picker: shown once the circuit has layouts; one that cannot be built says so. */
+  private updateLayoutSelect(): void {
+    const s = this.store;
+    const count = s.project.layouts.length;
+    this.layoutLabel.hidden = count === 0;
+    if (!count) return;
+    const options = [0, ...s.project.layouts.map((_, i) => i + 1)].map((i) => {
+      const broken = i > 0 && !s.layoutStates[i - 1]?.built;
+      return h('option', { value: String(i) }, `${s.layoutName(i)}${broken ? ' (fix it in Design)' : ''}`);
+    });
+    setChildren(this.layoutSelect, ...options);
+    this.layoutSelect.value = String(s.layout);
   }
 
   private updateHud(): void {
@@ -457,6 +502,17 @@ export class MapView {
       this.drag = { kind: 'freehand', points: [w] };
       return;
     }
+    if (s.tool === 'link') {
+      this.linkClick(p.x, p.y, w);
+      return;
+    }
+
+    // A link's points first, then the track's own points, then a link's ends on the track.
+    const hitLink = this.linkPointAt(p.x, p.y, false);
+    if (hitLink) {
+      this.startLinkDrag(hitLink);
+      return;
+    }
 
     const hitPoint = this.pointAt(p.x, p.y);
     if (hitPoint !== null) {
@@ -464,6 +520,12 @@ export class MapView {
       s.select(hitPoint);
       s.beginEdit();
       this.drag = { kind: 'point', index: hitPoint, dx: pt.x - w.x, dy: pt.y - w.y, moved: false };
+      return;
+    }
+
+    const hitEnd = this.linkPointAt(p.x, p.y, true);
+    if (hitEnd) {
+      this.startLinkDrag(hitEnd);
       return;
     }
 
@@ -511,6 +573,8 @@ export class MapView {
       const last = drag.points[drag.points.length - 1];
       if (dist(this.sx(last.x), this.sy(last.y), p.x, p.y) > 3) drag.points.push(this.clampToMap(this.cursor));
       this.invalidate();
+    } else if (drag?.kind === 'linkPoint') {
+      this.moveLinkPoint(drag, p.x, p.y);
     } else if (drag?.kind === 'handle') {
       // Handles slide along the track: snap to the nearest station.
       const k = this.stationAt(p.x, p.y, 80);
@@ -522,6 +586,8 @@ export class MapView {
     } else {
       s.setHover(this.stationAt(p.x, p.y, TRACK_HIT_PX));
       this.updateTooltip();
+      // The link being drawn follows the cursor.
+      if (s.linkDraft) this.invalidate();
     }
     this.updateReadout();
   }
@@ -534,15 +600,18 @@ export class MapView {
     if (drag?.kind === 'pan') {
       const p = this.local(e);
       if (!drag.moved && drag.button === 2 && s.mode === 'design') {
-        // Right click without dragging deletes a point.
-        const hit = this.pointAt(p.x, p.y);
-        if (hit !== null) s.deletePoint(hit);
+        // Right click without dragging stops drawing a link, or deletes a point (a link's or the track's).
+        const link = s.tool === 'link' ? null : this.linkPointAt(p.x, p.y, false);
+        const hit = s.tool === 'link' || link ? null : this.pointAt(p.x, p.y);
+        if (s.tool === 'link') s.cancelLink();
+        else if (link) s.deleteLinkPoint(link);
+        else if (hit !== null) s.deletePoint(hit);
       } else if (!drag.moved && drag.button === 0 && s.mode === 'analyse') {
         this.focusCornerAt(p.x, p.y);
       } else if (!drag.moved && drag.button === 0 && s.mode === 'race') {
         this.pickCar(p.x, p.y);
       }
-    } else if (drag?.kind === 'point') {
+    } else if (drag?.kind === 'point' || drag?.kind === 'linkPoint') {
       s.commitEdit();
     } else if (drag?.kind === 'freehand') {
       this.finishFreehand(drag.points);
@@ -580,7 +649,7 @@ export class MapView {
   }
 
   private cancelDrag(): void {
-    if (this.drag?.kind === 'point') this.store.commitEdit();
+    if (this.drag?.kind === 'point' || this.drag?.kind === 'linkPoint') this.store.commitEdit();
     this.drag = null;
     this.updateCursor();
     this.invalidate();
@@ -591,6 +660,68 @@ export class MapView {
     const k = this.stationAt(px, py, TRACK_HIT_PX);
     const corner = k === null ? undefined : s.metrics?.corners.find((c) => inRange(k, c.start, c.end));
     s.setFocus(corner ? { start: corner.start, end: corner.end, centre: corner.apex } : null);
+  }
+
+  /**
+   * The Link tool: a click on the track starts a link there, clicks on the
+   * ground lead it across, and a click on the track further away ends it.
+   */
+  private linkClick(px: number, py: number, w: Vec2): void {
+    const s = this.store;
+    const t = s.track;
+    if (!t) return;
+    const k = this.stationAt(px, py, TRACK_HIT_PX);
+    const d = s.linkDraft;
+    if (!d) {
+      if (k !== null) s.startLink({ x: t.x[k], y: t.y[k] });
+      return;
+    }
+    if (k !== null && dist(t.x[k], t.y[k], d.from.x, d.from.y) > 30) s.finishLink({ x: t.x[k], y: t.y[k] });
+    else if (k === null) s.addLinkPoint(this.clampToMap(w));
+  }
+
+  /** The link point under the cursor: one of the points between its ends, or (with `ends`) where it leaves or joins. */
+  private linkPointAt(px: number, py: number, ends: boolean): LinkHit | null {
+    const s = this.store;
+    if (s.mode !== 'design' || s.tool !== 'points') return null;
+    let best: LinkHit | null = null;
+    let bestD = POINT_HIT_PX;
+    s.project.layouts.forEach((l, li) => l.links.forEach((link, ki) => {
+      const spots: [number, Vec2][] = ends ? [[-1, link.from], [-2, link.to]] : link.points.map((p, j) => [j, p]);
+      for (const [point, at] of spots) {
+        const d = dist(this.sx(at.x), this.sy(at.y), px, py);
+        if (d < bestD) {
+          bestD = d;
+          best = { layout: li + 1, link: ki, point };
+        }
+      }
+    }));
+    return best;
+  }
+
+  private startLinkDrag(hit: LinkHit): void {
+    const s = this.store;
+    s.selectLinkPoint(hit.point >= 0 ? hit : null);
+    s.selectLayout(hit.layout);
+    s.beginEdit();
+    this.drag = { kind: 'linkPoint', ...hit, moved: false };
+  }
+
+  /** Drags a link's point over the ground, or slides one of its ends along the track. */
+  private moveLinkPoint(drag: LinkHit & { moved: boolean }, px: number, py: number): void {
+    const s = this.store;
+    const link = s.project.layouts[drag.layout - 1]?.links[drag.link];
+    const t = s.track;
+    if (!link || !t || !this.cursor) return;
+    if (drag.point >= 0) {
+      s.moveLinkPoint(drag.layout, drag.link, drag.point, this.clampToMap(this.cursor));
+    } else {
+      // Its ends slide along the track.
+      const k = this.stationAt(px, py, 80);
+      if (k === null) return;
+      s.moveLinkPoint(drag.layout, drag.link, drag.point, { x: t.x[k], y: t.y[k] });
+    }
+    drag.moved = true;
   }
 
   /** Turns a sketched stroke into control points and replaces the track with it. */
@@ -692,6 +823,8 @@ export class MapView {
       ctx.strokeRect(x0 - 0.5, y0 - 0.5, size + 1, size + 1);
     }
 
+    this.drawLayoutGlow();
+    this.drawOtherRoads();
     this.drawTrack();
     if (this.store.mode === 'race') {
       this.drawRaceTrack();
@@ -699,8 +832,126 @@ export class MapView {
       this.drawRain();
     }
     this.drawPoints();
+    this.drawLinkPoints();
     if (this.drag?.kind === 'freehand') this.drawStroke(this.drag.points);
     this.drawScaleBar();
+  }
+
+  /** In Design, the layout picked glows under its whole path. */
+  private drawLayoutGlow(): void {
+    const s = this.store;
+    if (s.mode !== 'design' || s.layout === 0) return;
+    const t = s.layoutStates[s.layout - 1]?.built?.track;
+    if (!t) return;
+    const ctx = this.ctx;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (let k = 0; k <= t.n; k++) {
+      const i = k % t.n;
+      if (k === 0) ctx.moveTo(this.sx(t.x[i]), this.sy(t.y[i]));
+      else ctx.lineTo(this.sx(t.x[i]), this.sy(t.y[i]));
+    }
+    ctx.strokeStyle = LAYOUT_GLOW;
+    ctx.lineWidth = this.trackPx(t.width[0]) + 14;
+    ctx.stroke();
+  }
+
+  /**
+   * The roads not on the track shown: in Design the layouts' links (a link
+   * that cannot be built as a dashed red line through its points); in
+   * Analyse and Race the rest of the full circuit and the other layouts'
+   * links, greyed out.
+   */
+  private drawOtherRoads(): void {
+    const s = this.store;
+    const ctx = this.ctx;
+    const shown = s.shownLayout;
+    const design = s.mode === 'design';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const road = (xs: ArrayLike<number>, ys: ArrayLike<number>, widths: ArrayLike<number>, closed: boolean, fill: string) => {
+      const n = xs.length;
+      if (n < 2) return;
+      let w = 0;
+      for (let i = 0; i < n; i++) w += widths[i];
+      const px = this.trackPx(w / n);
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        if (i === 0) ctx.moveTo(this.sx(xs[i]), this.sy(ys[i]));
+        else ctx.lineTo(this.sx(xs[i]), this.sy(ys[i]));
+      }
+      if (closed) ctx.closePath();
+      ctx.strokeStyle = fill === OTHER_ROAD ? OTHER_EDGE : '#121418';
+      ctx.lineWidth = px + 2.5;
+      ctx.stroke();
+      ctx.strokeStyle = fill;
+      ctx.lineWidth = px;
+      ctx.stroke();
+      return px;
+    };
+    if (shown !== 0 && s.fullTrack) road(s.fullTrack.x, s.fullTrack.y, s.fullTrack.width, true, OTHER_ROAD);
+    s.layoutStates.forEach((state, li) => {
+      if (li + 1 === shown) return;
+      if (!state.built && design) {
+        // Not built: its points, dashed, so it can be fixed.
+        const l = s.project.layouts[li];
+        for (const link of l?.links ?? []) {
+          ctx.setLineDash([6, 5]);
+          ctx.strokeStyle = 'rgba(255, 77, 79, 0.9)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          [link.from, ...link.points, link.to].forEach((p, i) => (i === 0 ? ctx.moveTo(this.sx(p.x), this.sy(p.y)) : ctx.lineTo(this.sx(p.x), this.sy(p.y))));
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        return;
+      }
+      for (const link of state.build.links) road(link.x, link.y, link.width, false, design ? ASPHALT : OTHER_ROAD);
+    });
+  }
+
+  /** In Design, the links' points (squares) and ends (rings on the track), and the link being drawn. */
+  private drawLinkPoints(): void {
+    const s = this.store;
+    if (s.mode !== 'design') return;
+    const ctx = this.ctx;
+    const sel = s.linkSelected;
+    s.project.layouts.forEach((l, li) => l.links.forEach((link, ki) => {
+      const picked = s.layout === li + 1;
+      for (const end of [link.from, link.to]) {
+        ctx.beginPath();
+        ctx.arc(this.sx(end.x), this.sy(end.y), 5.5, 0, Math.PI * 2);
+        ctx.strokeStyle = picked ? LINK_POINT : 'rgba(255,255,255,0.75)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      link.points.forEach((p, j) => {
+        const selected = sel?.layout === li + 1 && sel.link === ki && sel.point === j;
+        const r = selected ? 5.5 : 4;
+        ctx.fillStyle = picked ? LINK_POINT : '#ffffff';
+        ctx.fillRect(this.sx(p.x) - r, this.sy(p.y) - r, 2 * r, 2 * r);
+        ctx.lineWidth = selected ? 2.5 : 1.5;
+        ctx.strokeStyle = selected ? ACCENT : '#111';
+        ctx.strokeRect(this.sx(p.x) - r, this.sy(p.y) - r, 2 * r, 2 * r);
+      });
+    }));
+    const d = s.linkDraft;
+    if (!d) return;
+    const pts = [d.from, ...d.points, ...(this.cursor ? [this.cursor] : [])];
+    ctx.setLineDash([7, 5]);
+    ctx.strokeStyle = LINK_POINT;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    pts.forEach((p, i) => (i === 0 ? ctx.moveTo(this.sx(p.x), this.sy(p.y)) : ctx.lineTo(this.sx(p.x), this.sy(p.y))));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (const p of [d.from, ...d.points]) {
+      ctx.beginPath();
+      ctx.arc(this.sx(p.x), this.sy(p.y), 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = LINK_POINT;
+      ctx.fill();
+    }
   }
 
   private trackPx(width: number): number {

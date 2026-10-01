@@ -19,6 +19,7 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | 8a | The race in 3D: detailed cars for every class, liveries, shadows | **done** |
 | 8b | Broadcast look: trackside and helicopter cameras, a director, on-screen graphics | **done** |
 | 9 | Rain and flags in 3D: weather, wet track, spray, lights, marshals and their flags | **done** |
+| 10 | Several layouts on one circuit: links, shared start line and pit lane, each layout's own lap times, licence and races | **done** |
 
 ## Running it
 
@@ -55,6 +56,8 @@ The app works in four modes, in order. Everything downstream recalculates live w
 - *Freehand*: drag to sketch a loop; it is simplified into editable points.
 - Set the width per point or for new points, reverse the direction, and put the start/finish at a selected point.
 - *Grading* evens out the ground profile over the smoothing length, but never digs in or raises the track more than the cut/fill limit.
+- *Layouts*: a circuit can have several layouts, as Silverstone and Brands Hatch do. **Add layout**, click the track where a link leaves it, click the ground to lead it across, and click the track again where it joins: the new layout runs round the circuit to the link, along it, and on from where it joins, skipping the stretch in between (a link across the infield makes a short layout, a loop out into the country a long one). **Add link** gives a layout another one. Drag a link's points (squares) to reshape it, and its ends along the track; right-click or Delete removes a point. A link leaves and joins the track along its direction of travel, and is graded over the ground to meet the track's height at both ends. Every layout keeps the start/finish line and shares the pit lane; the list shows each layout's length and lap time, or why it cannot be built (a link off the track, links that overlap, the start line skipped). A link that crosses the circuit on the level gets a warning.
+- Pick the layout to analyse and race with **Layout** above the map (or in the list). Lap times, the licence, the facilities, races and the 3D view follow it, with the rest of the circuit greyed out round it (in 3D built as roads, the ground shaped for all of them, run-off stopping where another road carries on). Each layout keeps its own race setup. Design always shows the full circuit; a race on a layout keeps running while you look at it.
 
 **3 Analyse.**
 - *Lap times* for ten classes: Formula 1, Formula 2, IndyCar, Hypercar, LMP2, GT3, GT4, TCR, MotoGP and Superbike. The table shows each class's flying lap, gap and top speed. Click a class for its three sector times, average and minimum speed, full-throttle share, braking zones, wing setting and vehicle data.
@@ -143,11 +146,18 @@ The current project autosaves in the browser. **Save** downloads a `.rtd.json` p
   "race": {
     "classes": [{ "vehicleId": "hypercar", "cars": 18 }, { "vehicleId": "gt3", "cars": 22 }],
     "kind": "time", "laps": 125, "minutes": 360, "grid": "qualifying", "weather": "changeable", "seed": "785642"
-  }
+  },
+  "layouts": [
+    {
+      "name": "National",
+      "links": [{ "from": { "x": 4107.86, "y": 3154.72 }, "to": { "x": 4186.81, "y": 4781.28 }, "points": [{ "x": 4252.13, "y": 3358.47, "width": 12 }] }],
+      "race": null
+    }
+  ]
 }
 ```
 
-Coordinates are metres from the map's top-left corner, x east and y south. The heightmap is never stored; it is regenerated from the terrain settings. `overrides` holds hand-placed facilities as world positions (`startFinish`, `speedTrap`, and `pitLane` with entry, exit and side); anything absent is placed automatically. `race` is the race setup with its own seed: the classes and their cars, `kind` (`laps` or `time`, and `laps` or `minutes` applies accordingly), the grid order and the `weather` (`dry`, `changeable` or `wet`). It is saved when a race is first started, so the file reproduces the race, weather included. Files from earlier versions, with a single `vehicleId` and `cars`, still open.
+Coordinates are metres from the map's top-left corner, x east and y south. The heightmap is never stored; it is regenerated from the terrain settings. `overrides` holds hand-placed facilities as world positions (`startFinish`, `speedTrap`, and `pitLane` with entry, exit and side); anything absent is placed automatically. `race` is the race setup with its own seed: the classes and their cars, `kind` (`laps` or `time`, and `laps` or `minutes` applies accordingly), the grid order and the `weather` (`dry`, `changeable` or `wet`). It is saved when a race is first started, so the file reproduces the race, weather included. Files from earlier versions, with a single `vehicleId` and `cars`, still open. `layouts` lists the circuit's other layouts: each link's ends (`from` and `to`, snapped to the track) and the points between, and the layout's own `race`. Files without it have only the full circuit.
 
 ## Lap times
 

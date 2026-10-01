@@ -104,7 +104,6 @@ export function buildTrack(design: TrackDesign, heightAt: HeightSampler, spacing
 
   const x = new Float64Array(n);
   const y = new Float64Array(n);
-  const s = new Float64Array(n);
   const width = new Float64Array(n);
   const seg = new Int32Array(n);
   let j = 0;
@@ -117,7 +116,6 @@ export function buildTrack(design: TrackDesign, heightAt: HeightSampler, spacing
     const b = dense[j + 1];
     x[k] = a.x + (b.x - a.x) * f;
     y[k] = a.y + (b.y - a.y) * f;
-    s[k] = target;
     const i = a.seg;
     // Parameter within the segment; the closing sample carries u = 1 of the last segment.
     const u = b.seg === i ? a.u + (b.u - a.u) * f : a.u + (1 - a.u) * f;
@@ -135,11 +133,25 @@ export function buildTrack(design: TrackDesign, heightAt: HeightSampler, spacing
     }
   }
 
-  const { heading, curvature } = headingAndCurvature(x, y, CURVATURE_SMOOTHING / ds);
-
   const terrain = new Float64Array(n);
   for (let k = 0; k < n; k++) terrain[k] = heightAt(x[k], y[k]);
   const z = gradeProfile(terrain, ds, design.grading);
+  return finishTrack({ ds, x, y, width, terrain, z, seg, pointStations });
+}
+
+/**
+ * A closed track from its stations' positions, widths and heights: works out
+ * the heading, curvature, gradient, vertical curvature and edges.
+ */
+export function finishTrack(p: {
+  ds: number; x: Float64Array; y: Float64Array; width: Float64Array; terrain: Float64Array; z: Float64Array; seg: Int32Array; pointStations: Int32Array;
+}): Track {
+  const { ds, x, y, width, terrain, z, seg, pointStations } = p;
+  const n = x.length;
+  const length = n * ds;
+  const s = new Float64Array(n);
+  for (let k = 0; k < n; k++) s[k] = k * ds;
+  const { heading, curvature } = headingAndCurvature(x, y, CURVATURE_SMOOTHING / ds);
 
   const gradient = new Float64Array(n);
   const rawV = new Float64Array(n);
@@ -180,14 +192,20 @@ export function buildTrack(design: TrackDesign, heightAt: HeightSampler, spacing
  * smoothing rounds off the kinks where the clamp takes over; a final
  * relaxation lets the profile bridge small bumps where the limit binds
  * instead of copying them, and ending on a clamp keeps the limit exact.
+ * Stations with a `fixed` height (not NaN) keep it: the rest of the profile
+ * is graded to meet them (a layout's link meeting the circuit it joins).
  */
-export function gradeProfile(terrain: Float64Array, ds: number, grading: GradingSettings): Float64Array {
+export function gradeProfile(terrain: Float64Array, ds: number, grading: GradingSettings, fixed?: Float64Array): Float64Array {
   const n = terrain.length;
   const sigma = grading.smoothing / ds;
   const limit = Math.max(0, grading.maxCutFill);
-  if (sigma < 0.5) return Float64Array.from(terrain);
+  if (sigma < 0.5) return fixed ? Float64Array.from(terrain, (v, k) => (Number.isNaN(fixed[k]) ? v : fixed[k])) : Float64Array.from(terrain);
   const clamp = (z: Float64Array) => {
     for (let k = 0; k < n; k++) {
+      if (fixed && !Number.isNaN(fixed[k])) {
+        z[k] = fixed[k];
+        continue;
+      }
       const lo = terrain[k] - limit;
       const hi = terrain[k] + limit;
       if (z[k] < lo) z[k] = lo;
