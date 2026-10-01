@@ -22,12 +22,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { COLORS, Earthworks, type MeshData, type Road, VERGE, buildRoads, buildSides, buildTerrain, pitRoad, startLine, trackRoad } from '../core/scene3d.ts';
+import { COLORS, Earthworks, type MeshData, type Road, VERGE, anchoredHeight, buildRoads, buildSides, buildTerrain, pitRoad, startLine, trackRoad } from '../core/scene3d.ts';
 import {
   type Footprint, type RunoffArea, TrackIndex, type Trees, buildGrandstands, buildGridMarks, buildKerbs, buildPitBuilding, buildRunoff, forest, inside, kerbRuns,
   placeGrandstands, placeTrees, runoffAreas, runoffTest,
 } from '../core/scenery.ts';
-import { type Pose, type Shot, type Vec3, flyoverDuration, flyoverPose, hotLapPose, trackShots } from '../core/shots.ts';
+import { type Pose, type Shot, type ShotInput, type Vec3, flyoverDuration, flyoverPose, hotLapPose, trackShots } from '../core/shots.ts';
 import { RAMP, RAMP_MIN_RANGE, ROCK, contourInterval } from '../core/terrainImage.ts';
 import type { Track } from '../core/track.ts';
 import { buckets, stationBuckets } from './colors.ts';
@@ -43,6 +43,8 @@ const HORIZON = 0xc9dbea;
 const FOV = 45;
 const MARKER = 0x3fb6ff;
 const LINE = 0xff5a36;
+/** Height of the corner labels over the track, metres. */
+const LABEL_LIFT = 8;
 /** Seconds for a camera move to a shot. */
 const GLIDE = 1.4;
 const SPEEDS = [0.5, 1, 2, 4];
@@ -97,8 +99,10 @@ export class View3D {
   private readonly surfaceMaterial = (offset: number) => new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: offset, polygonOffsetUnits: offset });
   private readonly meshes = new Map<string, THREE.Object3D>();
   private earth: Earthworks | null = null;
-  private labels: { el: HTMLElement; text: string; cls: string; p: THREE.Vector3; shown: boolean }[] = [];
+  /** Labels stand LABEL_LIFT metres over the track height `base`. */
+  private labels: { el: HTMLElement; text: string; cls: string; p: THREE.Vector3; base: number; shown: boolean }[] = [];
   private shots: Shot[] = [];
+  private shotInput: ShotInput | null = null;
   private trees: Trees | null = null;
   private forestCache: { hm: unknown; seed: string; data: Float32Array } | null = null;
   private visible = false;
@@ -365,7 +369,7 @@ export class View3D {
     let pose: { camera: THREE.Vector3; target: THREE.Vector3 } | null = null;
     if (id === 'overview') pose = this.overview();
     const shot = this.shots.find((x) => x.id === id);
-    if (shot) pose = { camera: this.fromWorld(shot.camera), target: this.fromWorld(shot.target) };
+    if (shot) pose = { camera: this.fromDrawn(shot.camera), target: this.fromDrawn(shot.target) };
     if (!pose) return;
     this.glide = {
       start: performance.now(), seconds: GLIDE,
@@ -383,13 +387,13 @@ export class View3D {
     this.glide = null;
     let path: Path | null = null;
     if (kind === 'fly') {
-      path = { kind, label: 'Flyover', time: 0, duration: flyoverDuration(t), speed: 1, paused: false, last: performance.now(), pose: (time) => flyoverPose(t, (time / flyoverDuration(t)) * t.length, (x, y) => earth.height(x, y)) };
+      path = { kind, label: 'Flyover', time: 0, duration: flyoverDuration(t), speed: 1, paused: false, last: performance.now(), pose: (time) => flyoverPose(t, (time / flyoverDuration(t)) * t.length, (x, y) => earth.height(x, y), this.drawn) };
     } else {
       const lap = s.lap;
       const line = s.performance?.line;
       if (!lap || !line || !s.performanceCurrent || line.n !== t.n) return;
       const eye = s.vehicle.kind === 'bike' ? 1.15 : 0.95;
-      path = { kind, label: `Hot lap: ${s.vehicle.name}`, time: 0, duration: lap.time, speed: 1, paused: false, last: performance.now(), pose: (time) => hotLapPose(t, line, lap, time, eye) };
+      path = { kind, label: `Hot lap: ${s.vehicle.name}`, time: 0, duration: lap.time, speed: 1, paused: false, last: performance.now(), pose: (time) => hotLapPose(t, line, lap, time, eye, this.drawn) };
     }
     this.path = path;
     this.controls.enabled = false;
@@ -421,7 +425,7 @@ export class View3D {
     const pose = p.pose(p.time);
     this.path = null;
     this.player.hidden = true;
-    this.controls.target.copy(this.fromWorld(pose.target));
+    this.controls.target.copy(this.fromDrawn(pose.target));
     this.controls.enabled = true;
     this.controls.update();
     this.requestRender();
@@ -444,8 +448,8 @@ export class View3D {
         p.last = now;
       }
       const pose = p.pose(p.time);
-      this.camera.position.copy(this.fromWorld(pose.camera));
-      this.camera.lookAt(this.fromWorld(pose.target));
+      this.camera.position.copy(this.fromDrawn(pose.camera));
+      this.camera.lookAt(this.fromDrawn(pose.target));
       this.updatePlayer();
       return !p.paused;
     }
@@ -496,6 +500,7 @@ export class View3D {
     for (const key of [...this.meshes.keys()]) this.remove(key);
     this.earth = null;
     this.trees = null;
+    this.shotInput = null;
     if (this.path) this.stopPath();
     if (!hm) return;
     // A map of another size needs a new overview.
@@ -567,14 +572,14 @@ export class View3D {
     this.buildTrees();
     this.buildLabels(t);
 
-    this.shots = t && s.metrics
-      ? trackShots({
+    this.shotInput = t && s.metrics
+      ? {
           track: t, metrics: s.metrics, pit: pitLane, height: (x, y) => earth.height(x, y),
           // The deepest run-off of the corner there, so the camera stands beyond all of it.
           runoff: (k, side) => Math.max(0, ...areas.filter((r) => r.side === side && r.stations.includes(k)).map((r) => Math.max(...r.depth))),
-        })
-      : [];
-    this.updateShotMenu();
+        }
+      : null;
+    this.updateShots();
 
     const fog = this.scene.fog as THREE.Fog;
     fog.near = hm.extent * 0.9;
@@ -684,6 +689,7 @@ export class View3D {
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    anchor(geo, Float32Array.from(t.z));
     const loop = new THREE.LineLoop(geo, new THREE.LineBasicMaterial({ color: LINE }));
     loop.visible = s.view.line;
     this.add('line', loop);
@@ -698,7 +704,7 @@ export class View3D {
     const at = (k: number, text: string, cls = '') => {
       const el = h('div', { class: `map3d-label ${cls}` }, text);
       this.labelLayer.append(el);
-      this.labels.push({ el, text, cls, p: new THREE.Vector3(t.x[k], t.z[k] + 8, t.y[k]), shown: false });
+      this.labels.push({ el, text, cls, p: new THREE.Vector3(t.x[k], t.z[k] + LABEL_LIFT / this.store.view.relief, t.y[k]), base: t.z[k], shown: false });
     };
     at(0, 'Start', 'start');
     for (const c of m?.corners ?? []) at(c.apex, `T${c.number}`);
@@ -708,6 +714,7 @@ export class View3D {
     this.remove(key);
     this.meshes.set(key, obj);
     this.world.add(obj);
+    reanchor(obj, this.store.view.relief);
   }
 
   private remove(key: string): void {
@@ -733,18 +740,31 @@ export class View3D {
     this.world.scale.set(1, r, 1);
     this.world.position.set(0, -this.zRef * r, 0);
     this.world.updateMatrixWorld(true);
-    // Trees keep their height whatever the exaggeration.
-    if (changed && this.trees) this.buildTrees();
+    if (!changed) return;
+    // Trees, buildings, kerbs, the racing line, labels and camera heights over the ground keep their real size.
+    if (this.trees) this.buildTrees();
+    for (const obj of this.meshes.values()) reanchor(obj, r);
+    for (const l of this.labels) l.p.y = l.base + LABEL_LIFT / r;
+    this.updateShots();
   }
+
+  /** The shots for the current height exaggeration. */
+  private updateShots(): void {
+    this.shots = this.shotInput ? trackShots({ ...this.shotInput, display: this.drawn }) : [];
+    this.updateShotMenu();
+  }
+
+  /** A real height as the view draws it: exaggerated around the lowest point of the map. */
+  private readonly drawn = (z: number): number => this.zRef + (z - this.zRef) * this.store.view.relief;
 
   /** A model point (x east, height, y south) in scene coordinates. */
   private toScene(x: number, z: number, y: number): THREE.Vector3 {
     return this.world.localToWorld(new THREE.Vector3(x, z, y));
   }
 
-  /** A world point from core (x east, y south, z up) in scene coordinates. */
-  private fromWorld(p: Vec3): THREE.Vector3 {
-    return this.toScene(p[0], p[2], p[1]);
+  /** A point from core (x east, y south, z up), its height as drawn (see `drawn`), in scene coordinates. */
+  private fromDrawn(p: Vec3): THREE.Vector3 {
+    return this.toScene(p[0], this.zRef + (p[2] - this.zRef) / this.store.view.relief, p[1]);
   }
 
   // ---- drawing -------------------------------------------------------------------
@@ -961,8 +981,39 @@ function geometry(m: MeshData): THREE.BufferGeometry {
     g.setAttribute('color', new THREE.BufferAttribute(lin, 3));
   }
   g.setIndex(new THREE.BufferAttribute(m.indices, 1));
+  if (m.anchors) anchor(g, m.anchors);
   g.computeBoundingSphere();
   return g;
+}
+
+interface Anchored {
+  /** Each vertex's height as built, the height it stands on, and the exaggeration its positions are set for. */
+  heights: Float32Array;
+  anchors: Float32Array;
+  relief: number;
+}
+
+/** Marks a geometry whose vertices keep their real height above their anchors (see MeshData.anchors). */
+function anchor(g: THREE.BufferGeometry, anchors: Float32Array): void {
+  const positions = g.getAttribute('position').array;
+  const heights = new Float32Array(anchors.length);
+  for (let i = 0; i < heights.length; i++) heights[i] = positions[i * 3 + 1];
+  const anchored: Anchored = { heights, anchors, relief: 1 };
+  g.userData.anchored = anchored;
+}
+
+/** Sets a model's anchored vertices for a height exaggeration, undoing it above their anchors. */
+function reanchor(obj: THREE.Object3D, relief: number): void {
+  obj.traverse((o) => {
+    const g = (o as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+    const a = g?.userData.anchored as Anchored | undefined;
+    if (!g || !a || a.relief === relief) return;
+    const pos = g.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < a.heights.length; i++) pos.array[i * 3 + 1] = anchoredHeight(a.heights[i], a.anchors[i], relief);
+    pos.needsUpdate = true;
+    g.computeBoundingSphere();
+    a.relief = relief;
+  });
 }
 
 /** Paints a geometry one colour (as vertex colours, linear). */

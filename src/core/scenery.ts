@@ -24,7 +24,7 @@ import { createNoise2D, fbm } from './noise.ts';
 import type { PitLane } from './pitLane.ts';
 import type { RacingLine } from './racingLine.ts';
 import { seededRandom } from './rng.ts';
-import { type Earthworks, type MeshData, MeshBuilder, type Road, SINK, VERGE } from './scene3d.ts';
+import { type Earthworks, type FaceCorner, type MeshData, MeshBuilder, type Road, SINK, VERGE } from './scene3d.ts';
 import type { GridSlot } from './startFinish.ts';
 import type { Track } from './track.ts';
 
@@ -184,8 +184,8 @@ export function buildKerbs(t: Track, runs: readonly KerbRun[]): MeshData {
       const a = frame(t, stations[i]);
       const b = frame(t, stations[i + 1]);
       const half = (k: number) => t.width[k] / 2;
-      const inner = (f: Frame, k: number): Vec3 => [f.x + f.lx * run.side * half(k), f.z + 0.05, f.y + f.ly * run.side * half(k)];
-      const outer = (f: Frame, k: number): Vec3 => [f.x + f.lx * run.side * (half(k) + KERB_WIDTH), f.z + 0.05, f.y + f.ly * run.side * (half(k) + KERB_WIDTH)];
+      const inner = (f: Frame, k: number): FaceCorner => [f.x + f.lx * run.side * half(k), f.z + 0.05, f.y + f.ly * run.side * half(k), f.z];
+      const outer = (f: Frame, k: number): FaceCorner => [f.x + f.lx * run.side * (half(k) + KERB_WIDTH), f.z + 0.05, f.y + f.ly * run.side * (half(k) + KERB_WIDTH), f.z];
       const color = stations[i] % 2 === 0 ? RED : WHITE;
       const ia = inner(a, stations[i]);
       const oa = outer(a, stations[i]);
@@ -193,7 +193,7 @@ export function buildKerbs(t: Track, runs: readonly KerbRun[]): MeshData {
       const ib = inner(b, stations[i + 1]);
       mb.face([ia, oa, ob, ib], UP, color);
       // The kerb's outer face, down into the verge.
-      mb.face([oa, ob, [ob[0], ob[1] - 0.25, ob[2]], [oa[0], oa[1] - 0.25, oa[2]]], [a.lx * run.side, 0, a.ly * run.side], color);
+      mb.face([oa, ob, [ob[0], ob[1] - 0.25, ob[2], ob[3]], [oa[0], oa[1] - 0.25, oa[2], oa[3]]], [a.lx * run.side, 0, a.ly * run.side], color);
     }
   }
   return mb.build();
@@ -282,7 +282,8 @@ export function buildRunoff(t: Track, areas: readonly RunoffArea[], earth: Earth
         // The ground eases up from under the road over the first 2 m beyond the verge: start level with
         // the verge's edge and rise to just above the ground there.
         const ease = Math.max(0, 1 - d / 2);
-        mb.vertex(x, earth.height(x, y) + SINK * ease + 0.2 * (1 - ease), y, nx, ny, nz, colorAt(d));
+        const floor = earth.height(x, y) + SINK * ease;
+        mb.vertex(x, floor + 0.2 * (1 - ease), y, nx, ny, nz, colorAt(d), floor);
       }
     });
     for (let i = 0; i + 1 < a.stations.length; i++) {
@@ -390,35 +391,33 @@ export function buildPitBuilding(pit: PitLane, road: Road): { mesh: MeshData; fo
   const roof = [0.52, 0.55, 0.6];
   const front = halfLane + 1.5;
   const rear = front + PIT_DEPTH;
+  // A point `d` metres out from the lane's centre and `h` metres above the floor there.
+  const at = (f: Frame, d: number, h: number): FaceCorner => {
+    const [x, y] = out(f, d);
+    return [x, f.z + h, y, f.z];
+  };
+  const doorTop = 4.5;
+  const top = PIT_HEIGHT + 0.6;
+  const eave = front - 1.5;
   for (let i = 0; i + 1 < frames.length; i++) {
     const a = frames[i];
     const b = frames[i + 1];
+    // The walls reach 3 m into the ground below the lower end.
     const base = Math.min(a.z, b.z) - 3;
-    const floorA = a.z;
-    const floorB = b.z;
+    const foot = (f: Frame, d: number) => at(f, d, base - f.z);
     const o: Vec3 = [a.lx * pit.side, 0, a.ly * pit.side];
     const facing: Vec3 = [-o[0], 0, -o[2]];
-    const [fax, fay] = out(a, front);
-    const [fbx, fby] = out(b, front);
-    const [bax, bay] = out(a, rear);
-    const [bbx, bby] = out(b, rear);
-    const doorTop = 4.5;
-    mb.face([[fax, base, fay], [fbx, base, fby], [fbx, floorB + doorTop, fby], [fax, floorA + doorTop, fay]], facing, doors[i] ? door : light);
-    mb.face([[fax, floorA + doorTop, fay], [fbx, floorB + doorTop, fby], [fbx, floorB + PIT_HEIGHT, fby], [fax, floorA + PIT_HEIGHT, fay]], facing, light);
-    mb.face([[bax, base, bay], [bbx, base, bby], [bbx, floorB + PIT_HEIGHT, bby], [bax, floorA + PIT_HEIGHT, bay]], o, back);
+    mb.face([foot(a, front), foot(b, front), at(b, front, doorTop), at(a, front, doorTop)], facing, doors[i] ? door : light);
+    mb.face([at(a, front, doorTop), at(b, front, doorTop), at(b, front, PIT_HEIGHT), at(a, front, PIT_HEIGHT)], facing, light);
+    mb.face([foot(a, rear), foot(b, rear), at(b, rear, PIT_HEIGHT), at(a, rear, PIT_HEIGHT)], o, back);
     // Roof, reaching out over the lane edge.
-    const [rax, ray] = out(a, front - 1.5);
-    const [rbx, rby] = out(b, front - 1.5);
-    const top = PIT_HEIGHT + 0.6;
-    mb.face([[rax, floorA + top, ray], [rbx, floorB + top, rby], [bbx, floorB + top, bby], [bax, floorA + top, bay]], UP, roof);
-    mb.face([[rax, floorA + PIT_HEIGHT, ray], [rbx, floorB + PIT_HEIGHT, rby], [rbx, floorB + top, rby], [rax, floorA + top, ray]], facing, light);
-    mb.face([[rax, floorA + PIT_HEIGHT, ray], [rbx, floorB + PIT_HEIGHT, rby], [fbx, floorB + PIT_HEIGHT, fby], [fax, floorA + PIT_HEIGHT, fay]], [0, -1, 0], back);
+    mb.face([at(a, eave, top), at(b, eave, top), at(b, rear, top), at(a, rear, top)], UP, roof);
+    mb.face([at(a, eave, PIT_HEIGHT), at(b, eave, PIT_HEIGHT), at(b, eave, top), at(a, eave, top)], facing, light);
+    mb.face([at(a, eave, PIT_HEIGHT), at(b, eave, PIT_HEIGHT), at(b, front, PIT_HEIGHT), at(a, front, PIT_HEIGHT)], [0, -1, 0], back);
   }
   // End walls.
   for (const [f, dir] of [[frames[0], -1], [frames[frames.length - 1], 1]] as const) {
-    const [fx, fy] = out(f, front);
-    const [bx, by] = out(f, rear);
-    mb.face([[fx, f.z - 3, fy], [bx, f.z - 3, by], [bx, f.z + PIT_HEIGHT + 0.6, by], [fx, f.z + PIT_HEIGHT + 0.6, fy]], [f.tx * dir, 0, f.ty * dir], back);
+    mb.face([at(f, front, -3), at(f, rear, -3), at(f, rear, top), at(f, front, top)], [f.tx * dir, 0, f.ty * dir], back);
   }
   // The pit wall: concrete, a little over a metre high, between the lane and the track.
   const wallCuts: number[] = [];
@@ -428,19 +427,15 @@ export function buildPitBuilding(pit: PitLane, road: Road): { mesh: MeshData; fo
   wallCuts.push(w1);
   const wall = along(pit.x, pit.y, road.z, wallCuts);
   const concrete = [0.78, 0.79, 0.8];
+  const inner = -(halfLane + 0.7);
+  const outer = inner - 0.4;
   for (let i = 0; i + 1 < wall.length; i++) {
     const a = wall[i];
     const b = wall[i + 1];
     const o: Vec3 = [a.lx * pit.side, 0, a.ly * pit.side];
-    const inner = -(halfLane + 0.7);
-    const outer = inner - 0.4;
-    const [iax, iay] = out(a, inner);
-    const [ibx, iby] = out(b, inner);
-    const [oax, oay] = out(a, outer);
-    const [obx, oby] = out(b, outer);
-    mb.face([[iax, a.z + 1.1, iay], [ibx, b.z + 1.1, iby], [obx, b.z + 1.1, oby], [oax, a.z + 1.1, oay]], UP, concrete);
-    mb.face([[iax, a.z - 0.5, iay], [ibx, b.z - 0.5, iby], [ibx, b.z + 1.1, iby], [iax, a.z + 1.1, iay]], o, concrete);
-    mb.face([[oax, a.z - 0.5, oay], [obx, b.z - 0.5, oby], [obx, b.z + 1.1, oby], [oax, a.z + 1.1, oay]], [-o[0], 0, -o[2]], concrete);
+    mb.face([at(a, inner, 1.1), at(b, inner, 1.1), at(b, outer, 1.1), at(a, outer, 1.1)], UP, concrete);
+    mb.face([at(a, inner, -0.5), at(b, inner, -0.5), at(b, inner, 1.1), at(a, inner, 1.1)], o, concrete);
+    mb.face([at(a, outer, -0.5), at(b, outer, -0.5), at(b, outer, 1.1), at(a, outer, 1.1)], [-o[0], 0, -o[2]], concrete);
   }
   const first = frames[0];
   const last = frames[frames.length - 1];
@@ -557,7 +552,7 @@ export function buildGrandstands(stands: readonly Stand[]): MeshData {
   for (const s of stands) {
     const top = s.base + 1 + STAND_ROWS * STAND_RISE;
     const roof = top + 3.5;
-    const at = (p: Stand['front'][number], d: number, z: number): Vec3 => [p.x + p.ox * d, z, p.y + p.oy * d];
+    const at = (p: Stand['front'][number], d: number, z: number): FaceCorner => [p.x + p.ox * d, z, p.y + p.oy * d, s.base];
     for (let i = 0; i + 1 < s.front.length; i++) {
       const a = s.front[i];
       const b = s.front[i + 1];
@@ -596,7 +591,8 @@ export function buildGridMarks(t: Track, slots: readonly GridSlot[], index: Trac
   for (const s of slots) {
     const near = index.nearest(s.x, s.y, 30);
     if (!near) continue;
-    const z = t.z[near.k] + 0.02;
+    const road = t.z[near.k];
+    const z = road + 0.02;
     const hx = Math.cos(s.heading);
     const hy = Math.sin(s.heading);
     const lx = hy;
@@ -606,10 +602,10 @@ export function buildGridMarks(t: Track, slots: readonly GridSlot[], index: Trac
     const w = 1.8;
     const l = 0.15;
     mb.face([
-      [cx + lx * w - hx * l, z, cy + ly * w - hy * l],
-      [cx - lx * w - hx * l, z, cy - ly * w - hy * l],
-      [cx - lx * w + hx * l, z, cy - ly * w + hy * l],
-      [cx + lx * w + hx * l, z, cy + ly * w + hy * l],
+      [cx + lx * w - hx * l, z, cy + ly * w - hy * l, road],
+      [cx - lx * w - hx * l, z, cy - ly * w - hy * l, road],
+      [cx - lx * w + hx * l, z, cy - ly * w + hy * l, road],
+      [cx + lx * w + hx * l, z, cy + ly * w + hy * l, road],
     ], UP, WHITE);
   }
   return mb.build();

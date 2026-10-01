@@ -41,7 +41,25 @@ export interface MeshData {
   indices: Uint32Array;
   /** rgb per vertex (sRGB, 0..1), when the mesh carries colours. */
   colors?: Float32Array;
+  /**
+   * Per vertex, for things of a real size (buildings, kerbs): the height the
+   * vertex stands on, so it keeps its real height above it when the view
+   * exaggerates the relief (see `anchoredHeight`). A vertex at its anchor moves
+   * with the ground. Absent: the whole mesh is part of the landscape.
+   */
+  anchors?: Float32Array;
 }
+
+/**
+ * The height to give a vertex in a model whose relief is drawn `relief` times
+ * as tall, so that it stays `y - anchor` metres above its (exaggerated) anchor.
+ */
+export function anchoredHeight(y: number, anchor: number, relief: number): number {
+  return anchor + (y - anchor) / relief;
+}
+
+/** A face corner: x, height, z, and optionally the floor it stands on (see `MeshBuilder.face`). */
+export type FaceCorner = readonly [number, number, number, number?];
 
 export interface TerrainMesh extends MeshData {
   /** Per vertex: how far the earthworks moved the ground (positive fill, negative cut), metres. */
@@ -606,15 +624,20 @@ export class MeshBuilder {
   private nrm: number[] = [];
   private col: number[] = [];
   private idx: number[] = [];
+  private anc: number[] = [];
+  private anchored = false;
 
   get vertexCount(): number {
     return this.pos.length / 3;
   }
 
-  vertex(x: number, y: number, z: number, nx: number, ny: number, nz: number, color: readonly number[]): number {
+  /** A vertex; with an anchor it keeps its real height above that (see `MeshData.anchors`). */
+  vertex(x: number, y: number, z: number, nx: number, ny: number, nz: number, color: readonly number[], anchor = y): number {
     this.pos.push(x, y, z);
     this.nrm.push(nx, ny, nz);
     this.col.push(color[0], color[1], color[2]);
+    this.anc.push(anchor);
+    if (anchor !== y) this.anchored = true;
     return this.pos.length / 3 - 1;
   }
 
@@ -634,15 +657,17 @@ export class MeshBuilder {
   /**
    * A flat face with one colour, from corners in order around it, turned so
    * that it faces along `normal` (its own vertices, so edges stay sharp).
+   * A corner with a floor keeps its real height above that floor; corners
+   * below their floor (foundations reaching into the ground) move with it.
    */
-  face(corners: readonly (readonly [number, number, number])[], normal: readonly [number, number, number], color: readonly number[]): void {
+  face(corners: readonly FaceCorner[], normal: readonly [number, number, number], color: readonly number[]): void {
     const [a, b, c] = corners;
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
     const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
     const along = (uy * vz - uz * vy) * normal[0] + (uz * vx - ux * vz) * normal[1] + (ux * vy - uy * vx) * normal[2];
     const len = Math.hypot(normal[0], normal[1], normal[2]) || 1;
     const first = this.vertexCount;
-    for (const p of corners) this.vertex(p[0], p[1], p[2], normal[0] / len, normal[1] / len, normal[2] / len, color);
+    for (const p of corners) this.vertex(p[0], p[1], p[2], normal[0] / len, normal[1] / len, normal[2] / len, color, p[3] === undefined ? p[1] : Math.min(p[1], p[3]));
     for (let i = 1; i + 1 < corners.length; i++) {
       if (along >= 0) this.tri(first, first + i, first + i + 1);
       else this.tri(first, first + i + 1, first + i);
@@ -655,6 +680,7 @@ export class MeshBuilder {
       normals: Float32Array.from(this.nrm),
       colors: Float32Array.from(this.col),
       indices: Uint32Array.from(this.idx),
+      ...(this.anchored ? { anchors: Float32Array.from(this.anc) } : {}),
     };
   }
 }

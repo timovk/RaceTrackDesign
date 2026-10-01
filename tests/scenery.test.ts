@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assessLicence } from '../src/core/licence.ts';
-import { Earthworks, type MeshData, VERGE, pitRoad, trackRoad } from '../src/core/scene3d.ts';
+import { Earthworks, type MeshData, VERGE, anchoredHeight, pitRoad, trackRoad } from '../src/core/scene3d.ts';
 import {
   KERB_WIDTH, TrackIndex, buildGrandstands, buildGridMarks, buildKerbs, buildPitBuilding, buildRunoff, forest, inside, kerbRuns, placeGrandstands, placeTrees, runoffAreas, runoffTest,
 } from '../src/core/scenery.ts';
@@ -17,6 +17,12 @@ const earth = new Earthworks(hm, roads);
 const index = new TrackIndex(t);
 const licence = assessLicence({ track: t, metrics, issues: [], performance, facilities, heightmap: hm, vehicles: VEHICLES });
 const areas = runoffAreas(t, metrics.corners, licence.runoff, earth, index);
+
+/** Checks that every vertex stands on `floor` (keeping its real height above it), or moves with the ground below it. */
+function expectAnchoredTo(m: MeshData, floor: (i: number) => number): void {
+  expect(m.anchors).toBeDefined();
+  for (let i = 0; i < m.anchors!.length; i++) expect(m.anchors![i]).toBeCloseTo(Math.min(m.positions[i * 3 + 1], floor(i)), 4);
+}
 
 /** Every triangle's normal, skipping degenerate ones. */
 function normals(m: MeshData): { nx: number; ny: number; nz: number }[] {
@@ -66,6 +72,7 @@ describe('kerbs', () => {
       expect(y).toBeLessThan(100.1);
     }
     expect(KERB_WIDTH).toBeLessThan(VERGE);
+    expectAnchoredTo(mesh, () => 100);
   });
 });
 
@@ -87,6 +94,10 @@ describe('run-off', () => {
     for (let v = 0; v < mesh.positions.length / 3; v++) {
       expect(mesh.positions[v * 3 + 1]).toBeGreaterThan(100 - VERGE * 0.03 - 1e-9);
       expect(mesh.positions[v * 3 + 1]).toBeLessThan(100.2 + 1e-9);
+      // However tall the relief is drawn, it stays at most 0.2 m over the ground.
+      const lift = mesh.positions[v * 3 + 1] - mesh.anchors![v];
+      expect(lift).toBeGreaterThanOrEqual(-1e-4);
+      expect(lift).toBeLessThan(0.2 + 1e-4);
     }
   });
 
@@ -127,6 +138,18 @@ describe('buildings', () => {
     }
     const mesh = buildGrandstands(stands);
     expect(mesh.indices.length).toBeGreaterThan(0);
+  });
+
+  it('keep their real size when the view draws the relief taller', () => {
+    // Everything above the floor keeps its height over it; the foundations below move with the ground.
+    expectAnchoredTo(building.mesh, () => 100);
+    const stands = placeGrandstands(t, metrics.corners, facilities.overtaking, pit, areas, earth, [building.footprint]);
+    for (const s of stands) expectAnchoredTo(buildGrandstands([s]), () => s.base);
+    // Drawn three times as tall (around sea level), the roof is still 8.6 m over the pit lane.
+    const m = building.mesh;
+    let top = -Infinity;
+    for (let i = 0; i < m.anchors!.length; i++) top = Math.max(top, anchoredHeight(m.positions[i * 3 + 1], m.anchors![i], 3));
+    expect(top * 3 - 300).toBeCloseTo(8.6, 3);
   });
 
   it('marks the grid boxes on the track', () => {
@@ -191,6 +214,28 @@ describe('camera shots', () => {
     expect(across(pitShot.camera)).toBeLessThan(0);
     expect(across(pitShot.target)).toBeGreaterThan(0);
     expect((pitShot.target[0] - pitShot.camera[0]) * dx + (pitShot.target[1] - pitShot.camera[1]) * dy).toBeLessThan(0);
+  });
+
+  it('stands its cameras their real height over the ground as the view draws it', () => {
+    // The relief drawn three times as tall (around sea level): the flat fixture at 100 m is drawn at 300 m.
+    const display = (z: number) => z * 3;
+    const tall = trackShots({ track: t, metrics, pit, height, display, runoff: () => 0 });
+    const plain = trackShots({ track: t, metrics, pit, height, runoff: () => 0 });
+    expect(tall.map((s) => s.id)).toEqual(plain.map((s) => s.id));
+    // Each camera and target keeps its height over what it stands on: the track at 100 m, or the
+    // ground, which sits 0.3 m under the roads near them.
+    const raised = (a: number, b: number) => {
+      expect(a - b).toBeGreaterThan(2 * 99.7 - 1e-6);
+      expect(a - b).toBeLessThan(2 * 100 + 1e-6);
+    };
+    tall.forEach((s, i) => {
+      expect(s.camera[0]).toBeCloseTo(plain[i].camera[0], 6);
+      raised(s.camera[2], plain[i].camera[2]);
+      raised(s.target[2], plain[i].target[2]);
+    });
+    const lap = performance.laps.find((l) => l.vehicleId === 'f1')!;
+    expect(hotLapPose(t, performance.line, lap, 10, 0.95, display).camera[2]).toBeCloseTo(300.95, 6);
+    expect(flyoverPose(t, 500, height, display).camera[2] - 300).toBeCloseTo(flyoverPose(t, 500, height).camera[2] - 100, 6);
   });
 
   it('raises a camera to see over a hill', () => {

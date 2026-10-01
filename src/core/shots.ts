@@ -8,6 +8,10 @@
  * from behind the grid; the pit boxes along the lane; the steepest climb and
  * drop from beside their foot, looking up; and the highest point. A camera
  * whose view a hill would block is raised until it sees over it.
+ *
+ * Heights can be given as the 3D view draws them (`display`, its height
+ * exaggeration): the cameras then stand their real height above the drawn
+ * ground and track, as a person or a camera tower would.
  */
 import type { TrackMetrics } from './analysis.ts';
 import type { LapResult } from './lapSim.ts';
@@ -39,16 +43,22 @@ export interface ShotInput {
   height: (x: number, y: number) => number;
   /** Run-off depth beyond the verge beside station k on a side (1 left, -1 right). */
   runoff?: (k: number, side: 1 | -1) => number;
+  /** A height as drawn; shots come out in drawn heights. Default: as it is. */
+  display?: Display;
 }
+
+/** Maps a real height to the height the view draws it at. */
+export type Display = (z: number) => number;
+const AS_IS: Display = (z) => z;
 
 function mod(a: number, n: number): number {
   return ((a % n) + n) % n;
 }
 
-/** Point on the track at station k, offset `side` metres to the left and `up` metres above the surface. */
-function trackPoint(t: Track, k: number, side = 0, up = 0): Vec3 {
+/** Point on the track at station k, offset `side` metres to the left and `up` metres above the (drawn) surface. */
+function trackPoint(t: Track, k: number, side = 0, up = 0, display = AS_IS): Vec3 {
   const h = t.heading[k];
-  return [t.x[k] + Math.sin(h) * side, t.y[k] - Math.cos(h) * side, t.z[k] + up];
+  return [t.x[k] + Math.sin(h) * side, t.y[k] - Math.cos(h) * side, display(t.z[k]) + up];
 }
 
 /** Raises the camera until the ground no longer blocks its view of the target, and keeps it above the ground. */
@@ -79,14 +89,17 @@ function lowerSide(t: Track, k: number, reach: number, height: (x: number, y: nu
 }
 
 export function trackShots(input: ShotInput): Shot[] {
-  const { track: t, metrics, pit, height } = input;
+  const { track: t, metrics, pit } = input;
+  const display = input.display ?? AS_IS;
+  const height = (x: number, y: number) => display(input.height(x, y));
+  const at = (k: number, side = 0, up = 0) => trackPoint(t, k, side, up, display);
   const n = t.n;
   const shots: Shot[] = [];
   const add = (id: string, label: string, camera: Vec3, target: Vec3) => shots.push({ id, label, camera: clearView(camera, target, height), target });
 
   // The start, from above and behind the grid, looking down the straight.
   const behind = mod(-Math.round(240 / t.ds), n);
-  add('start', 'Start and grid', trackPoint(t, behind, 0, 22), trackPoint(t, Math.round(60 / t.ds) % n, 0, 1));
+  add('start', 'Start and grid', at(behind, 0, 22), at(Math.round(60 / t.ds) % n, 0, 1));
 
   if (pit) {
     // Back along the boxes from beyond their exit end, from above the pit wall, facing the garages
@@ -112,9 +125,9 @@ export function trackShots(input: ShotInput): Shot[] {
     const depth = input.runoff?.(k, side) ?? 0;
     // A camera tower just beyond the run-off.
     const out = t.width[k] / 2 + VERGE + depth + 15;
-    const cam = trackPoint(t, k, side * out);
-    cam[2] = Math.max(height(cam[0], cam[1]) + 16, t.z[k] + 12);
-    add(`corner-${c.number}`, cornerName(c), cam, trackPoint(t, k, 0, 1));
+    const cam = at(k, side * out);
+    cam[2] = Math.max(height(cam[0], cam[1]) + 16, display(t.z[k]) + 12);
+    add(`corner-${c.number}`, cornerName(c), cam, at(k, 0, 1));
   }
 
   // Steepest climb and drop, averaged over about 40 m, seen from beside the bottom of the slope
@@ -131,7 +144,7 @@ export function trackShots(input: ShotInput): Shot[] {
     const bottom = mod(k - dir * Math.round(80 / t.ds), n);
     const top = mod(k + dir * Math.round(30 / t.ds), n);
     const side = lowerSide(t, bottom, 40, height);
-    add(id, label, trackPoint(t, bottom, side * 30, 4), trackPoint(t, top, 0, 2));
+    add(id, label, at(bottom, side * 30, 4), at(top, 0, 2));
   };
   if (grade(up) > 0.02) slopeShot('climb', `Steepest climb (${Math.round(grade(up) * 100)}%)`, up, 1);
   if (grade(down) < -0.02) slopeShot('drop', `Steepest drop (${Math.round(-grade(down) * 100)}%)`, down, -1);
@@ -140,7 +153,7 @@ export function trackShots(input: ShotInput): Shot[] {
   let top = 0;
   for (let k = 1; k < n; k++) if (t.z[k] > t.z[top]) top = k;
   const topSide = lowerSide(t, top, 150, height);
-  add('high', 'Highest point', trackPoint(t, top, topSide * 150, 22), trackPoint(t, top, 0, 2));
+  add('high', 'Highest point', at(top, topSide * 150, 22), at(top, 0, 2));
   return shots;
 }
 
@@ -160,22 +173,22 @@ function lapPosition(lap: LapResult, time: number): { k: number; f: number } {
   return { k: lo, f: Math.max(0, Math.min(1, f)) };
 }
 
-/** A point on the racing line (or the centreline) at a fractional station, with the track height. */
-function onLine(t: Track, line: RacingLine | null, u: number, up: number): Vec3 {
+/** A point on the racing line (or the centreline) at a fractional station, `up` metres above the (drawn) track. */
+function onLine(t: Track, line: RacingLine | null, u: number, up: number, display: Display): Vec3 {
   const n = t.n;
   const k = Math.floor(mod(u, n));
   const k1 = (k + 1) % n;
   const f = mod(u, n) - k;
   const xs = line ? line.x : t.x;
   const ys = line ? line.y : t.y;
-  return [xs[k] + (xs[k1] - xs[k]) * f, ys[k] + (ys[k1] - ys[k]) * f, t.z[k] + (t.z[k1] - t.z[k]) * f + up];
+  return [xs[k] + (xs[k1] - xs[k]) * f, ys[k] + (ys[k1] - ys[k]) * f, display(t.z[k] + (t.z[k1] - t.z[k]) * f) + up];
 }
 
 /** The mean of points ahead, for a steady look direction. */
-function lookAhead(t: Track, line: RacingLine | null, u: number, metres: readonly number[], up: number): Vec3 {
+function lookAhead(t: Track, line: RacingLine | null, u: number, metres: readonly number[], up: number, display: Display): Vec3 {
   const sum: Vec3 = [0, 0, 0];
   for (const m of metres) {
-    const p = onLine(t, line, u + m / t.ds, up);
+    const p = onLine(t, line, u + m / t.ds, up, display);
     sum[0] += p[0];
     sum[1] += p[1];
     sum[2] += p[2];
@@ -184,18 +197,18 @@ function lookAhead(t: Track, line: RacingLine | null, u: number, metres: readonl
 }
 
 /** The driver's view at `time` into a flying lap: on the racing line at eye height, looking ahead through the corner. */
-export function hotLapPose(t: Track, line: RacingLine, lap: LapResult, time: number, eye: number): Pose {
+export function hotLapPose(t: Track, line: RacingLine, lap: LapResult, time: number, eye: number, display = AS_IS): Pose {
   const { k, f } = lapPosition(lap, time);
   const u = k + f;
-  return { camera: onLine(t, line, u, eye), target: lookAhead(t, line, u, [25, 45, 65], eye - 0.3) };
+  return { camera: onLine(t, line, u, eye, display), target: lookAhead(t, line, u, [25, 45, 65], eye - 0.3, display) };
 }
 
 /** A drone following the centreline `distance` metres into the lap, behind and above, looking ahead. */
-export function flyoverPose(t: Track, distance: number, height: (x: number, y: number) => number): Pose {
+export function flyoverPose(t: Track, distance: number, height: (x: number, y: number) => number, display = AS_IS): Pose {
   const u = mod(distance, t.length) / t.ds;
-  const camera = lookAhead(t, null, u, [-70, -60, -50], 40);
-  camera[2] = Math.max(camera[2], height(camera[0], camera[1]) + 30);
-  return { camera, target: lookAhead(t, null, u, [40, 100, 160], 0) };
+  const camera = lookAhead(t, null, u, [-70, -60, -50], 40, display);
+  camera[2] = Math.max(camera[2], display(height(camera[0], camera[1])) + 30);
+  return { camera, target: lookAhead(t, null, u, [40, 100, 160], 0, display) };
 }
 
 /** Speed of the flyover drone, m/s. */

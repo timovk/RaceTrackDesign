@@ -93,7 +93,7 @@ export class Store {
   /** Hovered station index (from the map, profile or a list). */
   hover: number | null = null;
   focus: Focus | null = null;
-  view: ViewOptions = { colorBy: 'plain', contours: true, labels: true, line: false, facilities: true, runoffGrade: null, dimension: '2d', relief: 1 };
+  view: ViewOptions = { colorBy: 'plain', contours: true, labels: true, line: false, facilities: true, runoffGrade: null, dimension: '2d', relief: 3 };
 
   private readonly client = new TerrainClient();
   private readonly performanceClient = new PerformanceClient((a, e) => this.receiveAnalysis(a, e));
