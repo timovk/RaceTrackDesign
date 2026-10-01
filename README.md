@@ -16,6 +16,9 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | 6 | Multi-class, safety car, endurance, weather | **done** |
 | 7a | 3D view: terrain with the track's earthworks, track and pit lane, orbit camera | **done** |
 | 7b | 3D dressing (kerbs, run-off, buildings, trees), camera shots, image export | **done** |
+| 8a | The race in 3D: detailed cars for every class, liveries, shadows | **done** |
+| 8b | Broadcast look: trackside and helicopter cameras, a director, on-screen graphics | next |
+| 9 | Rain and flag visuals in 3D | later |
 
 ## Running it
 
@@ -86,7 +89,14 @@ Warnings flag corners tighter than the track is wide, very tight corners, steep 
 - **Flyover** follows the track as a drone; **Hot lap** rides the racing line at the pace of the class picked in Analyse, at the driver's eye height. Pause, play at ×0.5 to ×4, or **Stop** to look around from where the camera is; dragging the view stops it too.
 - **Save image** saves the view as a PNG at the screen size, twice it, or 4K (3840 × 2160), with the labels drawn in.
 - The track colouring, **Contours**, **Labels** (corner numbers and the start) and **Line** (the racing line) work in 3D too. Hovering the track marks it on the elevation profile, and hovering the profile marks the spot in 3D; the readout shows the position and height under the cursor.
-- Editing happens in 2D. In Race mode the 3D view shows the track without the cars, and **Map image** saves the 3D view.
+- Editing happens in 2D. In Race mode **Map image** saves the 3D view.
+
+**The race in 3D.** In Race mode the 3D view shows the race: every car as a model of its class (Formula 1, Formula 2 and IndyCar single-seaters, Hypercar and LMP2 prototypes, GT3, GT4 and TCR cars, MotoGP and Superbike bikes with their riders, and the safety car), at its real size and in its team's livery, where the race puts it.
+- Liveries come from each team's colour: a second colour, an accent and one of five patterns, the same for both cars of a team. Single-seaters carry their number on the nose and the engine cover, closed cars in a roundel on the doors and the bonnet (in the class colour in a multi-class race), bikes on the fairing and the tail; team names are on the rear wing endplates.
+- Wheels turn and steer, the tyre sidewalls show the compound fitted, bikes lean into corners, and the DRS flap opens in the DRS zones. Cars stop in their box in the pit lane, and a retired car stays where it stopped.
+- Cars that would overlap (at the start, while passing, when lapping) are drawn side by side; the race itself is unchanged.
+- Click a car to select it, as in the timing tower; with **Follow** on, the camera keeps the selected car in view. The driver codes and positions show over the cars nearest the camera.
+- Cars cast shadows in the sun around what the camera looks at, and keep their size whatever the **Height**.
 - The 3D view (three.js) loads the first time it is opened. It needs WebGL.
 
 | Shortcut | Action |

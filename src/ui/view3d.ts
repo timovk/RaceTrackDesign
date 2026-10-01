@@ -12,6 +12,11 @@
  * save an image. Images are saved at the screen size, twice that or 4K, with
  * the labels drawn in.
  *
+ * In Race mode the race runs on it (ui/carLayer.ts): every car drawn as its
+ * model where the race puts it, under sun shadows around what the camera
+ * looks at; the camera can follow the selected car, and clicking a car
+ * selects it.
+ *
  * It follows the store: rebuilt shortly after the terrain, the track or the
  * facilities change, recoloured when the track colouring changes. It draws
  * only when something changed or moves (the camera, the data, the hover).
@@ -34,6 +39,8 @@ import { buckets, stationBuckets } from './colors.ts';
 import { h, setChildren, setText } from './dom.ts';
 import { download, slug } from './download.ts';
 import * as fmt from './format.ts';
+import { CarLayer } from './carLayer.ts';
+import type { RaceController } from './raceController.ts';
 import type { Store, Topic } from './store.ts';
 
 /** Rebuilds wait this long after the last change, so an edit in progress is not rebuilt at every step. */
@@ -45,6 +52,15 @@ const MARKER = 0x3fb6ff;
 const LINE = 0xff5a36;
 /** Height of the corner labels over the track, metres. */
 const LABEL_LIFT = 8;
+/** Towards the sun, from the north-west as the flat map's hillshade. */
+const SUN = new THREE.Vector3(-1, 1.3, -1).normalize();
+/** Half the side of the patch the sun's shadows cover, metres. */
+const SHADOW_REACH = 70;
+/** What receives the sun's shadows (when cars are shown). */
+const SHADOW_RECEIVERS = new Set(['terrain', 'track', 'trackVerges', 'pit', 'pitVerges', 'start', 'kerbs', 'runoff', 'grid', 'pitBuilding', 'stands']);
+/** Driver codes show over this many cars nearest the camera, within this distance (metres). */
+const CAR_LABELS = 12;
+const CAR_LABEL_REACH = 400;
 /** Seconds for a camera move to a shot. */
 const GLIDE = 1.4;
 const SPEEDS = [0.5, 1, 2, 4];
@@ -69,6 +85,12 @@ export class View3D {
   readonly toolbar: HTMLElement;
   private readonly store: Store;
   private readonly readout: HTMLElement;
+  private readonly race: RaceController | null;
+  private cars: CarLayer | null = null;
+  private readonly sun: THREE.DirectionalLight;
+  /** Driver codes over the cars near the camera (and the selected car), by car id (-1 the safety car). */
+  private carLabels = new Map<number, { el: HTMLElement; text: string; p: THREE.Vector3; shown: boolean }>();
+  private downAt: { x: number; y: number } | null = null;
   private readonly canvas: HTMLCanvasElement;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
@@ -119,14 +141,18 @@ export class View3D {
   private path: Path | null = null;
   private pendingPointer: { x: number; y: number } | null = null;
 
-  constructor(store: Store, readout: HTMLElement) {
+  constructor(store: Store, readout: HTMLElement, race: RaceController | null = null) {
     this.store = store;
     this.readout = readout;
+    this.race = race;
     this.canvas = h('canvas', { class: 'map3d-canvas' });
     // Throws when WebGL is not available; the map falls back to 2D.
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Shadows only while cars are shown: the sun casts them over a patch round what the camera looks at.
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.labelLayer = h('div', { class: 'map3d-labels' });
     this.note = h('div', { class: 'map3d-note', hidden: true }, 'Switch to 2D to edit the track.');
 
@@ -162,8 +188,13 @@ export class View3D {
     this.scene.add(new THREE.HemisphereLight(0xe4efff, 0x5d5243, 1.4));
     // Sun from the north-west, as the hillshade of the flat map.
     const sun = new THREE.DirectionalLight(0xfff1dc, 2.2);
-    sun.position.set(-1, 1.3, -1);
-    this.scene.add(sun);
+    sun.position.copy(SUN);
+    sun.shadow.mapSize.set(2048, 2048);
+    Object.assign(sun.shadow.camera, { left: -SHADOW_REACH, right: SHADOW_REACH, top: SHADOW_REACH, bottom: -SHADOW_REACH, near: 1, far: 2000 });
+    sun.shadow.bias = -0.0004;
+    sun.shadow.normalBias = 0.04;
+    this.sun = sun;
+    this.scene.add(sun, sun.target);
     this.scene.add(this.world);
 
     this.terrainMaterial = new THREE.MeshLambertMaterial();
@@ -188,15 +219,22 @@ export class View3D {
     c.zoomToCursor = true;
     c.zoomSpeed = 1.5;
     c.maxPolarAngle = Math.PI * 0.47;
-    c.minDistance = 15;
+    c.minDistance = 4;
     c.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     c.addEventListener('change', () => this.requestRender());
     this.controls = c;
 
-    this.canvas.addEventListener('pointerdown', () => {
+    this.canvas.addEventListener('pointerdown', (e) => {
       // Taking hold of the camera ends a move or a path where the camera is.
       this.glide = null;
       if (this.path) this.stopPath();
+      this.downAt = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+    });
+    this.canvas.addEventListener('pointerup', (e) => {
+      // A click (not a drag) picks a car.
+      const d = this.downAt;
+      this.downAt = null;
+      if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 5) this.pickCar(e.clientX, e.clientY);
     });
     this.canvas.addEventListener('pointermove', (e) => {
       this.pendingPointer = { x: e.clientX, y: e.clientY };
@@ -212,6 +250,14 @@ export class View3D {
 
     new ResizeObserver(() => this.resize()).observe(this.el);
     store.subscribe((topics) => this.onStore(topics));
+    race?.onTick(() => {
+      if (this.raceActive) this.requestRender();
+    });
+  }
+
+  /** A race to show: in Race mode, once one has started. */
+  private get raceActive(): boolean {
+    return !!this.race?.sim && this.store.mode === 'race';
   }
 
   setVisible(on: boolean): void {
@@ -338,6 +384,25 @@ export class View3D {
       ctx.roundRect(x - pw / 2, y - ph, pw, ph, 4 * scale);
       ctx.fill();
       ctx.fillStyle = l.cls === 'start' ? '#111' : '#f1f3f5';
+      ctx.textAlign = 'center';
+      ctx.fillText(l.text, x, y - ph / 2);
+    }
+    // Driver codes over the cars, where they are shown on screen.
+    for (const [id, l] of this.carLabels) {
+      if (!l.shown) continue;
+      v.copy(l.p).project(this.camera);
+      if (v.z > 1) continue;
+      const x = ((v.x + 1) / 2) * W;
+      const y = ((1 - v.y) / 2) * H;
+      const selected = id === this.race?.selected;
+      ctx.font = `700 ${Math.round(10 * scale)}px system-ui, sans-serif`;
+      const pw = ctx.measureText(l.text).width + 10 * scale;
+      const ph = 15 * scale;
+      ctx.fillStyle = selected ? '#f1f3f5' : 'rgba(12,15,19,0.75)';
+      ctx.beginPath();
+      ctx.roundRect(x - pw / 2, y - ph, pw, ph, 4 * scale);
+      ctx.fill();
+      ctx.fillStyle = selected ? '#111' : '#f1f3f5';
       ctx.textAlign = 'center';
       ctx.fillText(l.text, x, y - ph / 2);
     }
@@ -714,6 +779,8 @@ export class View3D {
     this.remove(key);
     this.meshes.set(key, obj);
     this.world.add(obj);
+    obj.receiveShadow = SHADOW_RECEIVERS.has(key);
+    obj.castShadow = key === 'pitBuilding' || key === 'stands';
     reanchor(obj, this.store.view.relief);
   }
 
@@ -789,6 +856,7 @@ export class View3D {
   }
 
   private render(): void {
+    this.updateCars();
     if (this.needsRoads) {
       this.needsRoads = false;
       const t = this.store.track;
@@ -808,6 +876,13 @@ export class View3D {
     this.camera.far = d * 4 + this.extent * 3;
     this.camera.updateProjectionMatrix();
     this.updateMarker(d);
+    if (this.sun.castShadow) {
+      // The sun's shadows cover a patch round what the camera looks at.
+      const focus = this.path ? this.camera.position.clone().add(this.camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(40)) : this.controls.target.clone();
+      this.sun.target.position.copy(focus);
+      this.sun.position.copy(focus).addScaledVector(SUN, 600);
+      this.sun.target.updateMatrixWorld();
+    }
     this.renderer.render(this.scene, this.camera);
     this.updateLabels();
     if (this.pendingPointer) {
@@ -815,6 +890,46 @@ export class View3D {
       this.pendingPointer = null;
     }
     if (moving) this.requestRender();
+  }
+
+  /** Places the race's cars (or hides them when no race is shown), and keeps a followed car in view. */
+  private updateCars(): void {
+    const r = this.race;
+    const active = this.raceActive && !!this.earth;
+    if (!active || !r?.sim) {
+      if (this.cars) this.cars.group.visible = false;
+      this.sun.castShadow = false;
+      return;
+    }
+    if (!this.cars) {
+      this.cars = new CarLayer(this.renderer);
+      this.scene.add(this.cars.group);
+    }
+    this.cars.group.visible = true;
+    this.sun.castShadow = true;
+    const relief = this.store.view.relief;
+    this.cars.update(r.sim, r.alpha, {
+      earth: this.earth!,
+      sceneY: (z) => (z - this.zRef) * relief,
+      pitSide: this.store.facilities?.pitLane?.side ?? 1,
+    }, this.camera, this.height);
+    if (r.follow && r.selected !== null && !this.path) {
+      const p = this.cars.positionOf(r.selected);
+      if (p) {
+        const delta = p.clone().sub(this.controls.target);
+        this.controls.target.add(delta);
+        this.camera.position.add(delta);
+      }
+    }
+  }
+
+  private pickCar(clientX: number, clientY: number): void {
+    const r = this.race;
+    if (!this.raceActive || !r || !this.cars) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const id = this.cars.pick(clientX - rect.left, clientY - rect.top, this.camera, this.width, this.height);
+    if (id !== null) r.select(id, true);
+    else if (r.selected !== null && !r.follow) r.select(null);
   }
 
   private keepAboveGround(): void {
@@ -859,6 +974,54 @@ export class View3D {
       l.el.hidden = !l.shown;
       if (!l.shown || !p) continue;
       l.el.style.transform = `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px) translate(-50%, -100%)`;
+    }
+    this.updateCarLabels(eye);
+  }
+
+  /** Driver codes over the selected car and the cars nearest the camera. */
+  private updateCarLabels(eye: THREE.Vector3): void {
+    const r = this.race;
+    const cars = this.cars;
+    const wanted = new Map<number, { text: string; p: THREE.Vector3 }>();
+    if (cars && this.raceActive && r?.sim && cars.group.visible) {
+      const sim = r.sim;
+      const near = cars.shown
+        .map((s) => ({ s, d: s.position.distanceTo(this.camera.position) }))
+        .filter(({ s, d }) => s.id === r.selected || d < CAR_LABEL_REACH)
+        .sort((a, b) => a.d - b.d)
+        .slice(0, CAR_LABELS);
+      for (const { s } of near) {
+        const car = s.id >= 0 ? sim.cars[s.id] : null;
+        if (car && car.status === 'retired') continue;
+        const text = car ? `${car.position} ${car.entrant.code}` : 'SC';
+        wanted.set(s.id, { text, p: s.position.clone().add(new THREE.Vector3(0, s.look.set.model.height / 2 + 0.6, 0)) });
+      }
+    }
+    for (const [id, l] of this.carLabels) {
+      if (!wanted.has(id)) {
+        l.el.remove();
+        this.carLabels.delete(id);
+      }
+    }
+    const v = new THREE.Vector3();
+    for (const [id, w] of wanted) {
+      let l = this.carLabels.get(id);
+      if (!l) {
+        l = { el: h('div', { class: `map3d-label car${id === this.race?.selected ? ' selected' : ''}` }), text: '', p: w.p, shown: false };
+        this.labelLayer.append(l.el);
+        this.carLabels.set(id, l);
+      }
+      l.el.classList.toggle('selected', id === this.race?.selected);
+      if (l.text !== w.text) {
+        l.text = w.text;
+        setText(l.el, w.text);
+      }
+      l.p = w.p;
+      v.copy(w.p).project(this.camera);
+      const visible = v.z <= 1 && Math.abs(v.x) <= 1.05 && Math.abs(v.y) <= 1.05 && !this.blocked(eye, this.world.worldToLocal(w.p.clone()));
+      l.shown = visible;
+      l.el.hidden = !visible;
+      if (visible) l.el.style.transform = `translate(${(((v.x + 1) / 2) * this.width).toFixed(1)}px, ${(((1 - v.y) / 2) * this.height).toFixed(1)}px) translate(-50%, -100%)`;
     }
   }
 

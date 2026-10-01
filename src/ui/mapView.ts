@@ -209,7 +209,7 @@ export class MapView {
     this.view3dLoading = true;
     import('./view3d.ts')
       .then(({ View3D }) => {
-        this.view3d = new View3D(this.store, this.readout);
+        this.view3d = new View3D(this.store, this.readout, this.race);
         this.canvas.after(this.view3d.el);
         this.viewBar.prepend(this.view3d.toolbar);
         this.view3d.setVisible(this.is3d);
