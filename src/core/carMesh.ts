@@ -30,6 +30,15 @@ export const ZONE = {
   solidC: 4,
 } as const;
 
+/** Lights that switch on and off per car: headlights, the rear (rain) light, the safety car's beacons in turn. */
+export const LAMP = {
+  none: 0,
+  head: 1,
+  rain: 2,
+  beaconA: 3,
+  beaconB: 4,
+} as const;
+
 export interface Finish {
   roughness: number;
   metalness: number;
@@ -43,6 +52,8 @@ export interface Surface {
   /** Linear rgb, for trim and as a multiplier on the livery. */
   color: readonly number[];
   finish: Finish;
+  /** Which light it is (LAMP); none when absent. */
+  lamp?: number;
 }
 
 const WHITE = [1, 1, 1];
@@ -75,6 +86,8 @@ export interface CarMeshData {
   zone: Float32Array;
   /** Per vertex: the hinge (x, y) it turns about when the DRS flap opens, and 1 on the flap (0 elsewhere). */
   hinge: Float32Array;
+  /** Per vertex: which light it belongs to (LAMP). */
+  lamp: Float32Array;
   indices: Uint32Array;
 }
 
@@ -86,6 +99,7 @@ export class CarMeshBuilder {
   private fin: number[] = [];
   private zon: number[] = [];
   private hin: number[] = [];
+  private lmp: number[] = [];
   private idx: number[] = [];
   /** Vertices added from now on turn with the DRS flap about this hinge (x, y), when set. */
   flapHinge: [number, number] | null = null;
@@ -108,6 +122,7 @@ export class CarMeshBuilder {
     this.zon.push(s.zone);
     const h = this.flapHinge;
     this.hin.push(h ? h[0] : 0, h ? h[1] : 0, h ? 1 : 0);
+    this.lmp.push(s.lamp ?? LAMP.none);
     return this.pos.length / 3 - 1;
   }
 
@@ -145,6 +160,7 @@ export class CarMeshBuilder {
       this.fin.push(this.fin[i * 4], this.fin[i * 4 + 1], this.fin[i * 4 + 2], this.fin[i * 4 + 3]);
       this.zon.push(this.zon[i]);
       this.hin.push(this.hin[i * 3], this.hin[i * 3 + 1], this.hin[i * 3 + 2]);
+      this.lmp.push(this.lmp[i]);
     }
     const tris = this.idx.length;
     for (let t = fromTri * 3; t < tris; t += 3) {
@@ -180,6 +196,7 @@ export class CarMeshBuilder {
       finish: Float32Array.from(this.fin),
       zone: Float32Array.from(this.zon),
       hinge: Float32Array.from(this.hin),
+      lamp: Float32Array.from(this.lmp),
       indices: Uint32Array.from(this.idx),
     };
   }

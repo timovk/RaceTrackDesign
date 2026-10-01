@@ -13,7 +13,7 @@
  * midway between the axles.
  */
 import {
-  CARBON, type CarMeshData, CarMeshBuilder, DARK_METAL, GLASS, Loft, RUBBER, SATIN_BLACK, SectionPath, type Surface, TINT, type V3, ZONE,
+  CARBON, type CarMeshData, CarMeshBuilder, DARK_METAL, GLASS, LAMP, Loft, RUBBER, SATIN_BLACK, SectionPath, type Surface, TINT, type V3, ZONE,
   box, curve, decal, ellipsoid, flatDecal, paint, pipe, plate, revolve, smoothstep, stations, trim, tube, wing,
 } from './carMesh.ts';
 
@@ -51,6 +51,37 @@ export interface CarModel {
   /** The wheel mesh is built at this radius and width; each wheel scales it to its own. */
   wheelRadius: number;
   wheelWidth: number;
+  /** The lights that switch on and off (LAMP kinds), each at its middle in car coordinates. */
+  lamps: LampPlace[];
+}
+
+export interface LampPlace {
+  kind: number;
+  at: V3;
+}
+
+/**
+ * The lights of a body mesh: its lamp vertices grouped by kind, and by side
+ * of the car for a kind that reaches out to the sides (a pair), each group
+ * at its middle.
+ */
+export function lampPlaces(body: CarMeshData): LampPlace[] {
+  const reach = new Map<number, number>();
+  for (let i = 0; i < body.lamp.length; i++) {
+    if (body.lamp[i]) reach.set(body.lamp[i], Math.max(reach.get(body.lamp[i]) ?? 0, Math.abs(body.positions[i * 3 + 2])));
+  }
+  const groups = new Map<string, { kind: number; sum: V3; count: number }>();
+  for (let i = 0; i < body.lamp.length; i++) {
+    const kind = body.lamp[i];
+    if (!kind) continue;
+    const z = body.positions[i * 3 + 2];
+    const key = `${kind}:${reach.get(kind)! > 0.15 ? Math.sign(z) : 0}`;
+    const g = groups.get(key) ?? { kind, sum: [0, 0, 0] as V3, count: 0 };
+    for (let j = 0; j < 3; j++) g.sum[j] += body.positions[i * 3 + j];
+    g.count++;
+    groups.set(key, g);
+  }
+  return [...groups.values()].map((g) => ({ kind: g.kind, at: g.sum.map((v) => v / g.count) as V3 }));
 }
 
 /** Where decals take their picture from in a car's cell of the decal atlas (u0, v0, u1, v1): the number panel (upper half) and the team name (lower half). */
@@ -297,7 +328,7 @@ function singleSeater(s: SingleSeaterSpec, lod: number): { body: CarMeshData; de
     wing(mb, { from: [ra - 0.18, 0.42, -0.38], to: [ra - 0.18, 0.42, 0.38], chord: 0.16, angle: 0.15, n: steps(8, lod), surface: CARBON, u: u(ra), caps: true });
     plate(mb, [[ra - 0.1, 0.3], [ra - 0.1, 0.42], [rwLE - 0.1, H - 0.16], [rwLE - 0.25, H - 0.16], [ra - 0.3, 0.3]], 0, 0.03, CARBON);
     // Rain light.
-    box(mb, [tail + 0.6, 0.33, -0.05], [tail + 0.63, 0.39, 0.05], trim([0.5, 0.02, 0.02], { emissive: 0.6, roughness: 0.2 }));
+    box(mb, [tail + 0.6, 0.33, -0.05], [tail + 0.63, 0.39, 0.05], { ...trim([0.5, 0.02, 0.02], { emissive: 0.6, roughness: 0.6 }), lamp: LAMP.rain });
   }
   // Shark fin.
   if (lod < 2) plate(mb, [[cockpitRear - 0.5, H - 0.1], [ra + 0.05, 0.62], [ra + 0.05, 0.8], [cockpitRear - 1.0, H - 0.14]], 0, 0.012, paint(ZONE.solidA));
@@ -378,7 +409,7 @@ function singleSeaterModel(s: SingleSeaterSpec): CarModel {
       { x: -fa, y: s.tyreR, z: rz, radius: s.tyreR, width: s.rearW, front: false },
       { x: -fa, y: s.tyreR, z: -rz, radius: s.tyreR, width: s.rearW, front: false },
     ],
-    lods, eye: [fa - 1.55, 0.78, 0], wheelRadius: s.tyreR, wheelWidth: s.rearW,
+    lods, eye: [fa - 1.55, 0.78, 0], wheelRadius: s.tyreR, wheelWidth: s.rearW, lamps: lampPlaces(lods[0].body),
   };
 }
 
@@ -557,8 +588,8 @@ function closedCar(s: ClosedSpec, lod: number): { body: CarMeshData; decals: Car
   const gh = (belt(tip) - s.floor) * 0.55;
   flatDecal(mb, [tip + 0.002, s.floor + (belt(tip) - s.floor) * 0.42, 0], [0, 0, -1], [0, 1, 0], gw, gh, undefined, SATIN_BLACK);
   // Lights: headlights on the front corners, tail lights at the back.
-  const head = trim([0.85, 0.88, 0.95], { roughness: 0.05, clearcoat: 1, emissive: 0.35 });
-  const tailLight = trim([0.6, 0.02, 0.02], { roughness: 0.1, clearcoat: 1, emissive: 0.5 });
+  const head = { ...trim([0.85, 0.88, 0.95], { roughness: 0.05, clearcoat: 1, emissive: 0.35 }), lamp: LAMP.head };
+  const tailLight = { ...trim([0.6, 0.02, 0.02], { roughness: 0.1, clearcoat: 1, emissive: 0.5 }), lamp: LAMP.rain };
   const hx = tip - 0.28;
   const hz = Math.min(outer(hx) - 0.2, 0.62);
   for (const sgn of [1, -1]) {
@@ -591,8 +622,10 @@ function closedCar(s: ClosedSpec, lod: number): { body: CarMeshData; decals: Car
   }
   if (s.lightBar) {
     const lx = c.roofFront - 0.25;
-    box(mb, [lx - 0.12, c.roof - 0.01, -0.5], [lx + 0.12, c.roof + 0.09, -0.04], trim([1, 0.55, 0.05], { emissive: 1.4, roughness: 0.2 }));
-    box(mb, [lx - 0.12, c.roof - 0.01, 0.04], [lx + 0.12, c.roof + 0.09, 0.5], trim([1, 0.55, 0.05], { emissive: 1.4, roughness: 0.2 }));
+    // Orange beacons, flashing in turn while the safety car is out.
+    const beacon = trim([0.5, 0.09, 0.005], { emissive: 1.4, roughness: 0.5 });
+    box(mb, [lx - 0.12, c.roof - 0.01, -0.5], [lx + 0.12, c.roof + 0.09, -0.04], { ...beacon, lamp: LAMP.beaconA });
+    box(mb, [lx - 0.12, c.roof - 0.01, 0.04], [lx + 0.12, c.roof + 0.09, 0.5], { ...beacon, lamp: LAMP.beaconB });
     box(mb, [lx - 0.12, c.roof - 0.01, -0.04], [lx + 0.12, c.roof + 0.07, 0.04], SATIN_BLACK);
   }
   // Decals: the number on each door and on the bonnet; the team name low on each side.
@@ -621,7 +654,7 @@ function closedModel(s: ClosedSpec): CarModel {
       { x: -fa, y: s.tyreR, z: rwz, radius: s.tyreR, width: s.rearW, front: false },
       { x: -fa, y: s.tyreR, z: -rwz, radius: s.tyreR, width: s.rearW, front: false },
     ],
-    lods, eye: [s.cabin.roofFront - 0.35, s.cabin.roof - 0.2, -0.32], wheelRadius: s.tyreR, wheelWidth: s.rearW,
+    lods, eye: [s.cabin.roofFront - 0.35, s.cabin.roof - 0.2, -0.32], wheelRadius: s.tyreR, wheelWidth: s.rearW, lamps: lampPlaces(lods[0].body),
   };
 }
 
@@ -731,6 +764,8 @@ function bike(s: BikeSpec, lod: number): { body: CarMeshData; decals: CarMeshDat
     tube(mb, [0.45, 0.83, side * 0.09], [0.42, 0.82, side * 0.3], 0.014, 0.014, 6, SATIN_BLACK);
   }
   pipe(mb, [[-0.32, 0.46, 0.13], [-0.55, 0.56, 0.14], [-0.8, 0.67, 0.12]], 0.045, n(10), trim([0.42, 0.4, 0.38], { roughness: 0.35, metalness: 1 }));
+  // The rear light, lit in the wet.
+  box(mb, [tail - 0.012, 0.78, -0.035], [tail + 0.01, 0.84, 0.035], { ...trim([0.5, 0.02, 0.02], { emissive: 0.6, roughness: 0.6 }), lamp: LAMP.rain });
   if (s.winglets && lod < 2) {
     for (const side of [1, -1]) plate(mb, [[0.74, side * 0.2], [0.72, side * 0.37], [0.6, side * 0.37], [0.56, side * 0.24]], 0.64, 0.012, paint(ZONE.solidB), true);
   }
@@ -775,7 +810,7 @@ function bikeModel(s: BikeSpec): CarModel {
       { x: fa, y: s.frontR, z: 0, radius: s.frontR, width: s.frontW, front: true },
       { x: -fa, y: s.rearR, z: 0, radius: s.rearR, width: s.rearW, front: false },
     ],
-    lods, eye: [0.36, 1.03, 0], wheelRadius: s.rearR, wheelWidth: s.rearW,
+    lods, eye: [0.36, 1.03, 0], wheelRadius: s.rearR, wheelWidth: s.rearW, lamps: lampPlaces(lods[0].body),
   };
 }
 

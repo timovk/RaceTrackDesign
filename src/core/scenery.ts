@@ -11,6 +11,8 @@
  * - grandstands: one on the start straight, opposite the pits, and at the
  *   main overtaking spots, beyond the run-off;
  * - the lines of the grid boxes;
+ * - the marshal posts, behind the run-off, raised on a platform where the
+ *   plan needs it, and the flag marshal's rostrum at the line;
  * - trees, seeded from the terrain seed: forests and scattered trees where
  *   the ground is not too steep, wet or high, clear of the track, its banks,
  *   run-off and buildings.
@@ -25,6 +27,7 @@ import type { PitLane } from './pitLane.ts';
 import type { RacingLine } from './racingLine.ts';
 import { seededRandom } from './rng.ts';
 import { type Earthworks, type FaceCorner, type MeshData, MeshBuilder, type Road, SINK, VERGE } from './scene3d.ts';
+import type { MarshalPost } from './marshals.ts';
 import type { GridSlot } from './startFinish.ts';
 import type { Track } from './track.ts';
 
@@ -614,6 +617,131 @@ export function buildGridMarks(t: Track, slots: readonly GridSlot[], index: Trac
       [cx - lx * w + hx * l, z, cy - ly * w + hy * l, road],
       [cx + lx * w + hx * l, z, cy + ly * w + hy * l, road],
     ], UP, WHITE);
+  }
+  return mb.build();
+}
+
+// ---- marshal posts --------------------------------------------------------------
+
+/** Where a marshal post stands in the scenery, and which way it faces. */
+export interface PostSite {
+  station: number;
+  x: number;
+  y: number;
+  /** The ground there, and the floor the marshals stand on (raised posts on a platform). */
+  ground: number;
+  floor: number;
+  /** Unit vectors in the ground plane: towards the track, and along it in the direction of travel. */
+  fx: number;
+  fy: number;
+  tx: number;
+  ty: number;
+  raised: boolean;
+  /** The flag marshal's rostrum at the line: a platform, without the hut and light panel of a post. */
+  rostrum?: boolean;
+  footprint: Footprint;
+}
+
+/** A post's pad: half its length along the track, and its depth. */
+export const PAD_HALF = 2.2;
+export const PAD_DEPTH = 3;
+const PLATFORM = 3;
+const ROSTRUM = 2;
+
+/**
+ * Sites for the marshal posts: where the plan puts them, moved straight
+ * back from the track until clear of roads, run-off and buildings (posts
+ * stand behind the run-off, as at real circuits). `blocked` says whether a
+ * point is taken.
+ */
+export function marshalPostSites(t: Track, posts: readonly MarshalPost[], earth: Earthworks, blocked: (x: number, y: number) => boolean): PostSite[] {
+  return posts.map((p) => {
+    const f = frame(t, p.station);
+    const ox = f.lx * p.side;
+    const oy = f.ly * p.side;
+    const start = (p.x - f.x) * ox + (p.y - f.y) * oy;
+    return postSite(t, p.station, ox, oy, start, start + 120, p.raised ? PLATFORM : 0, earth, blocked)
+      ?? postSite(t, p.station, ox, oy, start, start, p.raised ? PLATFORM : 0, earth, () => false)!;
+  });
+}
+
+/**
+ * The flag marshal's rostrum at the line, on the pit side when there is
+ * room right beside the track, else on the other side.
+ */
+export function lineFlagSite(t: Track, pitSide: 1 | -1, earth: Earthworks, blocked: (x: number, y: number) => boolean): PostSite {
+  const f = frame(t, 0);
+  const edge = t.width[0] / 2 + VERGE + 1.5;
+  for (const side of [pitSide, -pitSide]) {
+    const site = postSite(t, 0, f.lx * side, f.ly * side, edge, edge + 6, ROSTRUM, earth, blocked);
+    if (site) return { ...site, rostrum: true };
+  }
+  return { ...postSite(t, 0, f.lx * pitSide, f.ly * pitSide, edge, edge, ROSTRUM, earth, () => false)!, rostrum: true };
+}
+
+function postSite(
+  t: Track, k: number, ox: number, oy: number, from: number, to: number, raise: number, earth: Earthworks, blocked: (x: number, y: number) => boolean,
+): PostSite | null {
+  const f = frame(t, k);
+  for (let d = from; d <= to; d += 2) {
+    const x = f.x + ox * d;
+    const y = f.y + oy * d;
+    // The whole pad must be clear: its corners and middle.
+    const corners: [number, number][] = [-1, 1].flatMap((a) => [0, PAD_DEPTH].map((b) => [x + f.tx * a * PAD_HALF + ox * b, y + f.ty * a * PAD_HALF + oy * b] as [number, number]));
+    if (from !== to && [[x, y], ...corners].some(([px, py]) => earth.clearance(px, py) < 1 || blocked(px, py))) continue;
+    const ground = Math.max(...[[x, y], ...corners].map(([px, py]) => earth.height(px, py)));
+    return {
+      station: k, x, y, ground, floor: ground + 0.15 + raise, fx: -ox, fy: -oy, tx: f.tx, ty: f.ty, raised: raise > 0,
+      footprint: { x: corners.map((c) => c[0]), y: corners.map((c) => c[1]) },
+    };
+  }
+  return null;
+}
+
+/**
+ * The marshal posts: a concrete pad with a small orange-roofed hut at the
+ * back, the light panel on a pole facing the cars as they come, and for a
+ * raised post (or the rostrum at the line) a platform on legs with a rail.
+ * The marshals, their flags and the panel's light are drawn by the view.
+ */
+export function buildMarshalPosts(sites: readonly PostSite[]): MeshData {
+  const mb = new MeshBuilder();
+  const concrete = [0.64, 0.64, 0.62];
+  const hut = [0.92, 0.92, 0.9];
+  const roof = [0.93, 0.42, 0.08];
+  const steel = [0.45, 0.47, 0.5];
+  const panel = [0.06, 0.06, 0.07];
+  for (const s of sites) {
+    // Local coordinates: `a` along the track, `b` away from it (0 at the pad's front edge), heights above the floor.
+    const box = (a0: number, a1: number, b0: number, b1: number, z0: number, z1: number, color: readonly number[], floor = s.floor) => {
+      const at = (a: number, b: number, z: number): FaceCorner => [s.x + s.tx * a - s.fx * b, floor + z, s.y + s.ty * a - s.fy * b, s.ground];
+      const along: Vec3 = [s.tx, 0, s.ty];
+      const toward: Vec3 = [s.fx, 0, s.fy];
+      mb.face([at(a0, b0, z1), at(a1, b0, z1), at(a1, b1, z1), at(a0, b1, z1)], UP, color);
+      mb.face([at(a0, b0, z0), at(a1, b0, z0), at(a1, b0, z1), at(a0, b0, z1)], toward, color);
+      mb.face([at(a0, b1, z0), at(a1, b1, z0), at(a1, b1, z1), at(a0, b1, z1)], [-toward[0], 0, -toward[2]], color);
+      mb.face([at(a0, b0, z0), at(a0, b1, z0), at(a0, b1, z1), at(a0, b0, z1)], [-along[0], 0, -along[2]], color);
+      mb.face([at(a1, b0, z0), at(a1, b1, z0), at(a1, b1, z1), at(a1, b0, z1)], along, color);
+    };
+    if (s.raised) {
+      // Legs from below the ground up to the deck, the deck and a rail round its front and ends.
+      const below = s.ground - s.floor - 0.5;
+      for (const a of [-PAD_HALF + 0.1, PAD_HALF - 0.3]) for (const b of [0.1, PAD_DEPTH - 0.3]) box(a, a + 0.2, b, b + 0.2, below, -0.15, steel);
+      box(-PAD_HALF, PAD_HALF, 0, PAD_DEPTH, -0.15, 0, steel);
+      box(-PAD_HALF, PAD_HALF, 0, 0.06, 0.95, 1.05, steel);
+      box(-PAD_HALF, -PAD_HALF + 0.06, 0, PAD_DEPTH, 0.95, 1.05, steel);
+      box(PAD_HALF - 0.06, PAD_HALF, 0, PAD_DEPTH, 0.95, 1.05, steel);
+      for (const a of [-PAD_HALF, PAD_HALF - 0.06]) box(a, a + 0.06, 0, 0.06, 0, 0.95, steel);
+    } else {
+      box(-PAD_HALF, PAD_HALF, 0, PAD_DEPTH, s.ground - s.floor - 0.3, 0, concrete);
+    }
+    if (s.rostrum) continue;
+    // The hut at the back of the pad.
+    box(-1, 1, PAD_DEPTH - 1.4, PAD_DEPTH, 0, 2.1, hut);
+    box(-1.15, 1.15, PAD_DEPTH - 1.6, PAD_DEPTH + 0.1, 2.1, 2.25, roof);
+    // The light panel on its pole at the upstream end of the pad, its face towards the oncoming cars.
+    box(-PAD_HALF - 0.05, -PAD_HALF + 0.05, 0.3, 0.4, 0, 2.2, steel);
+    box(-PAD_HALF - 0.12, -PAD_HALF + 0.02, 0.05, 0.65, 2.2, 2.8, panel);
   }
   return mb.build();
 }

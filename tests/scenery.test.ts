@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { assessLicence } from '../src/core/licence.ts';
 import { Earthworks, type MeshData, VERGE, anchoredHeight, pitRoad, trackRoad } from '../src/core/scene3d.ts';
 import {
-  KERB_WIDTH, TrackIndex, buildGrandstands, buildGridMarks, buildKerbs, buildPitBuilding, buildRunoff, forest, inside, kerbRuns, placeGrandstands, placeTrees, runoffAreas, runoffTest,
+  KERB_WIDTH, PAD_HALF, TrackIndex, buildGrandstands, buildGridMarks, buildKerbs, buildMarshalPosts, buildPitBuilding, buildRunoff, forest, inside, kerbRuns, lineFlagSite,
+  marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffTest,
 } from '../src/core/scenery.ts';
 import { clearView, flyoverPose, hotLapPose, trackShots } from '../src/core/shots.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
@@ -156,6 +157,61 @@ describe('buildings', () => {
     const marks = buildGridMarks(t, facilities.grid, index);
     expect(marks.indices).toHaveLength(facilities.grid.length * 6);
     for (const f of normals(marks)) expect(f.ny).toBeGreaterThan(0.99);
+  });
+});
+
+describe('marshal posts', () => {
+  const building = buildPitBuilding(pit, pitRoad(pit, t));
+  const onRunoff = runoffTest(t, areas, index);
+  const taken = (x: number, y: number) => onRunoff(x, y, 2) || inside(building.footprint, x, y, 2);
+  const plan = facilities.marshals.posts;
+  const sites = marshalPostSites(t, plan, earth, taken);
+
+  it('stand where the plan puts them, behind the run-off and clear of the roads and buildings, facing the track', () => {
+    expect(sites).toHaveLength(plan.length);
+    sites.forEach((s, i) => {
+      expect(s.station).toBe(plan[i].station);
+      expect(s.raised).toBe(plan[i].raised);
+      for (let j = 0; j < s.footprint.x.length; j++) {
+        expect(earth.clearance(s.footprint.x[j], s.footprint.y[j])).toBeGreaterThanOrEqual(1);
+        expect(taken(s.footprint.x[j], s.footprint.y[j])).toBe(false);
+      }
+      // Towards the track, from the side the plan put it on, and no further back than the run-off needs.
+      const k = s.station;
+      expect((t.x[k] - s.x) * s.fx + (t.y[k] - s.y) * s.fy).toBeGreaterThan(0);
+      expect(Math.hypot(t.x[k] - s.x, t.y[k] - s.y)).toBeLessThan(Math.hypot(t.x[k] - plan[i].x, t.y[k] - plan[i].y) + 125);
+      expect(Math.hypot(s.tx, s.ty)).toBeCloseTo(1, 9);
+    });
+  });
+
+  it('step back behind the run-off of a corner', () => {
+    const area = areas[0];
+    const i = Math.floor(area.stations.length / 2);
+    const k = area.stations[i];
+    const lx = Math.sin(t.heading[k]) * area.side;
+    const ly = -Math.cos(t.heading[k]) * area.side;
+    const off = t.width[k] / 2 + 6;
+    const [site] = marshalPostSites(t, [{ number: 1, station: k, x: t.x[k] + lx * off, y: t.y[k] + ly * off, side: area.side, raised: false }], earth, taken);
+    expect(onRunoff(t.x[k] + lx * off, t.y[k] + ly * off, 0)).toBe(true);
+    expect(index.lateral(k, site.x, site.y) * area.side).toBeGreaterThan(t.width[k] / 2 + VERGE + area.depth[i]);
+    expect(taken(site.x, site.y)).toBe(false);
+  });
+
+  it('put the flag marshal on a rostrum right beside the line', () => {
+    const line = lineFlagSite(t, pit.side, earth, taken);
+    expect(line.rostrum).toBe(true);
+    expect(line.station).toBe(0);
+    expect(line.floor - line.ground).toBeGreaterThan(1.5);
+    expect(Math.hypot(line.x - t.x[0], line.y - t.y[0])).toBeLessThan(t.width[0] / 2 + VERGE + 10);
+    expect(earth.clearance(line.x, line.y)).toBeGreaterThanOrEqual(1);
+  });
+
+  it('keep their real size when the view draws the relief taller', () => {
+    const mesh = buildMarshalPosts(sites);
+    expect(mesh.indices.length).toBeGreaterThan(sites.length * 30);
+    // On flat ground at 100 m: everything stands on it.
+    expectAnchoredTo(mesh, () => 100);
+    expect(PAD_HALF).toBeGreaterThan(1);
   });
 });
 

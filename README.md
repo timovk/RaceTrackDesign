@@ -18,7 +18,7 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | 7b | 3D dressing (kerbs, run-off, buildings, trees), camera shots, image export | **done** |
 | 8a | The race in 3D: detailed cars for every class, liveries, shadows | **done** |
 | 8b | Broadcast look: trackside and helicopter cameras, a director, on-screen graphics | **done** |
-| 9 | Rain and flag visuals in 3D | next |
+| 9 | Rain and flags in 3D: weather, wet track, spray, lights, marshals and their flags | **done** |
 
 ## Running it
 
@@ -82,7 +82,7 @@ The strip under the map has two views that share hover with the map: the elevati
 
 Warnings flag corners tighter than the track is wide, very tight corners, steep and too-steep gradients, crossings and overlaps, parts of the track too close together for barriers, water, and track off the map.
 
-**3D view.** The **2D / 3D** switch under the map toolbar (or V) shows the map as a model: the terrain with the earthworks the track needs (grass embankments where it is built up, bare-earth cuttings where it is dug in), the track with its edge lines, verges and start line, the pit lane, water, and the sides of the map, under a sky. The circuit is dressed from its analysis: kerbs where the racing line runs to the edge in a corner, run-off outside each corner as deep as its escape paths allow (asphalt then gravel at fast corners, gravel elsewhere), the pit building with a garage per box, grandstands on the start straight and at the best overtaking spots, grid boxes, and woods that keep clear of all of it.
+**3D view.** The **2D / 3D** switch under the map toolbar (or V) shows the map as a model: the terrain with the earthworks the track needs (grass embankments where it is built up, bare-earth cuttings where it is dug in), the track with its edge lines, verges and start line, the pit lane, water, and the sides of the map, under a sky. The circuit is dressed from its analysis: kerbs where the racing line runs to the edge in a corner, run-off outside each corner as deep as its escape paths allow (asphalt then gravel at fast corners, gravel elsewhere), the pit building with a garage per box, grandstands on the start straight and at the best overtaking spots, grid boxes, marshal posts behind the run-off (on a platform where the licence check raised them) with a light panel each and the flag marshal's rostrum at the line, and woods that keep clear of all of it.
 - Drag to orbit, right-drag to pan, scroll to zoom towards the cursor, double-click to centre on a spot, F to see the whole track again.
 - **Height** draws the hills and dips up to three times as tall, so the elevation changes show; it starts at ×3 (×1 is true scale). Buildings, kerbs, trees and the camera's height over the ground keep their real size, and every figure (gradients, lap times, checks) uses the real heights.
 - **Shots** moves the camera to the overview, the start and grid, the pit lane, each numbered corner (from a camera tower beyond its run-off), the steepest climb and drop (from their foot, looking up) and the highest point. A view that a hill would block is raised until it sees over it.
@@ -102,9 +102,17 @@ Warnings flag corners tighter than the track is wide, very tight corners, steep 
 **TV.** In Race mode the **TV** button in the 3D toolbar shows the race as a broadcast, with a director choosing what to show and from where.
 - Cameras stand where a circuit puts them: a tower beyond the run-off at every corner, one behind the grid, one over the pit lane, one beside every long straight, and more wherever the track would otherwise be out of sight. Each pans and zooms with its car through a long lens; the helicopter hangs high off to one side, circles slowly and climbs when a hill gets in the way.
 - Each shot holds five to twelve seconds, then cuts. Close battles come first, then incidents, overtakes, the leaders, pit stops and the rest of the field; a car you pick (in the tower or by clicking it) is shown most, with its battle when it is in one. A shot ends early when its car leaves the camera's sight.
-- A caption names the car or the battle when the camera picks it up: position, driver, number, team, gap and tyre. Overtakes and pit stops among the first ten, fastest laps, incidents and retirements pop up as they happen, and so do the sector and lap times of the car on screen (purple for the best of all, green for its own best).
+- A caption names the car or the battle when the camera picks it up: position, driver, number, team, gap and tyre. Overtakes and pit stops among the first ten, fastest laps, incidents, retirements, race control's flags and the weather pop up as they happen, and so do the sector and lap times of the car on screen (purple for the best of all, green for its own best).
+- In the rain, drops settle on the lens of the trackside cameras, a fresh set at every cut; the helicopter's stays clear.
 - Shots last as long at any playback speed. At high speeds the cars go by a trackside camera too fast to hold, so the helicopter takes over; at 1× you get the whole broadcast.
 - Drag the view or press **Stop** to take the camera back. **Save image** saves the broadcast frame.
+
+**Weather and flags in 3D.** The race's weather and race control show in the 3D view too.
+- The sky clouds over a quarter of an hour before a shower and clears after it: grey sky, a dim sun, soft shadows. Rain falls in front of the camera, heavier in a downpour, with haze closing in round what the camera looks at.
+- The track darkens and shines as it gets wet, mirroring the sky. While it rains the cars' tyres keep the racing line a little less wet; once it stops, the line dries first and shows as a duller band. On a very wet track water stands in patches, most near the edges. Kerbs and asphalt run-off shine too; gravel and grass only darken.
+- Cars throw up spray behind them on a wet track, more the faster they go and the wetter it is: most behind single-seaters, least behind bikes. It hangs in the air and fades, so a car following closely drives into the cloud of the car ahead.
+- Rear rain lights come on with intermediates or wets (and on closed cars in the rain), closed cars run with their headlights up in the wet, and the lights glow through the spray. The safety car's orange beacons flash in turn while it is out and go dark once it comes in this lap, as in Formula 1.
+- Three marshals stand at every marshal post and show what race control calls for, following FIA Appendix H: a waved yellow flag at the post before an incident and through the stretch under yellow, two (a double waved yellow) where the track is blocked, and green at the first post after it. Under the safety car every post waves yellow and holds up the SC board; under a virtual safety car or full course yellow every post shows a single yellow and the VSC or FCY board, keeping the double yellow before the incident; green flags come out when the race is released and stay for a lap. Blue flags are waved at the post a car is coming to when a car a lap up, or from a faster class, is about to pass. The light panel beside each post flashes yellow or blue or shows green. At the line the flag marshal waves the chequered flag for the finish, and green for a rolling start or a restart.
 
 The 3D view has a film-like picture (ACES tone mapping), as on television.
 

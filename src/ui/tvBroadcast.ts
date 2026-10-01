@@ -7,10 +7,12 @@
  * a long lens, a little behind it like an operator would; the helicopter
  * hangs high off to one side and circles slowly. A new shot is a cut. When
  * the camera picks up a new car or battle, a caption names it (position,
- * driver, team, gap, tyre); overtakes, fastest laps, incidents and
- * retirements pop up as they happen, and the sector and lap times of the
+ * driver, team, gap, tyre); overtakes, fastest laps, incidents,
+ * retirements, race control's flags and the weather pop up as they happen,
+ * and the sector and lap times of the
  * car on screen as it sets them (purple for the best of all, green for its
- * own best).
+ * own best). In the rain, drops settle on the lens of the trackside
+ * cameras (a fresh set at every cut).
  */
 import * as THREE from 'three';
 import { type Heli, type TvCamera, type TvCar, type TvShot, Director, framingFov, heliStart, heliStep } from '../core/broadcast.ts';
@@ -45,6 +47,7 @@ export class TvBroadcast {
   private readonly layer: HTMLElement;
   private readonly lower: HTMLElement;
   private readonly pops: HTMLElement;
+  private readonly drops: HTMLElement;
   private shot: TvShot | null = null;
   private aim = new THREE.Vector3();
   private fov = 30;
@@ -64,7 +67,8 @@ export class TvBroadcast {
     this.director = new Director(cameras, { n, ds });
     this.lower = h('div', { class: 'tv-lower', hidden: true });
     this.pops = h('div', { class: 'tv-pops' });
-    this.layer = h('div', { class: 'tv' }, this.lower, this.pops);
+    this.drops = h('div', { class: 'tv-drops' });
+    this.layer = h('div', { class: 'tv' }, this.drops, this.lower, this.pops);
     host.overlay.append(this.layer);
   }
 
@@ -209,6 +213,7 @@ export class TvBroadcast {
 
   /** A new shot: a caption when it shows someone new. */
   private onCut(shot: TvShot, sim: RaceSim): void {
+    this.wetLens(shot, sim);
     const prev = this.shot;
     const sameSubject = prev && JSON.stringify(prev.subject) === JSON.stringify(shot.subject);
     if (sameSubject) return;
@@ -221,6 +226,25 @@ export class TvBroadcast {
     void this.lower.offsetWidth;
     this.lower.classList.add('in');
     this.captionUntil = this.time + CAPTION;
+  }
+
+  /** Raindrops on a trackside camera's lens, more in heavier rain; the helicopter's camera stays clear. */
+  private wetLens(shot: TvShot, sim: RaceSim): void {
+    const count = shot.camera === 'heli' || sim.rain < 0.12 ? 0 : Math.round(4 + 20 * Math.min(1, sim.rain));
+    const drops: HTMLElement[] = [];
+    let seed = Math.floor(sim.t * 10) + 1;
+    const rnd = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    for (let i = 0; i < count; i++) {
+      const size = 5 + 20 * rnd() * rnd();
+      drops.push(h('div', {
+        class: 'tv-drop',
+        style: `left:${(rnd() * 100).toFixed(1)}%;top:${(rnd() * 100).toFixed(1)}%;width:${size.toFixed(1)}px;height:${(size * (0.85 + 0.3 * rnd())).toFixed(1)}px`,
+      }));
+    }
+    setChildren(this.drops, ...drops);
   }
 
   private caption(shot: TvShot, sim: RaceSim): HTMLElement | null {
@@ -249,7 +273,7 @@ export class TvBroadcast {
       const e = events[i];
       if (e.kind === 'overtake') this.director.note('overtake', e.car);
       if (e.kind === 'off' || e.kind === 'contact' || e.kind === 'retired') this.director.note('incident', e.car);
-      if (['overtake', 'fastest', 'off', 'contact', 'retired', 'pit'].includes(e.kind)) {
+      if (['overtake', 'fastest', 'off', 'contact', 'retired', 'pit', 'flag', 'weather'].includes(e.kind)) {
         const car = sim.cars[e.car];
         // Only the front of the field's passes and stops, to keep the screen clear.
         if ((e.kind === 'overtake' || e.kind === 'pit') && car && car.position > 10) continue;

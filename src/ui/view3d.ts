@@ -18,6 +18,11 @@
  * selects it. TV shows it as a broadcast (ui/tvBroadcast.ts): trackside
  * cameras and the helicopter, chosen by a director, with captions.
  *
+ * The race's weather shows too (ui/weatherLayer.ts): cloud before a shower,
+ * rain, a wet and glossy track, spray behind the cars. Marshals stand at
+ * their posts and show the flags and boards race control calls for
+ * (ui/flagLayer.ts).
+ *
  * It follows the store: rebuilt shortly after the terrain, the track or the
  * facilities change, recoloured when the track colouring changes. It draws
  * only when something changed or moves (the camera, the data, the hover).
@@ -30,8 +35,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { COLORS, Earthworks, type MeshData, type Road, VERGE, anchoredHeight, buildRoads, buildSides, buildTerrain, pitRoad, startLine, trackRoad } from '../core/scene3d.ts';
 import {
-  type Footprint, type RunoffArea, TrackIndex, type Trees, buildGrandstands, buildGridMarks, buildKerbs, buildPitBuilding, buildRunoff, forest, inside, kerbRuns,
-  placeGrandstands, placeTrees, runoffAreas, runoffTest,
+  type Footprint, type PostSite, type RunoffArea, TrackIndex, type Trees, buildGrandstands, buildGridMarks, buildKerbs, buildMarshalPosts, buildPitBuilding, buildRunoff,
+  forest, inside, kerbRuns, lineFlagSite, marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffTest,
 } from '../core/scenery.ts';
 import { type Pose, type Shot, type ShotInput, type Vec3, flyoverDuration, flyoverPose, hotLapPose, trackShots } from '../core/shots.ts';
 import { RAMP, RAMP_MIN_RANGE, ROCK, contourInterval } from '../core/terrainImage.ts';
@@ -41,14 +46,18 @@ import { h, setChildren, setText } from './dom.ts';
 import { download, slug } from './download.ts';
 import * as fmt from './format.ts';
 import { type TvCamera, tvCameras } from '../core/broadcast.ts';
+import { flagState, lineFlag, postSignals } from '../core/flags.ts';
+import { DT } from '../core/race/sim.ts';
+import { cloudCover, lineWetness, standingWater } from '../core/weatherFx.ts';
 import { CarLayer } from './carLayer.ts';
+import { FlagLayer } from './flagLayer.ts';
+import { FINE, type WeatherState, WeatherLayer, wetSurfaceMaterial } from './weatherLayer.ts';
 import { TvBroadcast } from './tvBroadcast.ts';
 import type { RaceController } from './raceController.ts';
 import type { Store, Topic } from './store.ts';
 
 /** Rebuilds wait this long after the last change, so an edit in progress is not rebuilt at every step. */
 const REBUILD_DELAY = 250;
-const SKY = ['#3f78b8', '#9cc2e2', '#dce8f1'];
 const HORIZON = 0xc9dbea;
 const FOV = 45;
 const MARKER = 0x3fb6ff;
@@ -60,7 +69,7 @@ const SUN = new THREE.Vector3(-1, 1.3, -1).normalize();
 /** Half the side of the patch the sun's shadows cover, metres. */
 const SHADOW_REACH = 70;
 /** What receives the sun's shadows (when cars are shown). */
-const SHADOW_RECEIVERS = new Set(['terrain', 'track', 'trackVerges', 'pit', 'pitVerges', 'start', 'kerbs', 'runoff', 'grid', 'pitBuilding', 'stands']);
+const SHADOW_RECEIVERS = new Set(['terrain', 'track', 'trackVerges', 'pit', 'pitVerges', 'start', 'kerbs', 'runoff', 'grid', 'pitBuilding', 'stands', 'posts']);
 /** Driver codes show over this many cars nearest the camera, within this distance (metres). */
 const CAR_LABELS = 12;
 const CAR_LABEL_REACH = 400;
@@ -91,6 +100,14 @@ export class View3D {
   private readonly race: RaceController | null;
   private cars: CarLayer | null = null;
   private readonly sun: THREE.DirectionalLight;
+  private readonly weather: WeatherLayer;
+  private readonly flags = new FlagLayer();
+  /** The marshal posts and the line's rostrum as placed in the scenery, once the analysis belongs to the track. */
+  private postSites: PostSite[] = [];
+  private lineSite: PostSite | null = null;
+  /** Seconds on the view's own clock: it runs while a race plays, for waving flags, flashing lights and falling rain. */
+  private clock = 0;
+  private lastClock = 0;
   /** Driver codes over the cars near the camera (and the selected car), by car id (-1 the safety car). */
   private carLabels = new Map<number, { el: HTMLElement; text: string; p: THREE.Vector3; shown: boolean }>();
   private downAt: { x: number; y: number } | null = null;
@@ -122,11 +139,13 @@ export class View3D {
     uWater: { value: -1e9 },
     uContour: { value: 10 },
     uContours: { value: 1 },
+    uWetGround: { value: 0 },
   };
   private readonly terrainMaterial: THREE.MeshLambertMaterial;
   private readonly treeMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
   private readonly treeShapes: [THREE.BufferGeometry, THREE.BufferGeometry];
-  private readonly surfaceMaterial = (offset: number) => new THREE.MeshLambertMaterial({ vertexColors: true, polygonOffset: true, polygonOffsetFactor: offset, polygonOffsetUnits: offset });
+  /** A surface drawn over the ground (`offset` decides which wins), shining `gloss` much when wet. */
+  private readonly surfaceMaterial = (offset: number, gloss = 1, racingLine = false) => wetSurfaceMaterial(offset, gloss, this.weather.wet, this.weather.envMap, racingLine);
   private readonly meshes = new Map<string, THREE.Object3D>();
   private earth: Earthworks | null = null;
   /** Labels stand LABEL_LIFT metres over the track height `base`. */
@@ -196,9 +215,9 @@ export class View3D {
       this.sizeSelect);
     this.updateShotMenu();
 
-    this.scene.background = skyTexture();
     this.scene.fog = new THREE.Fog(HORIZON, 10_000, 40_000);
-    this.scene.add(new THREE.HemisphereLight(0xe4efff, 0x5d5243, 1.4));
+    const hemi = new THREE.HemisphereLight(0xe4efff, 0x5d5243, 1.4);
+    this.scene.add(hemi);
     // Sun from the north-west, as the hillshade of the flat map.
     const sun = new THREE.DirectionalLight(0xfff1dc, 2.2);
     sun.position.copy(SUN);
@@ -209,6 +228,9 @@ export class View3D {
     this.sun = sun;
     this.scene.add(sun, sun.target);
     this.scene.add(this.world);
+    // The sky, light and fog follow the weather; fine outside a race.
+    this.weather = new WeatherLayer(this.renderer, this.scene, sun, hemi);
+    this.scene.add(this.weather.group, this.flags.group);
 
     this.terrainMaterial = new THREE.MeshLambertMaterial();
     this.terrainMaterial.onBeforeCompile = (shader) => terrainShader(shader, this.terrainUniforms);
@@ -647,7 +669,7 @@ export class View3D {
       this.add('kerbs', new THREE.Mesh(geometry(buildKerbs(t, kerbRuns(t, s.performance!.line, metrics.corners))), this.surfaceMaterial(-2)));
       areas = s.licence ? runoffAreas(t, metrics.corners, s.licence.runoff, earth, index) : [];
       // Run-off lies beyond the verges and never overlaps a road, so it can win over the ground by a wide margin.
-      if (areas.length) this.add('runoff', new THREE.Mesh(geometry(buildRunoff(t, areas, earth)), this.surfaceMaterial(-4)));
+      if (areas.length) this.add('runoff', new THREE.Mesh(geometry(buildRunoff(t, areas, earth)), this.surfaceMaterial(-4, 0.5)));
       if (pitLane && pit) {
         const building = buildPitBuilding(pitLane, pit);
         footprints.push(building.footprint);
@@ -659,6 +681,18 @@ export class View3D {
       this.add('grid', new THREE.Mesh(geometry(buildGridMarks(t, s.facilities!.grid, index)), this.surfaceMaterial(-4)));
     }
     const onRunoff = t && index && areas.length ? runoffTest(t, areas, index) : null;
+    this.postSites = [];
+    this.lineSite = null;
+    if (t && ready) {
+      // Marshal posts behind the run-off and clear of the buildings, and the flag marshal's rostrum at the line.
+      const taken = (x: number, y: number) => (onRunoff?.(x, y, 2) ?? false) || footprints.some((f) => inside(f, x, y, 2));
+      this.postSites = marshalPostSites(t, s.facilities!.marshals.posts, earth, taken);
+      this.lineSite = lineFlagSite(t, (pitLane?.side ?? 1) as 1 | -1, earth, taken);
+      const sites = [...this.postSites, this.lineSite];
+      footprints.push(...sites.map((p) => p.footprint));
+      this.add('posts', new THREE.Mesh(geometry(buildMarshalPosts(sites)), new THREE.MeshLambertMaterial({ vertexColors: true })));
+    }
+    this.placeMarshals();
     this.trees = placeTrees(earth, this.forestFor(hm), (x, y) => (onRunoff?.(x, y, 10) ?? false) || footprints.some((f) => inside(f, x, y, 8)));
     this.buildTrees();
     this.buildLabels(t);
@@ -672,9 +706,6 @@ export class View3D {
       : null;
     this.updateShots();
 
-    const fog = this.scene.fog as THREE.Fog;
-    fog.near = hm.extent * 0.9;
-    fog.far = hm.extent * 4;
     this.controls.maxDistance = hm.extent * 2.5;
     if (!this.fitted) this.fit();
     this.requestRender();
@@ -740,14 +771,47 @@ export class View3D {
     if (!t) return;
     const main = buildRoads([{ road: trackRoad(t), style: { surface: this.surfaceColors(t), lines: true } }]);
     // The track wins over the pit lane where they meet, and both over the verges.
-    this.add('track', new THREE.Mesh(geometry(main.paved), this.surfaceMaterial(-3)));
-    this.add('trackVerges', new THREE.Mesh(geometry(main.verges), this.surfaceMaterial(-1)));
+    const paved = geometry(main.paved);
+    paved.setAttribute('wetLine', this.wetLine(t, paved));
+    this.add('track', new THREE.Mesh(paved, this.surfaceMaterial(-3, 1, true)));
+    this.add('trackVerges', new THREE.Mesh(geometry(main.verges), this.surfaceMaterial(-1, 0.15)));
     if (pit) {
       const lane = buildRoads([{ road: pit, style: { surface: COLORS.pitAsphalt, lines: false } }]);
       this.add('pit', new THREE.Mesh(geometry(lane.paved), this.surfaceMaterial(-2)));
-      this.add('pitVerges', new THREE.Mesh(geometry(lane.verges), this.surfaceMaterial(-1)));
+      this.add('pitVerges', new THREE.Mesh(geometry(lane.verges), this.surfaceMaterial(-1, 0.15)));
     }
     this.add('start', new THREE.Mesh(geometry(startLine(t)), this.surfaceMaterial(-4)));
+  }
+
+  /**
+   * Per vertex of the track surface: metres from the racing line and from
+   * the nearer edge, for the wet track (the racing line dries first, water
+   * stands near the edges). Without a racing line, all of it is off-line.
+   */
+  private wetLine(t: Track, g: THREE.BufferGeometry): THREE.BufferAttribute {
+    const s = this.store;
+    const line = s.performanceCurrent ? s.performance?.line : null;
+    const pos = g.getAttribute('position');
+    const out = new Float32Array(pos.count * 2);
+    const index = new TrackIndex(t);
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const y = pos.getZ(i);
+      const near = index.nearest(x, y, 40);
+      if (!near) {
+        out[i * 2] = 99;
+        continue;
+      }
+      const lat = index.lateral(near.k, x, y);
+      out[i * 2] = line && line.n === t.n ? Math.abs(lat - line.offset[near.k]) : 99;
+      out[i * 2 + 1] = Math.max(0, t.width[near.k] / 2 - Math.abs(lat));
+    }
+    return new THREE.BufferAttribute(out, 2);
+  }
+
+  /** Stands the marshals at the posts, on the drawn ground. */
+  private placeMarshals(): void {
+    this.flags.setSites(this.postSites, this.lineSite, (z) => (z - this.zRef) * this.store.view.relief);
   }
 
   /** The track colouring of the flat map, on the asphalt between the edge lines. */
@@ -838,6 +902,7 @@ export class View3D {
     if (this.trees) this.buildTrees();
     for (const obj of this.meshes.values()) reanchor(obj, r);
     for (const l of this.labels) l.p.y = l.base + LABEL_LIFT / r;
+    this.placeMarshals();
     this.updateShots();
     // The broadcast's cameras stand on the drawn ground: set them up again.
     if (this.tv) {
@@ -956,6 +1021,10 @@ export class View3D {
   }
 
   private render(): void {
+    // The view's clock runs while the race plays.
+    const now = performance.now();
+    if (this.race?.playing && this.raceActive && this.lastClock) this.clock += Math.min(0.1, (now - this.lastClock) / 1000);
+    this.lastClock = now;
     this.updateCars();
     if (this.needsRoads) {
       this.needsRoads = false;
@@ -983,6 +1052,8 @@ export class View3D {
       this.sun.position.copy(focus).addScaledVector(SUN, 600);
       this.sun.target.updateMatrixWorld();
     }
+    this.updateWeather(d);
+    this.updateFlags();
     this.renderer.render(this.scene, this.camera);
     this.updateLabels();
     if (this.pendingPointer) {
@@ -990,6 +1061,38 @@ export class View3D {
       this.pendingPointer = null;
     }
     if (moving) this.requestRender();
+  }
+
+  /** The race's weather (fine outside a race), for a camera looking at a point `focus` metres away. */
+  private updateWeather(focus: number): void {
+    const r = this.race;
+    const sim = this.raceActive && this.earth ? r?.sim : null;
+    let state: WeatherState = FINE;
+    if (r && sim) {
+      const t = sim.t - DT * (1 - r.alpha);
+      state = {
+        rain: sim.rain, wetness: sim.wetness, lineWetness: lineWetness(sim.wetness, sim.rain), puddles: standingWater(sim.wetness),
+        cloud: cloudCover(sim.setup.weather, t), raceTime: t, clock: this.clock,
+      };
+    }
+    this.weather.apply(state, this.camera, focus, sim ? this.cars : null, this.extent);
+    this.terrainUniforms.uWetGround.value = state.wetness;
+    // The wet surfaces mirror the sky of the moment.
+    const env = this.weather.envMap;
+    for (const obj of this.meshes.values()) {
+      const mat = (obj as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+      if (mat?.userData?.wet && mat.envMap !== env) mat.envMap = env;
+    }
+  }
+
+  /** The marshals' flags, boards and light panels, during a race. */
+  private updateFlags(): void {
+    const r = this.race;
+    const sim = this.raceActive ? r?.sim : null;
+    this.flags.group.visible = !!sim && this.postSites.length > 0;
+    if (!r || !sim || !this.flags.group.visible) return;
+    const state = flagState(sim, r.alpha);
+    this.flags.update(postSignals(state, this.postSites), lineFlag(state), this.clock);
   }
 
   /** Places the race's cars (or hides them when no race is shown), and keeps a followed car in view. */
@@ -1002,7 +1105,7 @@ export class View3D {
       return;
     }
     if (!this.cars) {
-      this.cars = new CarLayer(this.renderer);
+      this.cars = new CarLayer(this.weather.envMap);
       this.scene.add(this.cars.group);
     }
     this.cars.group.visible = true;
@@ -1012,6 +1115,9 @@ export class View3D {
       earth: this.earth!,
       sceneY: (z) => (z - this.zRef) * relief,
       pitSide: this.store.facilities?.pitLane?.side ?? 1,
+      rain: r.sim.rain,
+      wetness: r.sim.wetness,
+      clock: this.clock,
     }, this.camera, this.height);
     if (r.follow && r.selected !== null && !this.path && !this.tv) {
       const p = this.cars.positionOf(r.selected);
@@ -1317,22 +1423,6 @@ function clock(seconds: number): string {
   return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
 }
 
-function skyTexture(): THREE.Texture {
-  const c = document.createElement('canvas');
-  c.width = 2;
-  c.height = 256;
-  const g = c.getContext('2d')!;
-  const grad = g.createLinearGradient(0, 0, 0, 256);
-  grad.addColorStop(0, SKY[0]);
-  grad.addColorStop(0.6, SKY[1]);
-  grad.addColorStop(1, SKY[2]);
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 2, 256);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
 /**
  * Colours the ground in the shader: the height ramp of the flat map, bare
  * rock on steep slopes, grass on embankments and earth in cuttings, the bed
@@ -1357,6 +1447,7 @@ uniform float uRampRange;
 uniform float uWater;
 uniform float uContour;
 uniform float uContours;
+uniform float uWetGround;
 vec3 groundColour() {
   float t = clamp((vHeight - uLandMin) / uRampRange, 0.0, 1.0);
   ${ramp}
@@ -1373,6 +1464,8 @@ vec3 groundColour() {
     float major = abs(mod(floor(h + 0.5), 5.0)) < 0.5 ? 0.5 : 0.28;
     c = mix(c, vec3(0.23, 0.16, 0.09), line * major);
   }
+  // Wet ground is darker.
+  c *= 1.0 - 0.2 * uWetGround;
   return pow(c, vec3(2.2));
 }
 ${shader.fragmentShader}`.replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( groundColour(), opacity );');

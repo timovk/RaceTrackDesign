@@ -6,12 +6,17 @@
  * in the paint, and a soft shadow under each car.
  *
  * Per-car (instanced) attributes: livA, livB, livC (linear rgb) and
- * livStyle (pattern, variation, DRS flap open 0..1, unused); wheels use livA
+ * livStyle (pattern, variation, DRS flap open 0..1, lights); wheels use livA
  * for the tyre compound's colour. Decals take decalCell (the cell's column
- * and row in the atlas).
+ * and row in the atlas). The lights are bits (LIGHTS): the rear (rain)
+ * light, bright headlights, each of the safety car's beacons, and running
+ * lights (a closed car's tail lights glow when the rear light is off).
  */
 import * as THREE from 'three';
 import type { CarMeshData } from '../core/carMesh.ts';
+
+/** Bits of livStyle.w: which of a car's lights are on. */
+export const LIGHTS = { rear: 1, head: 2, beaconA: 4, beaconB: 8, running: 16 } as const;
 
 /** Cells per row and column of the decal atlas. */
 export const DECAL_GRID = 8;
@@ -86,6 +91,8 @@ attribute vec3 livA;
 attribute vec3 livB;
 attribute vec3 livC;
 attribute vec4 livStyle;
+attribute float lamp;
+varying float vLamp;
 varying vec4 vFinish;
 varying float vZone;
 varying vec2 vLivUv;
@@ -103,6 +110,7 @@ objectNormal.xy = vec2(flapC * objectNormal.x - flapS * objectNormal.y, flapS * 
 vec2 flapD = transformed.xy - hinge.xy;
 if (hinge.z > 0.5) transformed.xy = hinge.xy + vec2(flapC * flapD.x - flapS * flapD.y, flapS * flapD.x + flapC * flapD.y);
 vFinish = finish;
+vLamp = lamp;
 vZone = zone;
 vLivUv = uv;
 vLivA = livA;
@@ -111,6 +119,7 @@ vLivC = livC;
 vLivStyle = livStyle;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
+varying float vLamp;
 varying vec4 vFinish;
 varying float vZone;
 varying vec2 vLivUv;
@@ -135,7 +144,16 @@ material.specularColorBlended = mix(material.specularColor, diffuseColor.rgb, me
 material.specularF90 = mix(material.specularF90 * trimSpecular, 1.0, metalnessFactor);
 #ifdef USE_CLEARCOAT`))
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-totalEmissiveRadiance += vColor.rgb * vFinish.w;`);
+// Lights glow brighter when switched on, and the rear light of a single-seater or bike is dark when off.
+float lampGain = 1.0;
+if (vLamp > 0.5) {
+  int lights = int(vLivStyle.w + 0.5);
+  if (vLamp < 1.5) lampGain = (lights & ${LIGHTS.head}) != 0 ? 4.0 : 1.0;
+  else if (vLamp < 2.5) lampGain = (lights & ${LIGHTS.rear}) != 0 ? 7.0 : (lights & ${LIGHTS.running}) != 0 ? 1.0 : 0.12;
+  else if (vLamp < 3.5) lampGain = (lights & ${LIGHTS.beaconA}) != 0 ? 2.5 : 0.04;
+  else lampGain = (lights & ${LIGHTS.beaconB}) != 0 ? 2.5 : 0.04;
+}
+totalEmissiveRadiance += vColor.rgb * vFinish.w * lampGain;`);
   };
   m.customProgramCacheKey = () => 'car-body';
   return m;
@@ -171,6 +189,7 @@ export function carGeometry(m: CarMeshData, count: number, decals = false): THRE
     g.setAttribute('finish', new THREE.BufferAttribute(m.finish, 4));
     g.setAttribute('zone', new THREE.BufferAttribute(m.zone, 1));
     g.setAttribute('hinge', new THREE.BufferAttribute(m.hinge, 3));
+    g.setAttribute('lamp', new THREE.BufferAttribute(m.lamp, 1));
     for (const name of ['livA', 'livB', 'livC']) g.setAttribute(name, new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3));
     g.setAttribute('livStyle', new THREE.InstancedBufferAttribute(new Float32Array(count * 4), 4));
   }
@@ -186,16 +205,17 @@ export function linearRgb(hex: string): [number, number, number] {
 }
 
 /**
- * The sky reflected in the cars: a blue zenith fading to a pale horizon,
- * the ground below it, and the sun in the north-west, as an environment map.
+ * The sky reflected in the cars and the wet track, as an environment map:
+ * a blue zenith fading to a pale horizon, the ground below it, and the sun
+ * in the north-west; under cloud (`cover` 1) a flat grey sky and no sun.
  */
-export function skyEnvironment(renderer: THREE.WebGLRenderer): THREE.Texture {
+export function skyEnvironment(renderer: THREE.WebGLRenderer, cover = 0): THREE.Texture {
   const scene = new THREE.Scene();
   const geo = new THREE.SphereGeometry(100, 48, 24);
   const colors: number[] = [];
-  const zenith = new THREE.Color('#2f6cb4');
-  const horizon = new THREE.Color('#dfe9f2');
-  const ground = new THREE.Color('#4d5240');
+  const zenith = new THREE.Color('#2f6cb4').lerp(new THREE.Color('#7d848c'), cover);
+  const horizon = new THREE.Color('#dfe9f2').lerp(new THREE.Color('#aab0b6'), cover);
+  const ground = new THREE.Color('#4d5240').lerp(new THREE.Color('#3a3d38'), cover);
   const pos = geo.getAttribute('position');
   for (let i = 0; i < pos.count; i++) {
     const y = pos.getY(i) / 100;
@@ -204,9 +224,11 @@ export function skyEnvironment(renderer: THREE.WebGLRenderer): THREE.Texture {
   }
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   scene.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
-  const sun = new THREE.Mesh(new THREE.SphereGeometry(5, 16, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.95, 0.85).multiplyScalar(30) }));
-  sun.position.set(-1, 1.3, -1).normalize().multiplyScalar(90);
-  scene.add(sun);
+  if (cover < 0.95) {
+    const sun = new THREE.Mesh(new THREE.SphereGeometry(5, 16, 8), new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.95, 0.85).multiplyScalar(30 * (1 - cover) ** 2) }));
+    sun.position.set(-1, 1.3, -1).normalize().multiplyScalar(90);
+    scene.add(sun);
+  }
   const pmrem = new THREE.PMREMGenerator(renderer);
   const texture = pmrem.fromScene(scene, 0.02).texture;
   pmrem.dispose();

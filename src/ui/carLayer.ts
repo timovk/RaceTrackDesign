@@ -5,6 +5,12 @@
  * underneath. Cars sit on the drawn ground at their real size whatever the
  * height exaggeration, tilted with the road.
  *
+ * In the wet the rear (rain) lights come on, closed cars switch their
+ * headlights up, and the safety car flashes its beacons in turn while it is
+ * out (they go dark once it comes in this lap); lights that are on glow,
+ * more widely in the wet. The cars on track are also the sources of the
+ * spray (ui/weatherLayer.ts).
+ *
  * Each car model is instanced per level of detail; a car takes the level
  * that its size on screen calls for, so a car seen through a long lens
  * keeps its detail. Cars that would overlap are moved side by side
@@ -15,12 +21,15 @@
  */
 import * as THREE from 'three';
 import { type CarModel, buildCar } from '../core/carBodies.ts';
+import { LAMP } from '../core/carMesh.ts';
 import { DT, type RaceCar, type RaceSim } from '../core/race/sim.ts';
+import { RAIN_THRESHOLD } from '../core/race/weather.ts';
 import { type Livery, SAFETY_LIVERY, bodyFor, liveryFor, spreadCars } from '../core/raceCars.ts';
 import type { RacingLine } from '../core/racingLine.ts';
 import { type Earthworks, SINK } from '../core/scene3d.ts';
 import { TrackIndex } from '../core/scenery.ts';
-import { type DecalCar, DECAL_GRID, carGeometry, carMaterial, decalAtlas, decalMaterial, linearRgb, shadowTexture, skyEnvironment } from './carMaterials.ts';
+import type { SprayBody } from '../core/weatherFx.ts';
+import { type DecalCar, DECAL_GRID, LIGHTS, carGeometry, carMaterial, decalAtlas, decalMaterial, linearRgb, shadowTexture } from './carMaterials.ts';
 
 interface LodMeshes {
   body: THREE.InstancedMesh;
@@ -56,6 +65,20 @@ export interface ShownCar {
   drs: number;
   compound: [number, number, number];
   lod: number;
+  /** Which lights are on (LIGHTS bits). */
+  lights: number;
+}
+
+/** A car on track throwing up spray: where it is on the racing line, how fast it goes, and its size. */
+export interface SprayEmitter {
+  id: number;
+  /** Race progress in stations, and metres left of the racing line. */
+  u: number;
+  lateral: number;
+  speed: number;
+  body: SprayBody;
+  length: number;
+  width: number;
 }
 
 export interface CarContext {
@@ -64,12 +87,27 @@ export interface CarContext {
   sceneY: (z: number) => number;
   /** Side of the pit lane the garages are on (+1 left of the direction of travel). */
   pitSide: number;
+  /** Rain intensity and track wetness now (0 to 1). */
+  rain: number;
+  wetness: number;
+  /** Seconds on the view's clock, for flashing lights. */
+  clock: number;
 }
 
 /** Projected length in pixels above which a car takes the full model, and the medium one. */
 const LOD_FULL = 150;
 const LOD_MEDIUM = 36;
 const SAFETY_ID = -1;
+
+/** The glow round a light that is on: its colour, its width (metres), and which way it shines (+1 forward, -1 back, 0 all round). */
+const GLOW: Record<number, { color: [number, number, number]; size: number; facing: number; bit: number }> = {
+  [LAMP.head]: { color: [1, 0.92, 0.78], size: 0.7, facing: 1, bit: LIGHTS.head },
+  [LAMP.rain]: { color: [1, 0.05, 0.03], size: 0.7, facing: -1, bit: LIGHTS.rear },
+  [LAMP.beaconA]: { color: [1, 0.4, 0.03], size: 1.1, facing: 0, bit: LIGHTS.beaconA },
+  [LAMP.beaconB]: { color: [1, 0.4, 0.03], size: 1.1, facing: 0, bit: LIGHTS.beaconB },
+};
+/** A glow is drawn at least this many pixels wide, so a light shows from afar. */
+const GLOW_MIN_PX = 4;
 
 // Scratch objects, reused every frame.
 const tmpV = new THREE.Vector3();
@@ -86,13 +124,16 @@ const FLIP = new THREE.Quaternion().setFromAxisAngle(AXIS_Y, Math.PI);
 
 export class CarLayer {
   readonly group = new THREE.Group();
-  private readonly envMap: THREE.Texture;
+  private envMap: THREE.Texture;
   private readonly material: THREE.MeshPhysicalMaterial;
   private readonly shadowMaterial: THREE.MeshBasicMaterial;
   private decalMat: THREE.MeshPhysicalMaterial | null = null;
   private atlas: THREE.Texture | null = null;
   private sets = new Map<string, BodySet>();
   private shadowMesh: THREE.InstancedMesh | null = null;
+  private glowMesh: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial> | null = null;
+  private readonly camPos = new THREE.Vector3();
+  private pxPerM = 1000;
   private sim: RaceSim | null = null;
   private looks: CarLook[] = [];
   private safetyLook: CarLook | null = null;
@@ -103,14 +144,26 @@ export class CarLayer {
   /** Cars as drawn, kept from frame to frame (by id) so their matrices are reused. */
   private pool = new Map<number, ShownCar>();
   shown: ShownCar[] = [];
+  /** Cars on track this frame, for the spray. */
+  emitters: SprayEmitter[] = [];
+  private ctx: CarContext | null = null;
 
-  constructor(renderer: THREE.WebGLRenderer) {
-    this.envMap = skyEnvironment(renderer);
+  /** `envMap`: the sky the paint reflects (see setEnvironment). */
+  constructor(envMap: THREE.Texture) {
+    this.envMap = envMap;
     this.material = carMaterial(this.envMap);
     this.shadowMaterial = new THREE.MeshBasicMaterial({
       map: shadowTexture(), transparent: true, depthWrite: false, color: 0x000000, opacity: 0.6,
       polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6,
     });
+  }
+
+  /** The sky reflected in the paint: clear or overcast. */
+  setEnvironment(envMap: THREE.Texture): void {
+    if (envMap === this.envMap) return;
+    this.envMap = envMap;
+    this.material.envMap = envMap;
+    if (this.decalMat) this.decalMat.envMap = envMap;
   }
 
   /** Builds the cars for a race, or clears them. */
@@ -148,6 +201,8 @@ export class CarLayer {
     this.shadowMesh.count = 0;
     this.shadowMesh.renderOrder = 1;
     this.group.add(this.shadowMesh);
+    this.glowMesh = glowMesh((sim.cars.length + 1) * 4);
+    this.group.add(this.glowMesh);
   }
 
   private buildSet(model: CarModel, capacity: number): BodySet {
@@ -186,6 +241,12 @@ export class CarLayer {
       this.shadowMesh.dispose();
       this.shadowMesh = null;
     }
+    if (this.glowMesh) {
+      this.group.remove(this.glowMesh);
+      this.glowMesh.geometry.dispose();
+      this.glowMesh.material.dispose();
+      this.glowMesh = null;
+    }
     this.decalMat?.dispose();
     this.decalMat = null;
     this.atlas?.dispose();
@@ -197,11 +258,13 @@ export class CarLayer {
     this.lastT = -1;
     this.pool.clear();
     this.shown = [];
+    this.emitters = [];
   }
 
   /** Places every car for the race at `alpha` between its last two steps, as seen by `camera` (for the level of detail). */
   update(sim: RaceSim, alpha: number, ctx: CarContext, camera: THREE.PerspectiveCamera, viewHeight: number): void {
     if (sim !== this.sim) this.setRace(sim);
+    this.ctx = ctx;
     const m = sim.model;
     const t = m.track;
     const line = m.line;
@@ -223,14 +286,29 @@ export class CarLayer {
       return z + (ctx.earth.lastRoad ? SINK : 0);
     };
     const pxPerM = viewHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+    this.pxPerM = pxPerM;
+    this.camPos.copy(camera.position);
     const shown: ShownCar[] = [];
-    const place = (id: number, look: CarLook, x: number, y: number, heading: number, dist: number, speed: number, curvature: number, steerK: number, drs: number, compound: [number, number, number]) => {
+    const emitters: SprayEmitter[] = [];
+    // Lights: rear lights on wet-weather tyres (and on closed cars in the rain), closed cars' headlights up in the wet.
+    const raining = ctx.rain > RAIN_THRESHOLD;
+    const wetLights = raining || ctx.wetness > 0.3;
+    const lightsOf = (car: RaceCar) => {
+      const kind = this.looks[car.id].set.model.kind;
+      const closed = kind !== 'single-seater' && kind !== 'bike';
+      let lights = closed ? LIGHTS.running : 0;
+      if (car.tyreType !== 'slick' || (closed && raining)) lights |= LIGHTS.rear;
+      if (closed && wetLights) lights |= LIGHTS.head;
+      return lights;
+    };
+    const place = (id: number, look: CarLook, x: number, y: number, heading: number, dist: number, speed: number, curvature: number, steerK: number, drs: number, compound: [number, number, number], lights: number) => {
       const model = look.set.model;
       let s = this.pool.get(id);
       if (!s || s.look !== look) {
-        s = { id, look, matrix: new THREE.Matrix4(), wheels: model.wheels.map(() => new THREE.Matrix4()), position: new THREE.Vector3(), drs, compound, lod: 2 };
+        s = { id, look, matrix: new THREE.Matrix4(), wheels: model.wheels.map(() => new THREE.Matrix4()), position: new THREE.Vector3(), drs, compound, lod: 2, lights };
         this.pool.set(id, s);
       }
+      s.lights = lights;
       const cx = Math.cos(heading);
       const cy = Math.sin(heading);
       const half = model.wheelbase / 2;
@@ -271,7 +349,7 @@ export class CarLayer {
         // Parked beside the track, turned off the racing line.
         const near = this.index?.nearest(pose.x, pose.y, 60);
         const heading = near ? t.heading[near.k] + 0.5 : 0;
-        place(car.id, look, pose.x, pose.y, heading, 0, 0, 0, 0, 0, compound);
+        place(car.id, look, pose.x, pose.y, heading, 0, 0, 0, 0, 0, compound, 0);
         continue;
       }
       if (car.status === 'pit') {
@@ -286,7 +364,7 @@ export class CarLayer {
         const x = pose.x + Math.sin(pose.heading) * off;
         const y = pose.y - Math.cos(pose.heading) * off;
         const p = car.pit ? car.pit.prevP + (car.pit.p - car.pit.prevP) * alpha : 0;
-        place(car.id, look, x, y, pose.heading, p, car.v, 0, 0, 0, compound);
+        place(car.id, look, x, y, pose.heading, p, car.v, 0, 0, 0, compound, lightsOf(car));
         continue;
       }
       this.aside.delete(car.id);
@@ -295,16 +373,23 @@ export class CarLayer {
       const p = linePoint(line, n, u, lateral);
       const k = Math.floor(((u % n) + n) % n) % n;
       const drs = car.drsUntilU > u ? 1 : 0;
-      place(car.id, look, p.x, p.y, p.heading, u * ds, car.v, line.curvature[k], line.curvature[k], drs, compound);
+      place(car.id, look, p.x, p.y, p.heading, u * ds, car.v, line.curvature[k], line.curvature[k], drs, compound, lightsOf(car));
+      emitters.push({ id: car.id, u, lateral, speed: car.v, body: sprayBody(look.set.model.kind), length: look.set.model.length, width: look.set.model.width });
     }
     const sc = sim.safetyCar;
     if (sc && this.safetyLook) {
       const u = sc.prevU + (sc.u - sc.prevU) * alpha;
       const p = linePoint(line, n, u, 0);
       const k = Math.floor(((u % n) + n) % n) % n;
-      place(SAFETY_ID, this.safetyLook, p.x, p.y, p.heading, u * ds, ((sc.u - sc.prevU) * ds) / DT, 0, line.curvature[k], 0, linearRgb('#dddddd'));
+      const speed = ((sc.u - sc.prevU) * ds) / DT;
+      // The beacons flash in turn while it is out, and go dark once it comes in this lap.
+      const flash = sc.in ? 0 : Math.floor(ctx.clock * 3) % 2 === 0 ? LIGHTS.beaconA : LIGHTS.beaconB;
+      place(SAFETY_ID, this.safetyLook, p.x, p.y, p.heading, u * ds, speed, 0, line.curvature[k], 0, linearRgb('#dddddd'), LIGHTS.running | LIGHTS.head | flash);
+      const model = this.safetyLook.set.model;
+      emitters.push({ id: SAFETY_ID, u, lateral: 0, speed, body: 'closed', length: model.length, width: model.width });
     }
     this.shown = shown;
+    this.emitters = emitters;
     // Forget cars no longer shown (finished).
     if (this.pool.size > shown.length) {
       const ids = new Set(shown.map((s) => s.id));
@@ -336,7 +421,7 @@ export class CarLayer {
           livA.setXYZ(i, ...s.look.a);
           livB.setXYZ(i, ...s.look.b);
           livC.setXYZ(i, ...s.look.c);
-          style.setXYZW(i, s.look.pattern, s.look.variation, s.drs, 0);
+          style.setXYZW(i, s.look.pattern, s.look.variation, s.drs, s.lights);
           cell.setXY(i, ...s.look.cell);
           s.wheels.forEach((w, j) => {
             lod.wheels.setMatrixAt(i * wheelsPer + j, w);
@@ -361,6 +446,67 @@ export class CarLayer {
       });
       sh.instanceMatrix.needsUpdate = true;
     }
+    this.writeGlow();
+  }
+
+  /** A glow round every light that is on, facing the camera; a light facing away shows little of it. */
+  private writeGlow(): void {
+    const mesh = this.glowMesh;
+    if (!mesh) return;
+    const g = mesh.geometry;
+    const pos = g.getAttribute('iPos') as THREE.InstancedBufferAttribute;
+    const size = g.getAttribute('iSize') as THREE.InstancedBufferAttribute;
+    const color = g.getAttribute('iColor') as THREE.InstancedBufferAttribute;
+    const wet = this.ctx ? Math.min(1, this.ctx.wetness + this.ctx.rain) : 0;
+    const toCam = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+    let count = 0;
+    for (const s of this.shown) {
+      if (!s.lights) continue;
+      for (const lamp of s.look.set.model.lamps) {
+        const glow = GLOW[lamp.kind];
+        if (!glow || !(s.lights & glow.bit) || count >= pos.count) continue;
+        tmpV.set(lamp.at[0], lamp.at[1], lamp.at[2]).applyMatrix4(s.matrix);
+        toCam.copy(this.camPos).sub(tmpV);
+        const dist = toCam.length();
+        toCam.divideScalar(Math.max(1e-6, dist));
+        let f = 1;
+        if (glow.facing) f = Math.sqrt(Math.max(0, dir.set(glow.facing, 0, 0).transformDirection(s.matrix).dot(toCam)));
+        if (f < 0.03) continue;
+        // A little towards the camera, so the bodywork round the light does not hide it.
+        tmpV.addScaledVector(toCam, 0.25);
+        pos.setXYZ(count, tmpV.x, tmpV.y, tmpV.z);
+        // Wider in the wet, as a light glows through the spray and the rain.
+        size.setX(count, Math.max(glow.size * (1 + 0.6 * wet), (GLOW_MIN_PX * dist) / this.pxPerM));
+        color.setXYZ(count, glow.color[0] * f, glow.color[1] * f, glow.color[2] * f);
+        count++;
+      }
+    }
+    g.instanceCount = count;
+    mesh.visible = count > 0;
+    pos.needsUpdate = true;
+    size.needsUpdate = true;
+    color.needsUpdate = true;
+  }
+
+  /**
+   * A point on the racing line `back` metres behind race progress `u`,
+   * `side` metres to its left and `up` metres above the track: scene
+   * coordinates (for the spray).
+   */
+  pathPoint(u: number, back: number, side: number, up: number, out: THREE.Vector3): THREE.Vector3 {
+    const sim = this.sim;
+    const ctx = this.ctx;
+    if (!sim || !ctx) return out.set(0, 0, 0);
+    const t = sim.model.track;
+    const n = t.n;
+    const at = u - back / t.ds;
+    const p = linePoint(sim.model.line, n, at, side);
+    const pos = ((at % n) + n) % n;
+    const k = Math.floor(pos) % n;
+    const f = pos - Math.floor(pos);
+    const z = t.z[k] + (t.z[(k + 1) % n] - t.z[k]) * f;
+    return out.set(p.x, ctx.sceneY(z) + up, p.y);
   }
 
   /** The middle of a car on screen, scene coordinates, or null when it is not shown. */
@@ -393,8 +539,63 @@ export class CarLayer {
     this.material.dispose();
     this.shadowMaterial.map?.dispose();
     this.shadowMaterial.dispose();
-    this.envMap.dispose();
   }
+}
+
+/** Additive glows facing the camera, one per instance (iPos, iSize, iColor). */
+function glowMesh(capacity: number): THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial> {
+  const g = new THREE.InstancedBufferGeometry();
+  const quad = new THREE.PlaneGeometry(1, 1);
+  g.index = quad.index;
+  g.setAttribute('position', quad.getAttribute('position'));
+  g.setAttribute('uv', quad.getAttribute('uv'));
+  g.setAttribute('iPos', new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute('iSize', new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute('iColor', new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3).setUsage(THREE.DynamicDrawUsage));
+  g.instanceCount = 0;
+  const material = new THREE.ShaderMaterial({
+    uniforms: THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
+    vertexShader: /* glsl */`
+attribute vec3 iPos;
+attribute float iSize;
+attribute vec3 iColor;
+varying vec2 vUv;
+varying vec3 vColor;
+#include <fog_pars_vertex>
+void main() {
+  vUv = uv;
+  vColor = iColor;
+  vec4 mvPosition = modelViewMatrix * vec4(iPos, 1.0);
+  mvPosition.xy += position.xy * iSize;
+  gl_Position = projectionMatrix * mvPosition;
+  #include <fog_vertex>
+}`,
+    fragmentShader: /* glsl */`
+varying vec2 vUv;
+varying vec3 vColor;
+#include <fog_pars_fragment>
+void main() {
+  vec2 d = (vUv - 0.5) * 2.0;
+  float r2 = dot(d, d);
+  // A bright core in a soft halo.
+  float a = exp(-r2 * 7.0) + 0.6 * exp(-r2 * 40.0);
+  gl_FragColor = vec4(vColor, a);
+  #include <colorspace_fragment>
+  #include <fog_fragment>
+}`,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    fog: true,
+  });
+  const mesh = new THREE.Mesh(g, material);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 4;
+  return mesh;
+}
+
+function sprayBody(kind: string): SprayBody {
+  return kind === 'single-seater' ? 'single-seater' : kind === 'bike' ? 'bike' : 'closed';
 }
 
 /** A point on the racing line at a fractional station, `lateral` metres to its left, with the line's heading. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BODIES, buildCar } from '../src/core/carBodies.ts';
-import { CarMeshBuilder, type CarMeshData, Loft, SectionPath, ZONE, curve, paint, plate, triangulate } from '../src/core/carMesh.ts';
+import { CarMeshBuilder, type CarMeshData, LAMP, Loft, SectionPath, ZONE, curve, paint, plate, triangulate } from '../src/core/carMesh.ts';
 import { bodyFor, liveryFor, spreadCars } from '../src/core/raceCars.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
 
@@ -139,6 +139,31 @@ describe('car models', () => {
       }
     });
   }
+
+  it('has the lights that switch on: rain lights at the back, headlights in front, beacons on the safety car roof', () => {
+    const kinds = (body: string, kind: number) => buildCar(body).lamps.filter((l) => l.kind === kind);
+    for (const body of BODIES) {
+      const car = buildCar(body);
+      expect(car.lods[0].body.lamp).toHaveLength(car.lods[0].body.positions.length / 3);
+      // A rear light on every car and bike, at the back.
+      const rear = kinds(body, LAMP.rain);
+      expect(rear.length).toBeGreaterThanOrEqual(1);
+      for (const l of rear) expect(l.at[0]).toBeLessThan(-car.length * 0.3);
+    }
+    expect(kinds('f1', LAMP.rain)).toHaveLength(1);
+    expect(Math.abs(kinds('f1', LAMP.rain)[0].at[2])).toBeLessThan(0.03);
+    expect(kinds('f1', LAMP.head)).toHaveLength(0);
+    const head = kinds('gt3', LAMP.head);
+    expect(head).toHaveLength(2);
+    for (const l of head) expect(l.at[0]).toBeGreaterThan(buildCar('gt3').length * 0.3);
+    expect(kinds('gt3', LAMP.rain)).toHaveLength(2);
+    const sc = buildCar('safety-car');
+    const [a] = kinds('safety-car', LAMP.beaconA);
+    const [b] = kinds('safety-car', LAMP.beaconB);
+    expect(a.at[1]).toBeGreaterThan(sc.height - 0.2);
+    expect(Math.sign(a.at[2])).toBe(-Math.sign(b.at[2]));
+    expect(kinds('gt3', LAMP.beaconA)).toHaveLength(0);
+  });
 
   it('turns only the DRS flap of a single-seater about its hinge', () => {
     const f1 = buildCar('f1').lods[0].body;

@@ -1,0 +1,421 @@
+/**
+ * Weather in the 3D view during a race (core/weatherFx.ts works out the
+ * figures from the race's weather):
+ *
+ * - the sky clouds over before a shower and clears after it: a grey sky and
+ *   horizon, a dim sun, softer light, and haze in the rain;
+ * - rain falls round what the camera looks at, as streaks;
+ * - the track darkens and turns glossy as it gets wet (wetSurfaceMaterial):
+ *   the racing line less so while it rains and first to dry once it stops,
+ *   standing water in patches when it is very wet;
+ * - cars on a wet track throw up spray behind them.
+ *
+ * Outside a race the weather is fine.
+ */
+import * as THREE from 'three';
+import { SPRAY_SLOTS, type Puff, sprayPuffs, sprayStrength } from '../core/weatherFx.ts';
+import type { CarLayer } from './carLayer.ts';
+import { skyEnvironment } from './carMaterials.ts';
+
+/** The weather to show; all zero outside a race. */
+export interface WeatherState {
+  /** Rain intensity, track wetness, the racing line's wetness, standing water and cloud cover, 0 to 1. */
+  rain: number;
+  wetness: number;
+  lineWetness: number;
+  puddles: number;
+  cloud: number;
+  /** Race time, seconds (the spray), and the view's clock (falling rain). */
+  raceTime: number;
+  clock: number;
+}
+
+export const FINE: WeatherState = { rain: 0, wetness: 0, lineWetness: 0, puddles: 0, cloud: 0, raceTime: 0, clock: 0 };
+
+/** Uniforms shared by the wet surfaces. */
+export interface WetUniforms {
+  [name: string]: THREE.IUniform;
+  uWet: THREE.IUniform<number>;
+  uLineWet: THREE.IUniform<number>;
+  uPuddles: THREE.IUniform<number>;
+}
+
+const SKY_CLEAR = ['#3f78b8', '#9cc2e2', '#dce8f1'];
+const SKY_GREY = ['#5d646c', '#858b92', '#a3a8ad'];
+const HORIZON_CLEAR = new THREE.Color(0xc9dbea);
+const HORIZON_GREY = new THREE.Color(0x9da3a9);
+const SUN_CLEAR = new THREE.Color(0xfff1dc);
+const SUN_GREY = new THREE.Color(0xe8ecf0);
+const HEMI_CLEAR = new THREE.Color(0xe4efff);
+const HEMI_GREY = new THREE.Color(0xd2d7dc);
+/** Rain streaks: how many at most, and how fast they fall (m/s), with a little wind. */
+const STREAKS = 9000;
+const FALL = 9;
+const WIND = new THREE.Vector2(1.6, 0.8);
+/** Cloud cover levels with an environment map of their own. */
+const COVER_LEVELS = [0, 0.5, 1];
+
+export class WeatherLayer {
+  readonly group = new THREE.Group();
+  readonly wet: WetUniforms = { uWet: { value: 0 }, uLineWet: { value: 0 }, uPuddles: { value: 0 } };
+  private readonly renderer: THREE.WebGLRenderer;
+  private readonly scene: THREE.Scene;
+  private readonly sun: THREE.DirectionalLight;
+  private readonly hemi: THREE.HemisphereLight;
+  private readonly envMaps: THREE.Texture[] = [];
+  private readonly skyCanvas: HTMLCanvasElement;
+  private readonly sky: THREE.CanvasTexture;
+  private skyCover = -1;
+  private readonly rain: THREE.LineSegments;
+  private readonly rainUniforms = {
+    uTime: { value: 0 }, uCenter: { value: new THREE.Vector3() }, uSize: { value: 100 }, uFall: { value: FALL },
+    uWind: { value: WIND.clone() }, uLen: { value: 0.4 }, uOpacity: { value: 0 }, uColor: { value: new THREE.Color(0xc8ced4) },
+  };
+  private spray: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial> | null = null;
+  private sprayCapacity = 0;
+  private readonly sprayColor = new THREE.Color();
+  private readonly puffs: Puff[] = [];
+  /** The state last shown. */
+  state: WeatherState = FINE;
+
+  constructor(renderer: THREE.WebGLRenderer, scene: THREE.Scene, sun: THREE.DirectionalLight, hemi: THREE.HemisphereLight) {
+    this.renderer = renderer;
+    this.scene = scene;
+    this.sun = sun;
+    this.hemi = hemi;
+    this.skyCanvas = document.createElement('canvas');
+    this.skyCanvas.width = 2;
+    this.skyCanvas.height = 256;
+    this.sky = new THREE.CanvasTexture(this.skyCanvas);
+    this.sky.colorSpace = THREE.SRGBColorSpace;
+    scene.background = this.sky;
+    this.rain = rainStreaks(this.rainUniforms);
+    this.group.add(this.rain);
+    this.apply(FINE, null, 1000, null, 8192);
+  }
+
+  /** The sky the cars and the wet track reflect, for the current cloud cover. */
+  get envMap(): THREE.Texture {
+    return this.envFor(this.state.cloud);
+  }
+
+  private envFor(cover: number): THREE.Texture {
+    let best = 0;
+    for (let i = 1; i < COVER_LEVELS.length; i++) if (Math.abs(COVER_LEVELS[i] - cover) < Math.abs(COVER_LEVELS[best] - cover)) best = i;
+    if (!this.envMaps[best]) this.envMaps[best] = skyEnvironment(this.renderer, COVER_LEVELS[best]);
+    return this.envMaps[best];
+  }
+
+  /**
+   * Shows the weather `s` for a camera looking at a point `focus` metres
+   * away; `cars` throw up the spray. `extent` is the map's size, for the
+   * fog on a fine day.
+   */
+  apply(s: WeatherState, camera: THREE.PerspectiveCamera | null, focus: number, cars: CarLayer | null, extent: number): void {
+    this.state = s;
+    const c = s.cloud;
+    this.paintSky(c);
+    const fog = this.scene.fog as THREE.Fog | null;
+    if (fog) {
+      fog.color.copy(HORIZON_CLEAR).lerp(HORIZON_GREY, c);
+      // Haze in the rain, closing in round what the camera looks at.
+      const haze = Math.min(1, s.rain * 1.3);
+      fog.near = THREE.MathUtils.lerp(extent * 0.9, focus * 0.8 + 150, haze);
+      fog.far = THREE.MathUtils.lerp(extent * 4, focus * 4 + 1500, haze);
+    }
+    this.sun.intensity = THREE.MathUtils.lerp(2.2, 0.3, c);
+    this.sun.color.copy(SUN_CLEAR).lerp(SUN_GREY, c);
+    this.hemi.intensity = THREE.MathUtils.lerp(1.4, 2.1, c);
+    this.hemi.color.copy(HEMI_CLEAR).lerp(HEMI_GREY, c);
+    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.25, 1.4, c);
+    cars?.setEnvironment(this.envFor(c));
+    this.wet.uWet.value = s.wetness;
+    this.wet.uLineWet.value = s.lineWetness;
+    this.wet.uPuddles.value = s.puddles;
+
+    // Rain: a box of streaks just in front of the camera, sized to what it looks at.
+    const raining = s.rain > 0.03 && !!camera;
+    this.rain.visible = raining;
+    if (raining && camera) {
+      const size = THREE.MathUtils.clamp(focus * 0.6, 20, 300);
+      const dir = camera.getWorldDirection(new THREE.Vector3());
+      const u = this.rainUniforms;
+      u.uCenter.value.copy(camera.position).addScaledVector(dir, size * 0.45);
+      u.uSize.value = size;
+      u.uTime.value = s.clock;
+      u.uLen.value = Math.max(0.35, size * 0.012);
+      u.uOpacity.value = 0.18 + 0.25 * Math.min(1, s.rain);
+      u.uColor.value.set(0xc8ced4).lerp(new THREE.Color(0xe6eaee), 1 - c);
+      // Fewer in the small box round a close-up, where each streak is big on screen.
+      this.rain.geometry.setDrawRange(0, 2 * Math.round(STREAKS * Math.min(1, 0.25 + s.rain) * THREE.MathUtils.clamp(size / 60, 0.35, 1)));
+    }
+    this.updateSpray(s, cars);
+  }
+
+  /** The sky's gradient, from clear blue to overcast grey. */
+  private paintSky(cover: number): void {
+    if (Math.abs(cover - this.skyCover) < 0.01) return;
+    this.skyCover = cover;
+    const g = this.skyCanvas.getContext('2d')!;
+    const grad = g.createLinearGradient(0, 0, 0, 256);
+    const mix = (a: string, b: string) => `#${new THREE.Color(a).lerp(new THREE.Color(b), cover).getHexString()}`;
+    grad.addColorStop(0, mix(SKY_CLEAR[0], SKY_GREY[0]));
+    grad.addColorStop(0.6, mix(SKY_CLEAR[1], SKY_GREY[1]));
+    grad.addColorStop(1, mix(SKY_CLEAR[2], SKY_GREY[2]));
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 2, 256);
+    this.sky.needsUpdate = true;
+  }
+
+  /** Spray behind every car on a wet track, as soft puffs facing the camera. */
+  private updateSpray(s: WeatherState, cars: CarLayer | null): void {
+    const emitters = cars && s.wetness > 0.05 ? cars.emitters : [];
+    const need = emitters.length * SPRAY_SLOTS;
+    if (need > this.sprayCapacity) this.buildSpray(Math.max(need, 64 * SPRAY_SLOTS));
+    const mesh = this.spray;
+    if (!mesh) return;
+    const g = mesh.geometry;
+    const pos = g.getAttribute('iPos') as THREE.InstancedBufferAttribute;
+    const size = g.getAttribute('iSize') as THREE.InstancedBufferAttribute;
+    const alpha = g.getAttribute('iAlpha') as THREE.InstancedBufferAttribute;
+    const v = new THREE.Vector3();
+    let count = 0;
+    for (const e of emitters) {
+      const strength = sprayStrength(s.wetness, e.speed, e.body);
+      if (strength < 0.02) continue;
+      sprayPuffs(e.id + 17, s.raceTime, e.speed, strength, e, this.puffs);
+      for (const p of this.puffs) {
+        if (p.alpha < 0.005) continue;
+        cars!.pathPoint(e.u, p.back, e.lateral + p.side, p.up, v);
+        pos.setXYZ(count, v.x, v.y, v.z);
+        size.setX(count, p.size);
+        alpha.setX(count, p.alpha);
+        count++;
+      }
+    }
+    g.instanceCount = count;
+    mesh.visible = count > 0;
+    pos.needsUpdate = true;
+    size.needsUpdate = true;
+    alpha.needsUpdate = true;
+    // Lit by the sky: whiter on a bright day, greyer under heavy cloud.
+    this.sprayColor.set(0xf4f6f8).lerp(new THREE.Color(0xd2d7dc), s.cloud);
+    (mesh.material.uniforms.uColor.value as THREE.Color).copy(this.sprayColor);
+  }
+
+  private buildSpray(capacity: number): void {
+    if (this.spray) {
+      this.group.remove(this.spray);
+      this.spray.geometry.dispose();
+      this.spray.material.dispose();
+    }
+    const g = new THREE.InstancedBufferGeometry();
+    const quad = new THREE.PlaneGeometry(1, 1);
+    g.index = quad.index;
+    g.setAttribute('position', quad.getAttribute('position'));
+    g.setAttribute('uv', quad.getAttribute('uv'));
+    g.setAttribute('iPos', new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('iSize', new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1).setUsage(THREE.DynamicDrawUsage));
+    g.setAttribute('iAlpha', new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1).setUsage(THREE.DynamicDrawUsage));
+    g.instanceCount = 0;
+    const material = new THREE.ShaderMaterial({
+      uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { uColor: { value: new THREE.Color() } }]),
+      vertexShader: SPRAY_VERTEX,
+      fragmentShader: SPRAY_FRAGMENT,
+      transparent: true,
+      depthWrite: false,
+      fog: true,
+    });
+    const mesh = new THREE.Mesh(g, material);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = 2;
+    this.spray = mesh;
+    this.sprayCapacity = capacity;
+    this.group.add(mesh);
+  }
+
+  dispose(): void {
+    for (const t of this.envMaps) t?.dispose();
+    this.sky.dispose();
+    this.rain.geometry.dispose();
+    (this.rain.material as THREE.Material).dispose();
+    if (this.spray) {
+      this.spray.geometry.dispose();
+      this.spray.material.dispose();
+    }
+  }
+}
+
+/**
+ * A surface that gets wet: dull asphalt (or kerb paint, or run-off) when
+ * dry, darker and glossy as it gets wet, `gloss` setting how much (gravel
+ * and grass darken but hardly shine). `envMap` is the sky it mirrors (the
+ * weather layer's envMap; marked `userData.wet` for swapping it). Track geometry with a `wetLine`
+ * attribute (metres from the racing line, metres from the edge) shows the
+ * racing line's own wetness and puddles near the edges.
+ */
+export function wetSurfaceMaterial(offset: number, gloss: number, wet: WetUniforms, envMap: THREE.Texture, racingLine = false): THREE.MeshStandardMaterial {
+  const m = new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: 0.9, metalness: 0, envMap, envMapIntensity: 1,
+    polygonOffset: true, polygonOffsetFactor: offset, polygonOffsetUnits: offset,
+  });
+  m.userData.wet = true;
+  if (racingLine) m.defines = { WET_LINE: '' };
+  m.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, wet, { uGloss: { value: gloss } });
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>
+#ifdef WET_LINE
+attribute vec2 wetLine;
+varying vec2 vWetLine;
+#endif
+varying vec2 vWetXZ;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+#ifdef WET_LINE
+vWetLine = wetLine;
+#endif
+vWetXZ = position.xz;`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+uniform float uWet;
+uniform float uLineWet;
+uniform float uPuddles;
+uniform float uGloss;
+#ifdef WET_LINE
+varying vec2 vWetLine;
+#endif
+varying vec2 vWetXZ;
+float wetHash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float wetNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(wetHash(i), wetHash(i + vec2(1.0, 0.0)), u.x), mix(wetHash(i + vec2(0.0, 1.0)), wetHash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float wetSurface;
+float puddle;`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+float edgeBias = 0.0;
+wetSurface = uWet;
+#ifdef WET_LINE
+// The racing line: the tyres' two tracks, a car's width.
+wetSurface = mix(uWet, uLineWet, 1.0 - smoothstep(0.7, 1.5, vWetLine.x));
+edgeBias = 0.3 * (1.0 - smoothstep(0.0, 3.0, vWetLine.y));
+#endif
+float n = 0.65 * wetNoise(vWetXZ / 9.0) + 0.35 * wetNoise(vWetXZ / 2.3);
+puddle = uPuddles * smoothstep(0.62, 0.72, n + edgeBias) * step(0.3, uGloss);
+// Even a damp surface darkens and shines; it is much the same from wet on.
+wetSurface = smoothstep(0.02, 0.5, wetSurface);
+diffuseColor.rgb *= mix(1.0, 0.45, wetSurface * min(1.0, uGloss + 0.4)) * (1.0 - 0.5 * puddle);`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+roughnessFactor = mix(roughnessFactor, 0.14, wetSurface * uGloss);
+roughnessFactor = mix(roughnessFactor, 0.03, puddle);`)
+      // Lit by the sun and the sky's light as the ground is (not the sky map), it mirrors the sky the more the wetter it is.
+      .replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
+#if defined( RE_IndirectDiffuse )
+iblIrradiance = vec3( 0.0 );
+#endif
+#if defined( RE_IndirectSpecular )
+radiance *= mix(0.35, 1.25, max(wetSurface * uGloss, puddle)) * (1.0 + 1.2 * puddle);
+#endif`);
+  };
+  m.customProgramCacheKey = () => `wet-surface${racingLine ? '-line' : ''}`;
+  return m;
+}
+
+function rainStreaks(uniforms: Record<string, THREE.IUniform>): THREE.LineSegments {
+  const seeds = new Float32Array(STREAKS * 2 * 3);
+  const ends = new Float32Array(STREAKS * 2);
+  let s = 12345;
+  const rnd = () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+  for (let i = 0; i < STREAKS; i++) {
+    const x = rnd();
+    const y = rnd();
+    const z = rnd();
+    for (let e = 0; e < 2; e++) {
+      seeds.set([x, y, z], (i * 2 + e) * 3);
+      ends[i * 2 + e] = e;
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(seeds, 3));
+  g.setAttribute('end', new THREE.BufferAttribute(ends, 1));
+  const material = new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader: RAIN_VERTEX,
+    fragmentShader: RAIN_FRAGMENT,
+    transparent: true,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const lines = new THREE.LineSegments(g, material);
+  lines.frustumCulled = false;
+  lines.renderOrder = 3;
+  lines.visible = false;
+  return lines;
+}
+
+/** Each streak keeps its place in the world as the box round the camera moves, wrapping at the box's faces. */
+const RAIN_VERTEX = /* glsl */`
+attribute float end;
+uniform float uTime;
+uniform float uSize;
+uniform float uFall;
+uniform float uLen;
+uniform float uOpacity;
+uniform vec3 uCenter;
+uniform vec2 uWind;
+varying float vAlpha;
+void main() {
+  vec3 velocity = vec3(uWind.x, -uFall, uWind.y);
+  vec3 q = fract(position + (velocity * uTime - uCenter) / uSize) - 0.5;
+  vec3 p = uCenter + q * uSize - normalize(velocity) * uLen * end;
+  float edge = max(abs(q.x), max(abs(q.y), abs(q.z)));
+  vAlpha = uOpacity * (1.0 - smoothstep(0.32, 0.5, edge)) * (1.0 - 0.6 * end);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+}`;
+
+const RAIN_FRAGMENT = /* glsl */`
+uniform vec3 uColor;
+varying float vAlpha;
+void main() {
+  gl_FragColor = vec4(uColor, vAlpha);
+  #include <colorspace_fragment>
+}`;
+
+const SPRAY_VERTEX = /* glsl */`
+attribute vec3 iPos;
+attribute float iSize;
+attribute float iAlpha;
+varying vec2 vUv;
+varying float vAlpha;
+#include <fog_pars_vertex>
+void main() {
+  vUv = uv;
+  vAlpha = iAlpha;
+  vec4 mvPosition = modelViewMatrix * vec4(iPos, 1.0);
+  mvPosition.xy += position.xy * iSize;
+  gl_Position = projectionMatrix * mvPosition;
+  #include <fog_vertex>
+}`;
+
+const SPRAY_FRAGMENT = /* glsl */`
+uniform vec3 uColor;
+varying vec2 vUv;
+varying float vAlpha;
+#include <fog_pars_fragment>
+void main() {
+  // A soft round puff, fading out from the middle with no edge to see.
+  vec2 d = (vUv - 0.5) * 2.0;
+  float a = vAlpha * exp(-dot(d, d) * 3.5) * (1.0 - smoothstep(0.8, 1.0, length(d)));
+  if (a < 0.003) discard;
+  gl_FragColor = vec4(uColor, a);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+  #include <fog_fragment>
+}`;

@@ -116,6 +116,8 @@ export interface Neutralisation {
 export interface YellowZone {
   from: number;
   to: number;
+  /** The station where it happened. */
+  at: number;
   double: boolean;
   until: number;
 }
@@ -1178,6 +1180,7 @@ export class RaceSim {
     this.yellows.push({
       from: mod(k - Math.round(YELLOW_BEFORE / this.ds), this.n),
       to: mod(k + Math.round(YELLOW_AFTER / this.ds), this.n),
+      at: k,
       double,
       until: t + duration,
     });

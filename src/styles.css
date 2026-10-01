@@ -1121,6 +1121,33 @@ input[type='range'] {
   border-left-color: #ffd60a;
 }
 
+/* Raindrops on the lens: a little blur through each, a highlight and a dark rim. */
+.tv-drops {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.tv-drop {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 32%, rgba(255, 255, 255, 0.45) 0 12%, rgba(255, 255, 255, 0.08) 30%, rgba(20, 30, 40, 0.18) 68%, rgba(0, 0, 0, 0) 72%);
+  backdrop-filter: blur(1.5px) brightness(1.08);
+  -webkit-backdrop-filter: blur(1.5px) brightness(1.08);
+  box-shadow: inset 0 -1px 2px rgba(0, 0, 0, 0.25);
+}
+
+/* Race control and the weather, in the colours of the race feed. */
+.tv-pop.flag {
+  border-left-color: #ffb020;
+  color: #ffd27a;
+}
+
+.tv-pop.weather {
+  border-left-color: #3fb6ff;
+  color: #9fd4ff;
+}
+
 @keyframes tv-pop {
   from { opacity: 0; transform: translateX(20px); }
   to { opacity: 1; transform: translateX(0); }
