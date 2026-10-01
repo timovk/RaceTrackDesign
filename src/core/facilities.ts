@@ -6,6 +6,7 @@
  */
 import { type DrsZone, drsZones } from './lapSim.ts';
 import type { LapResult } from './lapSim.ts';
+import { Earthworks, builtGround, pitRoad, trackRoad } from './earthworks.ts';
 import { type MarshalPlan, placeMarshalPosts } from './marshals.ts';
 import type { Performance } from './performance.ts';
 import { type PitLane, type PitLoss, type PitOverride, pitTimeLoss, placePitLane } from './pitLane.ts';
@@ -83,7 +84,11 @@ export function placeFacilities(input: FacilityInput): Facilities {
     speedTrap: speedTrap(t, fastest, input.overrides.speedTrap),
     drsZones: drsZones(perf.line),
     overtaking: fastest ? overtakingZones(fastest, perf.line.ds) : [],
-    marshals: placeMarshalPosts(t, input.heightAt),
+    // Marshals look over the ground as built: along the cuttings and over the banks the track needs.
+    marshals: placeMarshalPosts(t, builtGround(new Earthworks(
+      { extent: input.extent, waterLevel: input.waterLevel, cellSize: 4, height: input.heightAt },
+      pitLane ? [trackRoad(t), pitRoad(pitLane, t)] : [trackRoad(t)],
+    ))),
   };
 }
 

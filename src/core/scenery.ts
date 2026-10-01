@@ -219,7 +219,7 @@ export interface RunoffArea {
 export function runoffAreas(t: Track, corners: readonly Corner[], rays: readonly RunoffRay[], earth: Earthworks, index: TrackIndex): RunoffArea[] {
   const n = t.n;
   const out: RunoffArea[] = [];
-  const hm = earth.hm;
+  const hm = earth.ground;
   const ramp = Math.round(30 / t.ds);
   const local = Math.round(300 / t.ds);
   for (const c of corners) {
@@ -471,7 +471,7 @@ const STAND_RISE = 1.1;
  * clear of every road and of the given footprints).
  */
 function tryStand(t: Track, from: number, to: number, side: 1 | -1, offset: number, earth: Earthworks, avoid: readonly Footprint[]): Stand | null {
-  const hm = earth.hm;
+  const hm = earth.ground;
   const step = Math.max(1, Math.round(6 / t.ds));
   const stations = span(from, to, t.n).filter((_, i, all) => i % step === 0 || i === all.length - 1);
   const front: Stand['front'] = [];

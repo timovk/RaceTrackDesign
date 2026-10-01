@@ -143,7 +143,7 @@ export function assessLicence(input: LicenceInput): Licence {
   add({ id: 'fia-pit', body: 'FIA', label: 'A pit lane at least 12 m wide', level: 'required', grades: [], pass: !!pit && pit.problems.length === 0 && pit.width >= 12, detail: pit ? (pit.problems[0] ?? `${pit.width} m wide, ${metres(pit.length)} long`) : 'no place found', source: `${APPX_O} 7.9`, focus: pit?.entry });
   add({ id: 'fia-pit-line', body: 'FIA', label: 'Pit entry and exit clear of the racing line', level: 'recommended', grades: [], pass: !!pit && pit.entryClearance >= 3 && pit.exitClearance >= 3 && !pit.exitInBrakingZone, detail: pit ? `line ${pit.entryClearance.toFixed(1)} m from the edge at entry, ${pit.exitClearance.toFixed(1)} m at exit${pit.exitInBrakingZone ? ', exit in a braking zone' : ''}` : 'no pit lane', source: `${APPX_O} 7.9`, focus: pit?.exit });
   add({ id: 'fia-pit-start', body: 'FIA', label: 'Pit lane beside the starting straight', level: 'recommended', grades: [], pass: !!pit && pit.adjacentToStart, detail: pit?.adjacentToStart ? 'yes' : 'elsewhere on the lap', source: `${APPX_O} 7.9`, focus: pit?.entry });
-  add({ id: 'fia-marshals', body: 'FIA', label: 'Marshal posts at most 500 m apart, in sight of each other, seeing all the track', level: 'required', grades: [], pass: marshals.maxGap <= 500 + 1e-6 && marshals.allLinked && marshals.unobserved === 0, detail: `${marshals.posts.length} posts, largest gap ${metres(marshals.maxGap)}${marshals.unobserved ? `, ${metres(marshals.unobserved)} unseen` : ''}${marshals.allLinked ? '' : ', some out of sight of the next'}`, source: 'FIA Appendix H 2026 2.4.2' });
+  add({ id: 'fia-marshals', body: 'FIA', label: 'Marshal posts at most 500 m apart, in sight of each other, seeing all the track', level: 'required', grades: [], pass: marshals.maxGap <= 500 + 1e-6 && marshals.allLinked && marshals.unobserved === 0, detail: `${marshals.posts.length} posts${raisedPosts(marshals)}, largest gap ${metres(marshals.maxGap)}${marshals.unobserved ? `, ${metres(marshals.unobserved)} unseen` : ''}${marshals.allLinked ? '' : ', some out of sight of the next'}`, source: 'FIA Appendix H 2026 2.4.2' });
 
   // ---- FIM -------------------------------------------------------------------------
   add({ id: 'fim-length', body: 'FIM', label: 'Between 3.5 km and 10 km long', level: 'required', grades: [], pass: m.length >= 3500 && m.length <= 10000, detail: km(m.length), source: `${FIM} 4.2` });
@@ -157,7 +157,7 @@ export function assessLicence(input: LicenceInput): Licence {
   add({ id: 'fim-first-corner-a', body: 'FIM', label: 'Grade A: start line at least 250 m before the first corner', level: 'required', grades: ['A'], pass: f.startFinish.firstCornerDistance >= 250, detail: metres(f.startFinish.firstCornerDistance), source: `${FIM} 4.5.1`, focus: 0 });
   add({ id: 'fim-pit', body: 'FIM', label: 'Pit lane at least 12 m wide (15 m for new Grade A circuits)', level: 'required', grades: [], pass: !!pit && pit.problems.length === 0 && pit.width >= 15, detail: pit ? (pit.problems[0] ?? `${pit.width} m wide`) : 'no place found', source: `${FIM} 8.1`, focus: pit?.entry });
   add({ id: 'fim-layout', body: 'FIM', label: 'No crossings, overlaps or impossible corners', level: 'required', grades: [], pass: layoutErrors.length === 0, detail: layoutErrors.length ? layoutErrors[0].message : 'none', source: 'layout', focus: layoutErrors[0]?.focus });
-  add({ id: 'fim-marshals', body: 'FIM', label: 'Marshal posts in sight of each other, seeing all the track', level: 'required', grades: [], pass: marshals.allLinked && marshals.unobserved === 0, detail: `${marshals.posts.length} posts`, source: `${FIM} (marshal posts)` });
+  add({ id: 'fim-marshals', body: 'FIM', label: 'Marshal posts in sight of each other, seeing all the track', level: 'required', grades: [], pass: marshals.allLinked && marshals.unobserved === 0, detail: `${marshals.posts.length} posts${raisedPosts(marshals)}`, source: `${FIM} (marshal posts)` });
 
   // ---- run-off and crests, per grade ------------------------------------------------
   const runoff: RunoffRay[] = [];
@@ -453,4 +453,10 @@ function worstCrest(t: Track, laps: LapResult[]): { unload: number; speed: numbe
     }
   }
   return worst;
+}
+
+/** ", 2 raised" when some marshal posts stand on platforms to see over a crest. */
+function raisedPosts(m: Facilities['marshals']): string {
+  const raised = m.posts.filter((p) => p.raised).length;
+  return raised ? `, ${raised} raised` : '';
 }

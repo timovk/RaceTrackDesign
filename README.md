@@ -153,7 +153,7 @@ The start/finish goes where the grid of 24 cars fits on a straight with a gradie
 
 The pit lane (15 m wide) is placed beside any stretch of the lap, or across the infield, where the ground is flat, it is clear of the rest of the track and out of water, and its entry and exit keep off the racing line. The FIA prefers it beside the start straight, and that is scored in but not forced.
 
-Marshal posts are at most 500 m apart and in sight of each other over the terrain (FIA Appendix H 2.4.2).
+Marshal posts are at most 500 m apart, in sight of each other, and between them see all the track (FIA Appendix H 2.4.2). Sight lines run over the ground as built: a track graded into a hillside is seen along its cutting, and banks and hills in between block the view. At a sharp crest a post may stand right behind the verge or on a raised platform, as at real circuits; the licence checklist says how many are raised.
 
 The licence estimate checks the layout against FIA Appendix O (2026) and the FIM Standards for Circuits (2024): length, width, straights, the grid and first corner, the pit lane, marshal posts, crests and run-off. Neither body gives a run-off formula, so the required depth follows the 30–100 m range of Appendix O 7.8, scaled by speed (and 1.3 times for bikes). Each corner's escape paths are traced across the terrain until they meet water, another part of the track or the map edge. A real licence also needs barriers, buildings, medical facilities and an inspection, so treat the grade as an estimate.
 

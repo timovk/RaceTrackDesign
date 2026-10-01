@@ -3,10 +3,17 @@
  * the track may escape observation, each post must see the previous and the
  * next one, and consecutive posts may be at most 500 m apart.
  *
- * Posts stand beside the track on the outside of the next corner. Sight
- * lines are traced over the terrain, so hills and crests between posts
- * count. Placement is greedy: from each post, the next one goes as far
- * ahead as the rules allow.
+ * Posts stand beside the track, 6 m out on the outside of the next corner
+ * where that gives a view and on the inside where it does not. Sight lines
+ * are traced over the ground as built (core/earthworks.ts): over the track's
+ * surface, its verges and banks, and the terrain beyond, so hills and crests
+ * between posts count, but a stretch graded into a hillside is seen along its
+ * cutting. A post sees the track where it sees a car on it (1 m up).
+ *
+ * Placement is greedy: from each post, the next one goes as far ahead as the
+ * rules allow. Where no such spot is in sight (over a sharp crest), the next
+ * post may stand right behind the verge, 3 m out, or on a platform 3 m up,
+ * as circuits do, and the search looks every 5 m instead of every 20.
  */
 import type { HeightSampler, Track } from './track.ts';
 
@@ -18,6 +25,8 @@ export interface MarshalPost {
   y: number;
   /** +1 left of the direction of travel, -1 right. */
   side: 1 | -1;
+  /** On a raised platform, for a view over a crest. */
+  raised: boolean;
 }
 
 export interface MarshalPlan {
@@ -32,20 +41,32 @@ export interface MarshalPlan {
 
 export const MAX_POST_SPACING = 500;
 const EYE_HEIGHT = 1.7;
-/** Posts stand this far outside the track edge. */
+/** Posts stand this far outside the track edge; or closer, right behind the verge, where they must. */
 const POST_OFFSET = 6;
+const CLOSE_OFFSET = 3;
+/** A raised post's platform. */
+const RAISE = 3;
 const CANDIDATE_STEP = 20;
+const FINE_STEP = 5;
 const SIGHT_STEP = 5;
+/** A post sees the track where it sees this high above the surface (a car's roof). */
+const TARGET_HEIGHT = 1;
 
+/**
+ * Places the posts. `heightAt` is the ground the sight lines pass over: the
+ * ground as built (`builtGround`) for a graded track, the natural ground when
+ * the track is not graded.
+ */
 export function placeMarshalPosts(t: Track, heightAt: HeightSampler): MarshalPlan {
   const { n, ds } = t;
   const sideAt = outsideSides(t);
-  const postAt = (k: number) => {
-    const side = sideAt[k];
-    const off = t.width[k] / 2 + POST_OFFSET;
+  type Place = { flip: boolean; offset: number; raise: number };
+  const postAt = (k: number, o: Place = USUAL[0]) => {
+    const side = o.flip ? -sideAt[k] : sideAt[k];
+    const off = t.width[k] / 2 + o.offset;
     const x = t.x[k] + Math.sin(t.heading[k]) * side * off;
     const y = t.y[k] - Math.cos(t.heading[k]) * side * off;
-    return { station: k, x, y, side: (side > 0 ? 1 : -1) as 1 | -1, eye: Math.max(heightAt(x, y), t.z[k]) + EYE_HEIGHT };
+    return { station: k, x, y, side: (side > 0 ? 1 : -1) as 1 | -1, raised: o.raise > 0, eye: Math.max(heightAt(x, y), t.z[k]) + EYE_HEIGHT + o.raise };
   };
   type Spot = ReturnType<typeof postAt>;
   const sees = (a: { x: number; y: number; eye: number }, bx: number, by: number, bz: number) => {
@@ -59,9 +80,10 @@ export function placeMarshalPosts(t: Track, heightAt: HeightSampler): MarshalPla
     return true;
   };
   const seesPost = (a: Spot, b: Spot) => sees(a, b.x, b.y, b.eye);
-  const seesTrack = (a: Spot, k: number) => sees(a, t.x[k], t.y[k], t.z[k] + 0.5);
+  const seesTrack = (a: Spot, k: number) => sees(a, t.x[k], t.y[k], t.z[k] + TARGET_HEIGHT);
 
   const step = Math.max(1, Math.round(CANDIDATE_STEP / ds));
+  const fine = Math.max(1, Math.round(FINE_STEP / ds));
   const maxAhead = Math.floor((MAX_POST_SPACING - 1) / ds);
   const first = Math.round(30 / ds) % n;
   const covered = (a: Spot, b: Spot, span: number) => {
@@ -78,18 +100,19 @@ export function placeMarshalPosts(t: Track, heightAt: HeightSampler): MarshalPla
     const remaining = n - travelled;
     // Close the loop once the first post is within reach and in sight, with all track between seen.
     if (remaining <= maxAhead && seesPost(current, posts[0]) && covered(current, posts[0], remaining)) break;
-    let chosen: Spot | null = null;
-    let fallback: Spot | null = null;
-    for (let ahead = Math.min(maxAhead, remaining - step); ahead >= step; ahead -= step) {
-      const cand = postAt((current.station + ahead) % n);
-      if (!seesPost(current, cand)) continue;
-      if (!fallback) fallback = cand;
-      if (covered(current, cand, ahead)) {
-        chosen = cand;
-        break;
+    // The farthest spot in sight with all track between seen: the usual places every 20 m first, then every
+    // 5 m with closer and raised posts too.
+    const search = (places: readonly Place[], every: number): Spot | null => {
+      for (let ahead = Math.min(maxAhead, remaining - every); ahead >= every; ahead -= every) {
+        for (const o of places) {
+          const cand = postAt((current.station + ahead) % n, o);
+          if (seesPost(current, cand) && covered(current, cand, ahead)) return cand;
+        }
       }
-    }
-    const next = chosen ?? fallback ?? postAt((current.station + Math.min(remaining - step, Math.max(step, Math.round(100 / ds)))) % n);
+      return null;
+    };
+    const chosen = search(USUAL, step) ?? search(ALL, fine);
+    const next = chosen ?? postAt((current.station + Math.min(remaining - step, Math.max(step, Math.round(100 / ds)))) % n);
     const advance = (next.station - current.station + n) % n;
     if (advance <= 0 || advance >= remaining) break;
     travelled += advance;
@@ -115,12 +138,27 @@ export function placeMarshalPosts(t: Track, heightAt: HeightSampler): MarshalPla
   }
 
   return {
-    posts: posts.map((p, i) => ({ number: i + 1, station: p.station, x: p.x, y: p.y, side: p.side })),
+    posts: posts.map((p, i) => ({ number: i + 1, station: p.station, x: p.x, y: p.y, side: p.side, raised: p.raised })),
     maxGap,
     unobserved: blind,
     allLinked,
   };
 }
+
+/** Where a post may stand: the usual places (the outside of the corner, then the inside), then closer to the track and raised. */
+const USUAL = [
+  { flip: false, offset: POST_OFFSET, raise: 0 },
+  { flip: true, offset: POST_OFFSET, raise: 0 },
+] as const;
+const ALL = [
+  ...USUAL,
+  { flip: false, offset: CLOSE_OFFSET, raise: 0 },
+  { flip: true, offset: CLOSE_OFFSET, raise: 0 },
+  { flip: false, offset: POST_OFFSET, raise: RAISE },
+  { flip: true, offset: POST_OFFSET, raise: RAISE },
+  { flip: false, offset: CLOSE_OFFSET, raise: RAISE },
+  { flip: true, offset: CLOSE_OFFSET, raise: RAISE },
+] as const;
 
 /** For each station, the outside of the next corner within 300 m (left on straights with none). */
 function outsideSides(t: Track): Int8Array {

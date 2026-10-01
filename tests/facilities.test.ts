@@ -2,13 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { analyseTrack } from '../src/core/analysis.ts';
 import { overtakingZones, placeFacilities } from '../src/core/facilities.ts';
 import { drsZones } from '../src/core/lapSim.ts';
+import { Earthworks, builtGround, trackRoad } from '../src/core/earthworks.ts';
 import { placeMarshalPosts, MAX_POST_SPACING } from '../src/core/marshals.ts';
 import { analysePerformance } from '../src/core/performance.ts';
 import { MIN_BOX_LENGTH, pitTimeLoss, placePitLane } from '../src/core/pitLane.ts';
 import { GRID_SIZE, GRID_SLOT_SPACING, gridSlots, placeStartFinish, rotateTrack } from '../src/core/startFinish.ts';
-import { buildTrack, type Track } from '../src/core/track.ts';
+import { DEFAULT_GRADING, buildTrack, type Track } from '../src/core/track.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
 import { bigRectangle, chicaneCircuit, design } from './helpers.ts';
+
+/** The ground as built round a track on natural ground `heightAt`. */
+function asBuilt(t: Track, heightAt: (x: number, y: number) => number) {
+  return builtGround(new Earthworks({ extent: 8192, waterLevel: -Infinity, cellSize: 4, height: heightAt }, [trackRoad(t)]));
+}
 
 const flat = () => 100;
 
@@ -138,6 +144,31 @@ describe('other facilities', () => {
     const plan = placeMarshalPosts(t, (x, y) => (Math.hypot(x - 3750, y - 3400) < 300 ? 200 : 100));
     expect(plan.posts.length).toBeGreaterThanOrEqual(Math.ceil(t.length / MAX_POST_SPACING));
     // A hill inside the rectangle hides nothing along the straights, but the plan still links every post.
+    expect(plan.maxGap).toBeLessThanOrEqual(MAX_POST_SPACING);
+  });
+
+  it('sees a stretch graded through a ridge along its cutting', () => {
+    // A ridge 9 m high across the top straight; the grading digs the track through it.
+    const ridge = (x: number, y: number) => 100 + (Math.abs(y - 3000) < 150 ? 9 * Math.max(0, 1 - Math.abs(x - 3750) / 40) : 0);
+    const t = buildTrack(design(bigRectangle(), DEFAULT_GRADING), ridge)!;
+    let k = 0;
+    while (Math.abs(t.x[k] - 3750) > 2 || Math.abs(t.y[k] - 3000) > 5) k++;
+    expect(ridge(t.x[k], t.y[k]) - t.z[k]).toBeGreaterThan(3);
+    const plan = placeMarshalPosts(t, asBuilt(t, ridge));
+    expect(plan.unobserved).toBe(0);
+    expect(plan.allLinked).toBe(true);
+    expect(plan.maxGap).toBeLessThanOrEqual(MAX_POST_SPACING);
+    // Ordinary posts do: no platforms needed to see along a cutting.
+    expect(plan.posts.some((p) => p.raised)).toBe(false);
+  });
+
+  it('links posts over a sharp crest, closer to the track or raised where it must', () => {
+    // An ungraded track over a sharp bump 5 m high: from the usual places, posts on either side cannot see each other.
+    const bump = (x: number, y: number) => 100 + (Math.abs(y - 3000) < 150 ? 5 * Math.max(0, 1 - Math.abs(x - 3750) / 12) : 0);
+    const t = buildTrack(design(bigRectangle(), { smoothing: 0, maxCutFill: 0 }), bump)!;
+    const plan = placeMarshalPosts(t, asBuilt(t, bump));
+    expect(plan.unobserved).toBe(0);
+    expect(plan.allLinked).toBe(true);
     expect(plan.maxGap).toBeLessThanOrEqual(MAX_POST_SPACING);
   });
 

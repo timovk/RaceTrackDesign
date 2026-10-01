@@ -21,7 +21,8 @@ src/
     performance.ts   racing line + a lap per class + sectors
     startFinish.ts   start line placement, grid slots, track rotation
     pitLane.ts       pit lane placement and drive-through time loss
-    marshals.ts      marshal posts with terrain sight lines
+    marshals.ts      marshal posts with sight lines over the ground as built
+    earthworks.ts    the ground as built: road surfaces, verges, cut and fill banks
     facilities.ts    grid, pit lane, speed trap, DRS, overtaking, marshals
     licence.ts       FIA and FIM licence estimate with run-off tracing
     circuits.ts      real circuit CSVs -> track designs
@@ -161,7 +162,7 @@ Sectors split the lap of a reference class (GT3) into thirds of time, each line 
 - **Pit lane.** Parallel candidates start every 20 m on either side, 500 to 660 m long, with 120 m ramps; chord candidates cut straight across the infield and join the track at 25 degrees or less. A candidate is rejected when it leaves the map, enters water, comes within 5 m of another part of the track, needs more than 12 m of earthworks, bends too tightly or has less than 250 m for the boxes; a chord is also rejected when a stop would cost under 8 s (a shortcut). The rest are scored on entry and exit clearance from the racing line, braking at the exit, flatness, gradient, box length and adjacency to the start.
 - **Pit loss.** Braking from track speed to the class's limit, the lane at the limit, and accelerating back, against the lap's own time over the same widened stretch.
 - **Speed trap:** the end of the longest stretch at the fastest class's top speed. **Overtaking spots:** braking zones with a drop of more than 60 km/h after a full-throttle run of 250 m or more, the four biggest.
-- **Marshal posts.** Greedy: from each post, the next goes as far ahead as possible (at most 500 m) while the two posts see each other and every sampled station between them is seen by one of them. Sight lines are traced over the heightmap at 1.7 m eye height.
+- **Marshal posts.** Greedy: from each post, the next goes as far ahead as possible (at most 500 m) while the two posts see each other and every station between them (sampled every 20 m) is seen by one of them. Posts stand 6 m beyond the track edge, on the outside of the next corner or else the inside, with the eye 1.7 m up (at least 1.7 m above the track); a post sees the track where it sees 1 m above the surface, a car's roof. Sight lines are traced every 5 m over the ground as built (`builtGround` of `earthworks.ts`: the road surface, verges and cut and fill banks of the track and pit lane, and the natural terrain beyond), since a graded track runs in its cuttings: traced over the natural terrain, every cutting hid the track behind the hillside it was dug through. When no usual place ahead is in sight (a sharp crest), the search looks every 5 m and also tries posts right behind the verge (3 m out) and on 3 m platforms.
 - **Overrides.** Dragging a handle in Analyse saves a world position in the project's `overrides` (start line, pit entry and exit with the side, speed trap), not a station number, so it survives edits that renumber the stations; each is snapped to the nearest station when used. A hand-placed pit lane is built as a parallel lane between its two points and keeps its problems listed instead of being rejected. Overrides are undoable like any edit.
 
 ## Licence
