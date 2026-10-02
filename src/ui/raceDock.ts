@@ -62,6 +62,8 @@ export class RaceDock {
   private readonly tabButtons: HTMLButtonElement[];
   private classKey = '';
   private tab: DockTab = 'telemetry';
+  /** Whether a practice or qualifying session is shown (the tabs differ). */
+  private session = false;
   private width = 1;
   private height = 1;
   private frameRequested = false;
@@ -152,7 +154,13 @@ export class RaceDock {
   }
 
   private updateTabs(): void {
-    this.tabButtons.forEach((b, i) => b.classList.toggle('on', TABS[i].tab === this.tab));
+    // A session has no race order: no position or gap charts.
+    const session = !!this.race.sim?.setup.session;
+    if (session && (this.tab === 'positions' || this.tab === 'gaps')) this.tab = 'laps';
+    this.tabButtons.forEach((b, i) => {
+      b.classList.toggle('on', TABS[i].tab === this.tab);
+      b.hidden = session && (TABS[i].tab === 'positions' || TABS[i].tab === 'gaps');
+    });
     const stats = this.tab === 'stats';
     this.canvas.hidden = stats;
     this.statsEl.hidden = !stats;
@@ -184,6 +192,11 @@ export class RaceDock {
   private onStore(topics: Set<Topic>): void {
     if (topics.has('mode') || topics.has('race')) {
       this.el.hidden = !(this.store.mode === 'race' && this.race.sim);
+      const session = !!this.race.sim?.setup.session;
+      if (session !== this.session) {
+        this.session = session;
+        this.updateTabs();
+      }
       if (topics.has('race') && this.race.wantsTelemetry) {
         this.race.wantsTelemetry = false;
         if (this.tab !== 'telemetry') this.setTab('telemetry');
@@ -286,13 +299,13 @@ export class RaceDock {
       return;
     }
     if (this.tab !== 'telemetry') {
-      const shaded = sim.neutral.length ? ' Shaded: safety car (orange) and VSC or full course yellow (yellow).' : '';
+      const shaded = sim.neutral.length ? ` Shaded: safety car (orange), VSC or full course yellow (yellow)${sim.neutral.some((p) => p.kind === 'red') ? ', red flag (red)' : ''}.` : '';
       const crews = sim.cars.some((c) => c.entrant.drivers.length > 1);
       const hints: Record<DockTab, string> = {
         telemetry: '',
         positions: `Position${this.view !== null ? ' in the class' : ''} at the end of each lap. Click a line to pick a car.${shaded}`,
         gaps: `Seconds behind the ${sim.multiClass ? 'class ' : ''}leader at the end of each lap.${shaded}`,
-        laps: `Lap times; open dots are laps with a pit stop.${shaded}`,
+        laps: sim.setup.session ? 'Timed laps of each run (push laps, cool-down laps and long runs); out and in laps leave a gap.' : `Lap times; open dots are laps with a pit stop.${shaded}`,
         stints: `Tyre sets per car; gaps are pit stops.${crews ? ' The thin bar underneath shows who drove.' : ''}`,
         conditions: 'Rain and track wetness, the flags, and how many cars run on each type of tyre.',
         stats: '',
@@ -656,9 +669,12 @@ export class RaceDock {
       y = yAxis(ctx, plot, 0, hi, step, (v) => (v === 0 ? '0' : `+${v}`), true);
       valueText = (v) => `+${v.toFixed(3)} s`;
     } else {
-      series = cars.map((car) => ({ car, points: car.history.map((hh) => hh.time), first: 1 }));
+      // In a session only timed laps: out laps and in laps leave a gap in the line.
+      const session = !!sim.setup.session;
+      const timed = (k: string | undefined) => k === 'push' || k === 'cool' || k === 'long';
+      series = cars.map((car) => ({ car, points: car.history.map((hh) => (!session || timed(hh.kind) ? hh.time : NaN)), first: 1 }));
       const clean: number[] = [];
-      for (const c of cars) for (const hh of c.history) if (hh.lap > 1 && !hh.pit && !hh.neutral) clean.push(hh.time);
+      for (const c of cars) for (const hh of c.history) if (session ? hh.kind === 'push' || hh.kind === 'long' : hh.lap > 1 && !hh.pit && !hh.neutral) clean.push(hh.time);
       clean.sort((p, q) => p - q);
       const lo = clean.length ? clean[0] : sim.model.lapTime;
       const med = clean.length ? clean[Math.floor(clean.length / 2)] : sim.model.lapTime;
@@ -855,6 +871,9 @@ export class RaceDock {
 }
 
 /** A lap selector: last, best, current, or any completed lap with its time. */
+/** How a session lap is marked in the lap picker. */
+const LAP_KIND = { out: 'out lap', push: '', cool: 'cool-down', long: 'long run', in: 'in lap' } as const;
+
 function lapPicker(car: RaceCar, value: LapChoice, onChange: (lap: LapChoice) => void): HTMLSelectElement {
   const sel = h('select', {
     'aria-label': `${car.entrant.code} lap`,
@@ -866,7 +885,7 @@ function lapPicker(car: RaceCar, value: LapChoice, onChange: (lap: LapChoice) =>
   h('option', { value: 'last' }, 'Last lap'),
   h('option', { value: 'best' }, 'Best lap'),
   h('option', { value: 'current' }, 'Current lap'),
-  ...[...car.history].reverse().map((hh) => h('option', { value: String(hh.lap) }, `Lap ${hh.lap} · ${formatLapTime(hh.time)}${hh.pit ? ' (pit)' : ''}`)));
+  ...[...car.history].reverse().map((hh) => h('option', { value: String(hh.lap) }, `Lap ${hh.lap} · ${formatLapTime(hh.time)}${hh.kind && hh.kind !== 'push' ? ` (${LAP_KIND[hh.kind]})` : hh.pit ? ' (pit)' : ''}`)));
   sel.value = String(value);
   return sel;
 }

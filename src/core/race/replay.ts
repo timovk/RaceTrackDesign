@@ -22,8 +22,8 @@ export interface RaceView {
 
 const STATUS: readonly CarStatus[] = ['running', 'pit', 'finished', 'retired'];
 const TYRES: readonly TyreType[] = ['slick', 'inter', 'wet'];
-/** Per car per step: u, speed, lateral, status, pit progress, stopped in the box, compound, tyre type, DRS until, where it retired (x, y). */
-const FIELDS = 11;
+/** Per car per step: u, speed, lateral, status, pit progress, stopped in the box, compound, tyre type, DRS until, where it retired (x, y), how far into its garage. */
+const FIELDS = 12;
 
 interface Step {
   t: number;
@@ -109,6 +109,7 @@ export class ReplayBuffer {
       d[o + 8] = car.drsUntilU;
       d[o + 9] = car.retired ? car.retired.x : NaN;
       d[o + 10] = car.retired ? car.retired.y : NaN;
+      d[o + 11] = car.garage;
     }
     const sc = sim.safetyCar;
     step.scU = sc ? sc.u : NaN;
@@ -146,6 +147,8 @@ export class ReplayBuffer {
         tyreType: TYRES[now[o + 7]] ?? 'slick',
         drsUntilU: now[o + 8],
         retired: status === 'retired' ? { ...(car.retired ?? { reason: '', lap: 0, t: b.t }), x: now[o + 9], y: now[o + 10] } : null,
+        prevGarage: before[o + 11],
+        garage: now[o + 11],
       });
       return stand;
     });

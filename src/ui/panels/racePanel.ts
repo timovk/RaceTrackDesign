@@ -1,9 +1,15 @@
-/** Race mode: set up a race (one or more classes, length, grid, weather), control playback, follow a car, read the race feed and the results. */
+/**
+ * Race mode: set up a race weekend (one or more classes, the sessions to
+ * run, length, grid, weather), control playback session by session, follow
+ * a car, read the feed, each session's classification and the results.
+ */
 import { formatLapTime } from '../../core/calibration.ts';
 import { eventsCsv, lapsCsv, resultsCsv, telemetryCsv } from '../../core/race/export.ts';
 import { raceRules } from '../../core/race/rules.ts';
+import { SessionSim } from '../../core/race/session.ts';
 import { MAX_CARS, MAX_CLASSES, MAX_LAPS, MAX_MINUTES, totalCars } from '../../core/race/setup.ts';
 import type { Gap, RaceCar, RaceClass, RaceSim } from '../../core/race/sim.ts';
+import type { Weekend } from '../../core/race/weekend.ts';
 import { conditionName } from '../../core/race/weather.ts';
 import { randomSeedString } from '../../core/rng.ts';
 import { type Control, section, segmented } from '../controls.ts';
@@ -13,8 +19,9 @@ import * as fmt from '../format.ts';
 import { type RaceController, SPEEDS } from '../raceController.ts';
 import type { Store, Topic } from '../store.ts';
 
-/** Live parts refresh at most this often while a race plays. */
+/** Live parts refresh at most this often while a race plays; a session's classification table less often. */
 const LIVE_INTERVAL_MS = 200;
+const TABLE_INTERVAL_MS = 1000;
 
 const WEATHER_HINTS = {
   dry: '',
@@ -34,6 +41,9 @@ export class RacePanel {
   private readonly lengthUnit: HTMLElement;
   private readonly lengthHint: HTMLElement;
   private readonly weatherHint: HTMLElement;
+  private readonly weekendList: HTMLElement;
+  private readonly weekendHint: HTMLElement;
+  private weekendKey = '';
   private readonly seed: HTMLInputElement;
   private readonly warnings: HTMLElement;
   private readonly startButton: HTMLButtonElement;
@@ -44,6 +54,7 @@ export class RacePanel {
   private readonly resultsEl: HTMLElement;
   private classKey = '';
   private lastLive = 0;
+  private lastTable = 0;
   private feedCount = -1;
 
   private readonly exportMap: () => void;
@@ -92,6 +103,8 @@ export class RacePanel {
       (v) => store.setRaceSettings({ weather: v }),
     );
     this.weatherHint = h('p', { class: 'hint' });
+    this.weekendList = h('div', { class: 'weekend-pick' });
+    this.weekendHint = h('p', { class: 'hint' });
     this.controls.push(kind, grid, weather);
     this.seed = h('input', {
       type: 'text', class: 'seed-input', spellcheck: false, 'aria-label': 'Race seed',
@@ -134,6 +147,8 @@ export class RacePanel {
         h('div', { class: 'field' }, h('span', null, 'Length'),
           h('div', { class: 'row' }, kind.el, this.lengthInput, this.lengthUnit)),
         this.lengthHint,
+        h('div', { class: 'field' }, h('span', null, 'Weekend'), this.weekendList),
+        this.weekendHint,
         h('div', { class: 'field' }, h('span', null, 'Grid'), grid.el),
         h('div', { class: 'field' }, h('span', null, 'Weather'), weather.el),
         this.weatherHint,
@@ -202,10 +217,40 @@ export class RacePanel {
     if (new Set(vehicles.map((v) => v.kind)).size > 1) notes.push('Cars and bikes never race together in reality; the race runs anyway.');
     setChildren(this.warnings, ...notes.map((n) => h('p', { class: 'race-warning' }, n)));
 
+    this.updateWeekendPick(rules, set.skip);
     const blocker = this.race.blocker;
     this.startButton.disabled = blocker !== null || this.race.skipping !== null;
     this.startButton.title = blocker ?? '';
-    setText(this.startButton, blocker ?? (this.race.sim ? 'Restart race' : 'Start race'));
+    const sessions = rules.weekend.practice.some((_, i) => !set.skip.includes(`p${i + 1}`)) || !set.skip.includes('qualifying');
+    const what = sessions ? 'weekend' : 'race';
+    setText(this.startButton, blocker ?? (this.race.sim ? `Restart ${what}` : `Start ${what}`));
+  }
+
+  /** The sessions of the first class's weekend, each on or off. */
+  private updateWeekendPick(rules: ReturnType<typeof raceRules>, skip: readonly string[]): void {
+    const w = rules.weekend;
+    const key = `${rules.label}:${skip.join(',')}`;
+    if (key !== this.weekendKey) {
+      this.weekendKey = key;
+      const toggle = (id: string) => {
+        const now = this.store.raceSettings.skip;
+        this.store.setRaceSettings({ skip: now.includes(id) ? now.filter((x) => x !== id) : [...now, id] });
+      };
+      const chip = (id: string, label: string, title: string) =>
+        h('button', { class: `chip${skip.includes(id) ? '' : ' on'}`, title, onclick: () => toggle(id) }, label);
+      const stages = w.qualifying.map((q) => `${q.name} ${q.minutes} min`).join(', ');
+      setChildren(this.weekendList,
+        ...w.practice.map((p, i) => chip(`p${i + 1}`, p.name, `${p.minutes} minutes on day ${p.day}${p.longRuns ? ', with race simulations' : ''}`)),
+        chip('qualifying', 'Qualifying', stages));
+    }
+    const practice = w.practice.filter((_, i) => !skip.includes(`p${i + 1}`));
+    const quali = !skip.includes('qualifying');
+    const parts: string[] = [];
+    if (practice.length) parts.push(`Practice: ${practice.map((p) => `${p.name} ${p.minutes} min`).join(', ')}.`);
+    if (quali) parts.push(`Qualifying: ${w.qualifying.map((q) => `${q.name} ${q.minutes} min`).join(', ')}${w.average ? ', the grid by the average of the drivers\' times' : ''}.`);
+    if (!practice.length) parts.push(quali ? 'No practice: a green track, and teams guess at their tyre wear.' : 'Straight to the race: the grid from the lap-time model, on a green track, with teams guessing at their tyre wear.');
+    else if (!w.practice.some((p, i) => p.longRuns && !skip.includes(`p${i + 1}`))) parts.push('No race simulations in practice: teams know less about their tyres.');
+    setText(this.weekendHint, parts.join(' '));
   }
 
   /** The class list: rebuilt when classes are added, removed or changed, values updated in place otherwise. */
@@ -272,16 +317,42 @@ export class RacePanel {
     const speeds = segmented(SPEEDS.map((v) => ({ value: String(v), label: `${v}×` })), () => String(r.speed), (v) => r.setSpeed(Number(v)));
     const done = sim.finished;
     const skipping = r.skipping !== null;
-    setChildren(this.sessionEl, section('Playback',
+    const next = r.nextSession;
+    const what = r.racing ? 'race' : 'session';
+    setChildren(this.sessionEl, section(r.racing ? 'Race' : r.session!.name,
       this.statusEl,
       h('div', { class: 'row' },
         h('button', { class: 'btn', disabled: done || skipping, onclick: () => r.togglePlay(), title: 'Play or pause (P)' }, r.playing ? 'Pause' : 'Play'),
-        h('button', { class: 'btn', disabled: done || skipping, onclick: () => r.finishNow(), title: 'Simulate the rest of the race at once' }, 'Finish now'),
+        h('button', { class: 'btn', disabled: done || skipping, onclick: () => r.finishNow(), title: `Simulate the rest of the ${what} at once` }, 'Finish now'),
         h('button', { class: 'btn subtle', onclick: () => r.stop() }, 'End')),
+      next ? h('div', { class: 'row' },
+        h('button', { class: `btn${done ? ' primary' : ''}`, disabled: skipping, onclick: () => r.next(), title: done ? '' : `Simulate the rest of ${r.session!.name} first` }, `Next: ${next.name}`),
+        next.kind !== 'race' ? h('button', { class: 'btn subtle', disabled: skipping, onclick: () => r.skipToRace(), title: 'Simulate every session left at once and start the race' }, 'Skip to race') : null) : null,
       h('div', { class: 'field' }, h('span', null, 'Speed'), speeds.el),
       h('p', { class: 'hint' }, 'Click a car on the map or in the timing tower to follow it and see its telemetry below the map.'),
-    ), this.exportSection(sim));
+    ), r.weekend ? this.weekendSection(r.weekend) : null, this.exportSection(sim));
     this.updateResults(sim);
+  }
+
+  /** The weekend's sessions: done (with who was quickest), on now, to come or left out. */
+  private weekendSection(w: Weekend): HTMLElement {
+    const r = this.race;
+    const rows = w.sessions.map((s) => {
+      const res = w.results.get(s.id);
+      const now = r.session === s;
+      let state: string | Node = '';
+      if (w.skipped(s)) state = 'left out';
+      else if (now) state = r.racing ? (r.sim?.finished ? 'finished' : 'on now') : r.sim?.finished ? 'over' : 'on now';
+      else if (res) {
+        const best = res[0];
+        state = best && best.time !== null ? `${w.field.entrants[best.car].code} ${formatLapTime(best.time)}` : 'no times';
+      }
+      return h('tr', { class: now ? 'focused' : w.skipped(s) ? 'muted' : '' },
+        h('td', null, s.name),
+        h('td', { class: 'muted small' }, s.kind === 'race' ? `day ${s.day}` : `${s.minutes} min, day ${s.day}`),
+        h('td', { class: 'num' }, state));
+    });
+    return section('Weekend', h('table', { class: 'table weekend' }, h('tbody', null, ...rows)));
   }
 
   private exportSection(sim: RaceSim): HTMLElement {
@@ -322,10 +393,19 @@ export class RacePanel {
     this.updateStatus(sim);
     this.updateCar(sim);
     if (sim.events.length !== this.feedCount || force) this.updateFeed(sim);
+    // A session's classification changes as laps are set.
+    if (sim instanceof SessionSim && now - this.lastTable > TABLE_INTERVAL_MS) {
+      this.lastTable = now;
+      this.updateResults(sim);
+    }
   }
 
   private updateStatus(sim: RaceSim): void {
     const r = this.race;
+    if (sim instanceof SessionSim) {
+      this.updateSessionStatus(sim);
+      return;
+    }
     const laps = sim.setup.laps;
     const lapText = laps !== null ? `Lap ${sim.leaderLap} / ${laps}` : `Lap ${sim.leaderLap}`;
     const timeLeft = sim.setup.duration !== null ? Math.max(0, sim.setup.duration - sim.t) : null;
@@ -346,11 +426,35 @@ export class RacePanel {
     );
   }
 
+  /** A practice or qualifying session: its clock, flags and who is quickest. */
+  private updateSessionStatus(sim: SessionSim): void {
+    const r = this.race;
+    const state = sim.finished ? 'Session over' : sim.chequered ? 'Chequered flag: cars coming in' : r.skipping !== null ? `Simulating… ${Math.round(r.skipping * 100)}%` : r.playing ? 'On track' : 'Paused';
+    const out = sim.entries.filter((c) => c.status === 'running').length;
+    const best = sim.order[0];
+    const flag = sim.finished ? null : flagText(sim);
+    setChildren(this.statusEl,
+      h('div', { class: 'race-status-row' },
+        h('span', { class: 'race-status-main' }, sim.spec.name),
+        h('span', { class: 'race-clock' }, clock(sim.timeLeft)),
+        h('span', { class: 'muted' }, sim.chequered ? 'over' : 'left')),
+      h('div', { class: 'progress-track' }, h('div', { class: 'progress-fill', style: `width:${Math.round((r.skipping ?? Math.min(1, sim.clock / sim.spec.duration)) * 100)}%` })),
+      h('div', { class: 'race-conditions' },
+        flag ? h('span', { class: `flag-badge ${flag.kind}` }, flag.text) : null,
+        h('span', { class: 'muted small' }, weatherText(sim))),
+      h('div', { class: 'muted small' }, state, ` · ${out} on track`, best?.bestLap != null ? ` · fastest ${best.entrant.code} ${formatLapTime(best.bestLap)}` : ''),
+    );
+  }
+
   private updateCar(sim: RaceSim): void {
     const r = this.race;
     const car = r.selected !== null ? sim.cars[r.selected] : null;
     if (!car) {
       setChildren(this.carEl);
+      return;
+    }
+    if (sim instanceof SessionSim) {
+      this.updateSessionCar(sim, car);
       return;
     }
     const e = car.entrant;
@@ -396,6 +500,39 @@ export class RacePanel {
       )));
   }
 
+  /** The car picked, in a session: its best lap and place, what it is doing, its tyres. */
+  private updateSessionCar(sim: SessionSim, car: RaceCar): void {
+    const r = this.race;
+    const e = car.entrant;
+    const s = sim.of(car);
+    const compound = car.rules.tyres.compounds[car.compound];
+    const crew = e.drivers.length > 1;
+    const row = (label: string, value: string | Node) => [h('dt', null, label), h('dd', null, value)];
+    const doing = !s ? 'Not in this session'
+      : car.status === 'retired' ? `Out: ${car.retired?.reason ?? 'retired'}`
+        : s.phase === 'garage' ? (s.leaveAt !== null && !sim.chequered ? `In the garage, out in ${clock(Math.max(0, s.leaveAt - sim.clock))}` : 'In the garage')
+          : car.status === 'pit' ? 'In the pit lane' : PHASE_TEXT[s.phase];
+    const laps = car.history.filter((x) => x.kind === 'push' || x.kind === 'cool' || x.kind === 'long').length;
+    setChildren(this.carEl, h('section', { class: 'panel-section' },
+      h('div', { class: 'car-head' },
+        h('span', { class: 'car-number', style: `background:${e.color}` }, String(e.number)),
+        h('div', null,
+          h('div', { class: 'strong' }, crew ? e.team : e.name),
+          h('div', { class: 'muted small' }, crew ? `${car.driver.name} driving` : e.team)),
+        h('button', { class: `chip${r.follow ? ' on' : ''}`, title: 'Keep the map centred on this car', onclick: () => r.setFollow(!r.follow) }, 'Follow'),
+        h('button', { class: 'icon-btn', title: 'Deselect', onclick: () => r.select(null) }, '×')),
+      h('dl', { class: 'stats' },
+        ...row('Position', sim.multiClass ? h('span', null, classBadge(car.cls), ` P${car.classPosition} in class`) : `P${car.position}`),
+        ...row('Best lap', car.bestLap !== null ? formatLapTime(car.bestLap) : '—'),
+        ...row(sim.multiClass ? 'Gap to class best' : 'Gap to fastest', gapText(sim.multiClass ? sim.classGap(car) : sim.gap(car), true)),
+        ...row('Last lap', car.lastLap !== null ? formatLapTime(car.lastLap) : '—'),
+        ...row('Laps', `${laps} timed, ${s?.runs ?? 0} run${s?.runs === 1 ? '' : 's'}`),
+        ...row('Tyres', h('span', null, h('span', { class: 'tyre', style: `--tyre:${compound.color}` }, compound.code), ` ${compound.name}, ${car.tyreLaps} laps, ${Math.round(Math.min(car.wear, 9.99) * 100)}% worn`)),
+        ...row('Speed', car.status === 'running' || (car.status === 'pit' && !car.pit?.stopped) ? fmt.speed(car.v) : '—'),
+        ...row('Status', doing),
+      )));
+  }
+
   private updateFeed(sim: RaceSim): void {
     this.feedCount = sim.events.length;
     const recent = sim.events.slice(-80).reverse();
@@ -406,6 +543,10 @@ export class RacePanel {
   }
 
   private updateResults(sim: RaceSim): void {
+    if (sim instanceof SessionSim) {
+      setChildren(this.resultsEl, sessionSection(sim, this.race));
+      return;
+    }
     if (!sim.finished) {
       setChildren(this.resultsEl, gridSection(sim, this.race));
       return;
@@ -472,11 +613,12 @@ function gridSection(sim: RaceSim, race: RaceController): HTMLElement {
     const rows = slots.map(({ index, slot }) => {
       const e = sim.setup.entrants[index];
       const time = q.find((x) => x.car === index)!.time;
+      const timed = Number.isFinite(time);
       return h('tr', { onclick: () => race.select(index) },
         h('td', { class: 'num' }, String(slot + 1)),
         h('td', null, h('span', { class: 'dot', style: `background:${e.color}` }), `${e.code} `, h('span', { class: 'muted' }, e.team)),
-        h('td', { class: 'num' }, formatLapTime(time)),
-        h('td', { class: 'num muted' }, time === best ? '' : `+${(time - best).toFixed(3)}`));
+        h('td', { class: 'num' }, timed ? formatLapTime(time) : '—'),
+        h('td', { class: 'num muted' }, !timed || time === best ? '' : time > best ? `+${(time - best).toFixed(3)}` : `−${(best - time).toFixed(3)}`));
     });
     return h('div', null,
       sim.multiClass ? h('h4', null, classBadge(cls), ` ${cls.name}`) : null,
@@ -485,11 +627,50 @@ function gridSection(sim: RaceSim, race: RaceController): HTMLElement {
         h('tbody', null, ...rows)));
   });
   const order = sim.setup.settings.grid === 'qualifying' ? 'qualifying order' : sim.setup.settings.grid === 'reversed' ? 'reversed qualifying order' : 'random order';
+  const ran = !sim.setup.settings.skip.includes('qualifying') && !!race.weekend;
+  const how = ran
+    ? sim.classes.map((c) => {
+      const w = c.rules.weekend;
+      const stages = w.qualifying.map((s) => s.name).join(', ');
+      return `${sim.multiClass ? `${c.label}: ` : ''}${w.average ? `the average of the best laps in ${stages}` : w.qualifying.length > 1 ? `the last stage each car reached (${stages}), then its time there` : 'the best lap in qualifying'}`;
+    }).join('; ')
+    : `best of three flying laps each${sim.cars.some((c) => c.entrant.drivers.length > 1) ? ' by the car\'s fastest driver' : ''}, from the lap-time model (qualifying was left out)`;
   return h('details', { class: 'panel-section' },
     h('summary', null, h('h3', null, 'Qualifying and grid')),
     ...tables,
-    h('p', { class: 'hint' }, `Best of three flying laps each${sim.cars.some((c) => c.entrant.drivers.length > 1) ? ' by the car\'s fastest driver' : ''}; the grid is in ${order}${sim.multiClass ? ', the fastest class in front' : ''}.`));
+    h('p', { class: 'hint' }, `Places by ${how}; the grid is in ${order}${sim.multiClass ? ', the fastest class in front' : ''}.`));
 }
+
+/** A practice or qualifying session's classification: best lap, gap, laps, and in qualifying who goes through. */
+function sessionSection(sim: SessionSim, race: RaceController): HTMLElement {
+  const advance = sim.spec.advance;
+  const tables = sim.classes.filter((cls) => cls.order.length).map((cls) => {
+    const rows = cls.order.map((car, i) => {
+      const e = car.entrant;
+      const s = sim.of(car);
+      const laps = car.history.filter((x) => x.kind === 'push' || x.kind === 'cool' || x.kind === 'long').length;
+      const out = advance !== undefined && i >= advance;
+      return h('tr', { class: `${race.selected === car.id ? 'focused' : ''}${out ? ' knocked-out' : ''}${advance !== undefined && i === advance ? ' cut' : ''}`, onclick: () => race.select(car.id) },
+        h('td', { class: 'num' }, String(i + 1)),
+        h('td', null, h('span', { class: 'dot', style: `background:${e.color}` }), e.code, e.drivers.length > 1 ? h('span', { class: 'muted' }, ` ${car.driver.code}`) : null),
+        h('td', { class: 'num' }, car.bestLap !== null ? formatLapTime(car.bestLap) : car.status === 'retired' ? 'out' : '—'),
+        h('td', { class: 'num muted' }, i === 0 ? '' : gapText(sim.classGap(car), true)),
+        h('td', { class: 'num' }, String(laps)),
+        h('td', { class: 'num muted' }, s?.phase === 'garage' || !s ? '' : car.status === 'pit' ? 'pit' : s.phase));
+    });
+    return h('div', null,
+      sim.multiClass ? h('h4', null, classBadge(cls), ` ${cls.name}`) : null,
+      h('table', { class: 'table results session' },
+        h('thead', null, h('tr', null, h('th', { class: 'num' }, 'Pos'), h('th', null, 'Driver'), h('th', { class: 'num' }, 'Best'), h('th', { class: 'num' }, 'Gap'), h('th', { class: 'num' }, 'Laps'), h('th', { class: 'num' }, ''))),
+        h('tbody', null, ...rows)));
+  });
+  const hint = sim.spec.kind === 'qualifying'
+    ? `${advance !== undefined ? `The best ${advance} go through; the rest take their places on the grid from here. ` : ''}Only push laps count, and a lap cut short by a red flag does not.`
+    : 'Runs from the garage: out laps and in laps are not timed. Teams learn about their tyres from laps on race fuel (long runs).';
+  return section(sim.finished ? `${sim.spec.name} result` : `${sim.spec.name} classification`, ...tables, h('p', { class: 'hint' }, hint));
+}
+
+const PHASE_TEXT = { out: 'On an out lap', push: 'On a push lap', cool: 'Cooling the tyres down', long: 'On a long run', in: 'Coming in', garage: 'In the garage' } as const;
 
 /** A class label in its colour. */
 export function classBadge(cls: RaceClass): HTMLElement {
@@ -498,6 +679,9 @@ export function classBadge(cls: RaceClass): HTMLElement {
 
 /** What race control shows now, or null when the track is green. */
 export function flagText(sim: RaceSim): { kind: string; text: string } | null {
+  if (sim.phase === 'red') return { kind: 'red', text: sim.regrid ? 'Red flag: stopped on track' : 'Red flag' };
+  if (sim.regrid) return { kind: 'sc', text: Number.isFinite(sim.regrid.lights) ? 'Lights: standing restart' : 'Forming up for a standing restart' };
+  if (sim.phase === 'sc' && !sim.safetyCar && sim.restart === 'standing') return { kind: 'sc', text: 'Sighting lap: standing restart' };
   if (sim.phase === 'sc') return { kind: 'sc', text: sim.safetyCar?.in ? 'Safety car in this lap' : sim.safetyCar ? 'Safety car' : 'Safety car: restart' };
   if (sim.phase === 'vsc') return { kind: 'vsc', text: 'Virtual safety car' };
   if (sim.phase === 'fcy') return { kind: 'fcy', text: 'Full course yellow' };

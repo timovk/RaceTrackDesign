@@ -2005,6 +2005,37 @@ input[type='range'] {
   background: #ffb020;
 }
 
+.flag-badge.red,
+.tower-flag.red {
+  background: #ff453a;
+  color: #fff;
+}
+
+/* The weekend's sessions to run, each on or off. */
+.weekend-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.table.weekend td:first-child {
+  font-weight: 600;
+}
+
+.table.weekend tr.muted td {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+/* Qualifying: the cars going out, below the cut. */
+.table.session tr.knocked-out td {
+  color: var(--muted);
+}
+
+.table.session tr.cut td {
+  border-top: 2px solid #ff453a;
+}
+
 .crew {
   display: flex;
   flex-direction: column;
@@ -2183,6 +2214,15 @@ input[type='range'] {
 
 .tower-row:hover {
   background: var(--panel-3);
+}
+
+/* Qualifying: the cars in the drop zone, below the cut line. */
+.tower-row.drop {
+  background: rgba(255, 69, 58, 0.12);
+}
+
+.tower-row.cut {
+  box-shadow: inset 0 2px 0 #ff453a;
 }
 
 .tower-row.selected {

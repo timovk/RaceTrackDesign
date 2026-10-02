@@ -1,16 +1,20 @@
 /**
- * Runs a race in the app: builds the simulation from the analysed track,
- * plays it back at a chosen speed (fixed simulation steps, drawn in between
- * with interpolation), skips to the finish in chunks without freezing the
- * page, and drops the race when the track changes underneath it.
+ * Runs a race weekend in the app: builds the practice and qualifying
+ * sessions and the race from the analysed track, one after another, plays
+ * each back at a chosen speed (fixed simulation steps, drawn in between with
+ * interpolation), skips to the end of a session or straight to the race in
+ * chunks without freezing the page, and drops the weekend when the track
+ * changes underneath it.
  *
  * Structural changes (start, finish, selection) go out as the store's 'race'
  * topic; per-frame progress goes to `onTick` listeners only.
  */
 import { raceRules } from '../core/race/rules.ts';
 import { buildRaceModel } from '../core/race/model.ts';
-import { MAX_CARS, createRaceSetup } from '../core/race/setup.ts';
+import type { SessionSim } from '../core/race/session.ts';
+import { MAX_CARS } from '../core/race/setup.ts';
 import { DT, type RaceCar, RaceSim } from '../core/race/sim.ts';
+import { Weekend, type WeekendSession } from '../core/race/weekend.ts';
 import { type LapChoice, type Telemetry, deltaTime, lapTelemetry, resolveLap } from '../core/race/telemetry.ts';
 import type { Store, Topic } from './store.ts';
 
@@ -41,7 +45,11 @@ export interface TelemetryPair {
 const NO_TELEMETRY: TelemetrySelection = { car: null, lap: 'last', compare: 'none', compareCar: null, compareLap: 'best' };
 
 export class RaceController {
+  /** The session or race on now. */
   sim: RaceSim | null = null;
+  /** The weekend it belongs to, and the session on now (the race is a session too). */
+  weekend: Weekend | null = null;
+  session: WeekendSession | null = null;
   playing = false;
   /** A new race waits on the grid instead of starting at once (the broadcast shows the grid, then starts it). */
   holdStart = false;
@@ -50,7 +58,7 @@ export class RaceController {
   alpha = 1;
   selected: number | null = null;
   follow = false;
-  /** Share of the race simulated while skipping to the finish, or null. */
+  /** Share of the session simulated while skipping to its end (or of the weekend, skipping to the race), or null. */
   skipping: number | null = null;
   /** Why the last race was stopped, if it was stopped from outside. */
   notice: string | null = null;
@@ -67,6 +75,8 @@ export class RaceController {
   private lastFrame = 0;
   private frame = 0;
   private builtFrom: { layout: number; track: unknown; performance: unknown; facilities: unknown } | null = null;
+  /** The session on now has gone into the weekend's results. */
+  private recorded = false;
 
   constructor(store: Store) {
     this.store = store;
@@ -93,11 +103,12 @@ export class RaceController {
     return null;
   }
 
+  /** Starts the weekend: its first session, or the race when every session is left out. */
   start(): void {
     const s = this.store;
     if (this.blocker) return;
     const settings = s.raceSettings;
-    // Save the settings with the project, so the file reproduces this race.
+    // Save the settings with the project, so the file reproduces this weekend.
     if (!s.raceSettingsSaved) s.setRaceSettings({});
     const models = settings.classes.map((c) => {
       const vehicle = s.vehicles.find((v) => v.id === c.vehicleId)!;
@@ -106,24 +117,133 @@ export class RaceController {
         gridSize: MAX_CARS, corners: s.metrics?.corners,
       });
     });
-    this.sim = new RaceSim(createRaceSetup(models, settings));
+    this.weekend = new Weekend(models, settings, settings.skip);
     this.builtFrom = { layout: s.shownLayout, track: s.track, performance: s.performance, facilities: s.facilities };
-    this.selected = null;
     this.notice = null;
+    this.open(this.weekend.toRun[0] ?? this.raceSession());
+  }
+
+  /** The race, the last session of the weekend. */
+  private raceSession(): WeekendSession {
+    const sessions = this.weekend!.sessions;
+    return sessions[sessions.length - 1];
+  }
+
+  /** Whether the race is on (rather than a practice or qualifying session). */
+  get racing(): boolean {
+    return !this.session || this.session.kind === 'race';
+  }
+
+  /** The session after the one on now (the race last), or null during the race. */
+  get nextSession(): WeekendSession | null {
+    const w = this.weekend;
+    const cur = this.session;
+    if (!w || !cur || cur.kind === 'race') return null;
+    const run = w.toRun;
+    return run[run.indexOf(cur) + 1] ?? this.raceSession();
+  }
+
+  /** Opens a session (or the race), built from the weekend so far. */
+  private open(session: WeekendSession): void {
+    const w = this.weekend!;
+    this.session = session;
+    let sim: RaceSim | null;
+    if (session.kind === 'race') {
+      sim = new RaceSim(w.raceSetup());
+    } else {
+      sim = w.sessionSim(session);
+      if (!sim) {
+        // Nobody takes part (a stage of a format too big for the field): on to the next.
+        w.complete(session, null);
+        this.open(this.nextSession ?? this.raceSession());
+        return;
+      }
+    }
+    this.sim = sim;
+    this.recorded = false;
+    this.selected = null;
     this.skipping = null;
     this.classView = null;
     this.telemetry = { ...NO_TELEMETRY };
     this.acc = 0;
     this.alpha = 1;
-    if (this.holdStart) this.pause();
+    // With the broadcast on, the race waits on the grid; sessions go straight on.
+    if (this.holdStart && session.kind === 'race') this.pause();
     else this.play();
-    s.emit('race');
+    this.store.emit('race');
   }
 
-  /** Drops the current race. */
+  /** Puts a finished session into the weekend's results, once. */
+  private record(): void {
+    const sim = this.sim;
+    const session = this.session;
+    if (this.recorded || !sim?.finished || !session || session.kind === 'race' || !this.weekend) return;
+    this.recorded = true;
+    this.weekend.complete(session, sim as SessionSim);
+  }
+
+  /** On to the next session (or the race), finishing the one on now first. */
+  next(): void {
+    const target = this.nextSession;
+    if (!target || this.skipping !== null) return;
+    this.runThrough(target);
+  }
+
+  /** Straight to the race: the rest of this session and every session left before it, simulated at once. */
+  skipToRace(): void {
+    if (this.racing || this.skipping !== null) return;
+    this.runThrough(this.raceSession());
+  }
+
+  /** Simulates sessions a slice per frame until `target` comes up, then opens it. */
+  private runThrough(target: WeekendSession): void {
+    const w = this.weekend!;
+    this.pause();
+    const run = w.toRun;
+    const ahead = [...run.slice(Math.max(0, run.indexOf(this.session!))), this.raceSession()];
+    const total = Math.max(1, ahead.indexOf(target));
+    let done = 0;
+    this.skipping = 0;
+    this.store.emit('race');
+    const slice = () => {
+      const sim = this.sim;
+      if (!sim || this.skipping === null) return;
+      const end = performance.now() + FRAME_BUDGET_MS;
+      while (!sim.finished && performance.now() < end) {
+        for (let i = 0; i < 50 && !sim.finished; i++) sim.step();
+      }
+      this.alpha = 1;
+      if (sim.finished) {
+        this.record();
+        done++;
+        const next = this.nextSession;
+        if (!next || next === target) {
+          this.open(target);
+          return;
+        }
+        // A session on the way: run without showing it.
+        this.session = next;
+        const nextSim = w.sessionSim(next);
+        this.recorded = !nextSim;
+        if (nextSim) this.sim = nextSim;
+        else w.complete(next, null);
+        this.store.emit('race');
+      }
+      const now = this.sim!;
+      const share = now.setup.duration ? Math.min(1, now.t / (now.setup.duration * 1.05)) : 0;
+      this.skipping = Math.min(0.99, (done + share) / total);
+      this.tick();
+      this.frame = requestAnimationFrame(slice);
+    };
+    this.frame = requestAnimationFrame(slice);
+  }
+
+  /** Drops the weekend. */
   stop(notice: string | null = null): void {
     this.pause();
     this.sim = null;
+    this.weekend = null;
+    this.session = null;
     this.builtFrom = null;
     this.skipping = null;
     this.selected = null;
@@ -226,6 +346,7 @@ export class RaceController {
       this.alpha = 1;
       if (sim.finished) {
         this.skipping = null;
+        this.record();
         this.store.emit('race');
       } else {
         this.skipping = Math.min(0.99, sim.t / expected);
@@ -263,6 +384,7 @@ export class RaceController {
     if (sim.finished) {
       this.playing = false;
       this.alpha = 1;
+      this.record();
       this.store.emit('race');
       return;
     }
@@ -284,12 +406,12 @@ export class RaceController {
     const s = this.store;
     const b = this.builtFrom;
     if (s.layout !== b.layout && s.shownLayout !== b.layout) {
-      this.stop('Another layout was picked, so the race was stopped. Start it again to race on it.');
+      this.stop('Another layout was picked, so the weekend was stopped. Start it again to race on it.');
       return;
     }
     const shown = s.shownLayout === b.layout;
     if (s.trackOf(b.layout) !== b.track || (shown && ((s.performance && s.performance !== b.performance) || (s.facilities && s.facilities !== b.facilities)))) {
-      this.stop('The track changed, so the race was stopped. Start it again to race on the new layout.');
+      this.stop('The track changed, so the weekend was stopped. Start it again to race on the new layout.');
     }
   }
 }

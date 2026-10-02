@@ -32,6 +32,7 @@ import * as THREE from 'three';
 import { type Heli, type OnboardView, type TvCamera, type TvCar, type TvShot, Director, framingFov, heliStart, heliStep, isOnboard, subjectIds } from '../core/broadcast.ts';
 import { formatLapTime } from '../core/calibration.ts';
 import { type RaceView, ReplayBuffer } from '../core/race/replay.ts';
+import { SessionSim } from '../core/race/session.ts';
 import { DT, type RaceCar, type RaceSim } from '../core/race/sim.ts';
 import type { Vec3 } from '../core/shots.ts';
 import type { Track } from '../core/track.ts';
@@ -187,7 +188,7 @@ export class TvBroadcast {
       this.buffer.clear();
     }
     this.readEvents(sim);
-    if (sim.t === 0 && !r.playing) {
+    if (sim.t === 0 && !r.playing && !sim.setup.session) {
       // Before the start: the grid.
       this.gridWalk(sim, dt);
     } else {
@@ -555,7 +556,7 @@ export class TvBroadcast {
   }
 
   private caption(shot: TvShot, sim: RaceSim): HTMLElement | null {
-    const head = { battle: 'Battle', incident: 'Incident', overtake: 'Overtake', leader: '', pit: 'Pit stop', selected: '', field: '', start: '', replay: 'Replay' }[shot.reason];
+    const head = { battle: 'Battle', incident: 'Incident', overtake: 'Overtake', leader: '', pit: 'Pit stop', selected: '', field: '', start: '', replay: 'Replay', flying: 'Flying lap' }[shot.reason];
     if (shot.subject.kind === 'group') return null;
     if (shot.subject.kind === 'battle') {
       const a = sim.cars[shot.subject.ahead];
@@ -578,7 +579,8 @@ export class TvBroadcast {
   private showStop(shot: TvShot | null, sim: RaceSim): void {
     const car = shot && shot.camera === 'pitbox' && shot.carrier !== undefined ? sim.cars[shot.carrier] : null;
     const pit = car?.pit;
-    if (!car || !pit) {
+    // Queued at the pit exit under a red flag: no stop to time.
+    if (!car || !pit || pit.service.reason === 'red flag') {
       this.timer.hidden = true;
       return;
     }
@@ -619,7 +621,8 @@ export class TvBroadcast {
 
   /** Sector and lap times of the cars on screen, as they set them. */
   private showTiming(shot: TvShot, sim: RaceSim, cut: boolean): void {
-    if (shot.subject.kind === 'group') return;
+    // Only racing laps: not behind a safety car or on the way in under a red flag.
+    if (shot.subject.kind === 'group' || sim.phase !== 'green') return;
     const ids = subjectIds(shot.subject);
     for (const id of ids) {
       const car = sim.cars[id];
@@ -662,8 +665,13 @@ function smooth(x: number): number {
 }
 
 function tvCar(sim: RaceSim, c: RaceCar, alpha: number, selected: number | null): TvCar {
-  const gap = sim.classInterval(c);
-  const stopped = c.status === 'pit' && !!c.pit?.stopped;
+  const session = sim instanceof SessionSim ? sim : null;
+  // In a session gaps are between best laps, not on track: no battles; and a car in its garage is no pit stop.
+  const gap = session ? null : sim.classInterval(c);
+  // Nor is a car queued at the pit exit under a red flag.
+  const stopped = c.status === 'pit' && !!c.pit?.stopped && !session && c.pit.service.reason !== 'red flag';
+  const s = session?.of(c);
+  const closing = !!session && session.spec.kind === 'qualifying' && session.timeLeft < Math.min(240, session.spec.duration * 0.25);
   return {
     id: c.id,
     u: c.prevU + (c.u - c.prevU) * alpha,
@@ -671,12 +679,13 @@ function tvCar(sim: RaceSim, c: RaceCar, alpha: number, selected: number | null)
     position: c.position,
     classIndex: c.cls.index,
     classPosition: c.classPosition,
-    interval: gap.kind === 'time' ? gap.value : Infinity,
+    interval: gap?.kind === 'time' ? gap.value : Infinity,
     running: c.status === 'running',
     inPit: c.status === 'pit',
     stopped,
     stopLeft: stopped ? Math.max(0, c.pit!.stoppedUntil - sim.t) : 0,
     selected: c.id === selected,
+    pushing: s && c.status === 'running' && s.phase === 'push' && s.fromLine ? (closing ? 2 : 1) : 0,
   };
 }
 

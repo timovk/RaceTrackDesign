@@ -8,6 +8,7 @@
  * few times a second.
  */
 import { formatLapTime } from '../core/calibration.ts';
+import { SessionSim } from '../core/race/session.ts';
 import type { RaceCar, RaceSim, SectorMark } from '../core/race/sim.ts';
 import { h, setChildren, setText } from './dom.ts';
 import { clock, flagText, gapText } from './panels/racePanel.ts';
@@ -145,9 +146,16 @@ export class TimingTower {
     }
     this.el.classList.toggle('multi', sim.multiClass);
     this.updateTabs(sim);
-    const laps = sim.setup.laps;
-    const left = sim.setup.duration !== null && !sim.chequered ? ` · ${clock(Math.max(0, sim.setup.duration - sim.t))}` : '';
-    setText(this.title, `Lap ${sim.leaderLap}${laps !== null ? ` / ${laps}` : ''}${sim.finished || sim.chequered ? ' · chequered' : left}`);
+    const session = sim instanceof SessionSim ? sim : null;
+    this.el.classList.toggle('session', !!session);
+    if (session) {
+      setText(this.title, `${session.spec.name} · ${session.finished || session.chequered ? 'chequered' : clock(session.timeLeft)}`);
+    } else {
+      const laps = sim.setup.laps;
+      const limit = sim.limit;
+      const left = sim.setup.duration !== null && limit !== null && !sim.chequered ? ` · ${clock(Math.max(0, limit - sim.t))}` : '';
+      setText(this.title, `Lap ${sim.leaderLap}${laps !== null ? ` / ${laps}` : ''}${sim.finished || sim.chequered ? ' · chequered' : left}`);
+    }
     const w = sim.wetness;
     setText(this.weather, w >= 0.02 || sim.rain > 0.05 ? `${sim.rain > 0.05 ? 'Rain · ' : ''}wet ${Math.round(w * 100)}%` : '');
     const flag = sim.finished ? null : flagText(sim);
@@ -163,20 +171,26 @@ export class TimingTower {
     // Rows of cars no longer shown leave the body.
     const shown = new Set(cars.map((c) => c.id));
     for (const [id, row] of this.rows) if (!shown.has(id) && row.el.parentElement) row.el.remove();
+    const advance = session?.spec.advance;
     cars.forEach((car, i) => {
       const row = this.row(car);
       if (this.body.children[i] !== row.el) this.body.insertBefore(row.el, this.body.children[i] ?? null);
-      const out = car.status === 'retired';
+      // In a session a car out of it keeps its time.
+      const out = car.status === 'retired' && (!session || car.bestLap === null);
       const pos = view === null ? car.position : car.classPosition;
       row.el.classList.toggle('selected', this.race.selected === car.id);
       row.el.classList.toggle('out', out);
+      // Qualifying: the cars that would go out if it ended now.
+      row.el.classList.toggle('drop', advance !== undefined && car.classPosition > advance);
+      row.el.classList.toggle('cut', advance !== undefined && car.classPosition === advance + 1);
       setText(row.pos, out ? '' : String(pos));
       setText(row.cls, multi ? (view === null ? `${car.cls.label} ${out ? '' : car.classPosition}` : car.cls.label) : '');
-      const moved = multi ? car.classGrid - car.classPosition : car.gridPosition - car.position;
+      const moved = session ? 0 : multi ? car.classGrid - car.classPosition : car.gridPosition - car.position;
       setText(row.moved, out || moved === 0 ? '' : moved > 0 ? `▲${moved}` : `▼${-moved}`);
       row.moved.className = `tw-moved ${moved > 0 ? 'up' : 'down'}`;
       const gap = multi ? (this.interval ? sim.classInterval(car) : sim.classGap(car)) : this.interval ? sim.interval(car) : sim.gap(car);
-      setText(row.gap, out ? 'OUT' : gapText(gap, true));
+      const noTime = session && car.bestLap === null;
+      setText(row.gap, out ? 'OUT' : noTime ? 'NO TIME' : gapText(gap, true));
       setText(row.driver, car.entrant.drivers.length > 1 ? car.driver.code : '');
       setText(row.last, car.lastLap !== null ? formatLapTime(car.lastLap) : '');
       row.last.className = `tw-time wide ${lapMark(car)}`;
@@ -190,8 +204,16 @@ export class TimingTower {
       const c = car.rules.tyres.compounds[car.compound];
       setText(row.tyre, `${c.code} ${car.tyreLaps}`);
       row.tyre.style.setProperty('--tyre', c.color);
-      setText(row.pit, car.status === 'pit' ? 'PIT' : car.status === 'finished' ? '🏁' : car.stops ? String(car.stops) : '');
-      row.pit.classList.toggle('in-pit', car.status === 'pit');
+      if (session) {
+        // What the car is doing: in the garage, on an out lap or an in lap, or on a push lap (nothing shown).
+        const s = session.of(car);
+        const mark = car.status === 'retired' ? 'OUT' : !s || s.phase === 'garage' ? 'GAR' : car.status === 'pit' ? 'PIT' : s.phase === 'out' ? 'OUT' : s.phase === 'in' ? 'IN' : s.phase === 'cool' ? 'COOL' : s.phase === 'long' ? 'RUN' : '';
+        setText(row.pit, mark);
+        row.pit.classList.toggle('in-pit', mark === 'GAR' || mark === 'PIT');
+      } else {
+        setText(row.pit, car.status === 'pit' ? 'PIT' : car.status === 'finished' ? '🏁' : car.stops ? String(car.stops) : '');
+        row.pit.classList.toggle('in-pit', car.status === 'pit');
+      }
     });
   }
 

@@ -374,8 +374,8 @@ const PILLAR = 1.5;
 
 /**
  * The pit building along the pit boxes, on the far side of the lane from
- * the track: garage doors facing the lane under a lighter upper floor, a flat
- * roof over the front, and the pit wall between the lane and the track.
+ * the track: open garages facing the lane under a lighter upper floor, a
+ * flat roof over the front, and the pit wall between the lane and the track.
  */
 export function buildPitBuilding(pit: PitLane, road: Road): { mesh: MeshData; footprint: Footprint } {
   const mb = new MeshBuilder();
@@ -394,6 +394,8 @@ export function buildPitBuilding(pit: PitLane, road: Road): { mesh: MeshData; fo
   const out = (f: Frame, d: number): [number, number] => [f.x + f.lx * pit.side * d, f.y + f.ly * pit.side * d];
   const light = [0.85, 0.87, 0.89];
   const door = [0.2, 0.22, 0.25];
+  const garageFloor = [0.36, 0.37, 0.39];
+  const garageWall = [0.55, 0.57, 0.6];
   const back = [0.74, 0.76, 0.79];
   const roof = [0.52, 0.55, 0.6];
   const front = halfLane + 1.5;
@@ -414,7 +416,17 @@ export function buildPitBuilding(pit: PitLane, road: Road): { mesh: MeshData; fo
     const foot = (f: Frame, d: number) => at(f, d, base - f.z);
     const o: Vec3 = [a.lx * pit.side, 0, a.ly * pit.side];
     const facing: Vec3 = [-o[0], 0, -o[2]];
-    mb.face([foot(a, front), foot(b, front), at(b, front, doorTop), at(a, front, doorTop)], facing, doors[i] ? door : light);
+    if (doors[i]) {
+      // An open garage: a dim room behind the opening, where a car waits between runs.
+      const inner = rear - 0.3;
+      mb.face([at(a, inner, 0), at(b, inner, 0), at(b, inner, doorTop), at(a, inner, doorTop)], facing, door);
+      mb.face([at(a, front, doorTop), at(b, front, doorTop), at(b, inner, doorTop), at(a, inner, doorTop)], [0, -1, 0], door);
+      mb.face([at(a, front, 0.012), at(b, front, 0.012), at(b, inner, 0.012), at(a, inner, 0.012)], UP, garageFloor);
+      mb.face([at(a, front, 0), at(a, inner, 0), at(a, inner, doorTop), at(a, front, doorTop)], [a.tx, 0, a.ty], garageWall);
+      mb.face([at(b, front, 0), at(b, inner, 0), at(b, inner, doorTop), at(b, front, doorTop)], [-b.tx, 0, -b.ty], garageWall);
+    } else {
+      mb.face([foot(a, front), foot(b, front), at(b, front, doorTop), at(a, front, doorTop)], facing, light);
+    }
     mb.face([at(a, front, doorTop), at(b, front, doorTop), at(b, front, PIT_HEIGHT), at(a, front, PIT_HEIGHT)], facing, light);
     mb.face([foot(a, rear), foot(b, rear), at(b, rear, PIT_HEIGHT), at(a, rear, PIT_HEIGHT)], o, back);
     // Roof, reaching out over the lane edge.

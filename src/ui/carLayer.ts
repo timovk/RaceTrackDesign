@@ -361,8 +361,8 @@ export class CarLayer {
       if (car.status === 'pit') {
         const pose = view.pose(car, alpha);
         if (!pose) continue;
-        // In its box: aside from the fast lane, towards the garage.
-        const want = car.pit?.stopped ? 3.2 : 0;
+        // In its box: aside from the fast lane, towards the garage (in a session the car goes into the garage itself, see the pose).
+        const want = car.pit?.stopped && !sim.setup.session ? 3.2 : 0;
         const prev = this.aside.get(car.id) ?? 0;
         const a = dt > 5 ? want : prev + Math.max(-dt * 2, Math.min(dt * 2, want - prev));
         this.aside.set(car.id, a);

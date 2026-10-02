@@ -27,6 +27,8 @@ export interface RaceSettings {
   grid: GridOrder;
   seed: string;
   weather: WeatherKind;
+  /** Weekend sessions left out ("p1", "p2", ... for practice, "qualifying" for all of it); everything runs when empty. */
+  skip: string[];
 }
 
 export interface QualifyingEntry {
@@ -101,6 +103,7 @@ export function defaultRaceSettings(vehicle: VehicleClass, rules: RaceRules, lap
     grid: 'qualifying',
     seed,
     weather: 'dry',
+    skip: [],
   };
 }
 
@@ -137,6 +140,7 @@ export function parseRaceSettings(raw: unknown, vehicleIds: readonly string[]): 
     grid: r.grid === 'reversed' || r.grid === 'random' ? r.grid : 'qualifying',
     seed: typeof r.seed === 'string' || typeof r.seed === 'number' ? String(r.seed) : '1',
     weather: WEATHER_KINDS.includes(r.weather as WeatherKind) ? (r.weather as WeatherKind) : 'dry',
+    skip: Array.isArray(r.skip) ? r.skip.filter((v): v is string => typeof v === 'string' && (v === 'qualifying' || /^p\d$/.test(v))) : [],
   };
 }
 

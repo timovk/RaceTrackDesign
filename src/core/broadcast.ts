@@ -218,12 +218,14 @@ export interface TvCar {
   /** Race seconds left of its stop in the box (0 when not stopped). */
   stopLeft?: number;
   selected: boolean;
+  /** In practice or qualifying: on a push lap (1), or on one in the closing minutes of qualifying (2). */
+  pushing?: number;
 }
 
 export type Battle = { kind: 'battle'; ahead: number; behind: number };
 export type Subject = { kind: 'car'; id: number } | Battle | { kind: 'group'; ids: number[] };
 
-export type ShotReason = 'battle' | 'incident' | 'overtake' | 'leader' | 'pit' | 'selected' | 'field' | 'start' | 'replay';
+export type ShotReason = 'battle' | 'incident' | 'overtake' | 'leader' | 'pit' | 'selected' | 'field' | 'start' | 'replay' | 'flying';
 
 /** Cameras on a car: above the driver looking ahead, on the nose, looking back, and the chase camera behind it. */
 export type OnboardView = 'tcam' | 'nose' | 'rear' | 'chase';
@@ -285,7 +287,7 @@ const BATTLE_FOLLOW = 20;
 /** A trackside camera must keep the car in sight at least this long (screen seconds) to be cut to. */
 const MIN_IN_SIGHT = 3;
 /** Chance of an onboard camera for each kind of shot, when one is due. */
-const ONBOARD_CHANCE: Partial<Record<ShotReason, number>> = { selected: 0.35, battle: 0.3, leader: 0.25, field: 0.3 };
+const ONBOARD_CHANCE: Partial<Record<ShotReason, number>> = { selected: 0.35, battle: 0.3, leader: 0.25, field: 0.3, flying: 0.3 };
 /** A pit stop is shown from the pit box only when this many screen seconds of it are left. */
 const MIN_PIT_SHOT = 2;
 /** The start is shown from behind the grid within this many race seconds of it, for this many race seconds, at up to this playback speed. */
@@ -556,7 +558,12 @@ export class Director {
         cand.push({ subject, reason: 'replay', score: mine ? 125 : e.kind === 'incident' ? 108 : 100, event: e });
       }
     }
-    const leader = running.find((c) => c.position === 1) ?? running[0];
+    // Practice and qualifying: cars on a push lap, the quicker ones and the closing minutes most.
+    for (const c of running) {
+      if (c.pushing) cand.push({ subject: { kind: 'car', id: c.id }, reason: 'flying', score: 50 + Math.max(0, 12 - c.classPosition) * 2 + (c.pushing > 1 ? 25 : 0) });
+    }
+    // The leader (under a red flag, at the head of the queue in the pit lane).
+    const leader = running.find((c) => c.position === 1) ?? running[0] ?? [...cars].filter((c) => c.inPit).sort((a, b) => a.position - b.position)[0];
     if (leader) cand.push({ subject: { kind: 'car', id: leader.id }, reason: 'leader', score: 42 });
     for (const c of running) if (c.classPosition === 1 && c !== leader) cand.push({ subject: { kind: 'car', id: c.id }, reason: 'leader', score: 32 });
     for (const c of cars) {

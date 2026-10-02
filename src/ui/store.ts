@@ -660,7 +660,7 @@ export class Store {
   setRaceClass(index: number, vehicleId: string): void {
     const cur = this.raceSettings;
     if (cur.classes.length === 1) {
-      this.saveRace({ ...this.defaultRace(vehicleId, cur.seed), grid: cur.grid, weather: cur.weather });
+      this.saveRace({ ...this.defaultRace(vehicleId, cur.seed), grid: cur.grid, weather: cur.weather, skip: cur.skip });
     } else {
       if (cur.classes.some((c, i) => i !== index && c.vehicleId === vehicleId)) return;
       const classes = cur.classes.map((c) => ({ ...c }));
@@ -705,6 +705,7 @@ export class Store {
       ...lead,
       grid: cur.grid,
       weather: cur.weather,
+      skip: cur.skip,
       classes: [{ vehicleId: 'hypercar', cars: 18 }, { vehicleId: 'lmp2', cars: 14 }, { vehicleId: 'gt3', cars: 22 }],
     });
     this.emit('project', 'race');

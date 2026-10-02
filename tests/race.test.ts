@@ -124,7 +124,7 @@ describe('field and settings', () => {
   it('checks saved settings, including the single-class format of earlier versions', () => {
     const ids = VEHICLES.map((v) => v.id);
     expect(parseRaceSettings({ vehicleId: 'f1', cars: 99, laps: 5, minutes: 10, kind: 'time', grid: 'reversed', seed: 3 }, ids))
-      .toEqual({ classes: [{ vehicleId: 'f1', cars: 60 }], laps: 5, minutes: 10, kind: 'time', grid: 'reversed', seed: '3', weather: 'dry' });
+      .toEqual({ classes: [{ vehicleId: 'f1', cars: 60 }], laps: 5, minutes: 10, kind: 'time', grid: 'reversed', seed: '3', weather: 'dry', skip: [] });
     expect(parseRaceSettings({ vehicleId: 'nope', cars: 5, laps: 5, minutes: 10 }, ids)).toBeNull();
     expect(parseRaceSettings(null, ids)).toBeNull();
     // Several classes: unknown and repeated ones are dropped, and the field is capped as a whole.

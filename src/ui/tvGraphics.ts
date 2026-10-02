@@ -5,6 +5,7 @@
  * final lap as the leader starts it, and the chequered flag and the results
  * at the end. (The timing tower shows the lap and the time left.)
  */
+import { formatLapTime } from '../core/calibration.ts';
 import type { RaceView } from '../core/race/replay.ts';
 import type { RaceCar, RaceSim } from '../core/race/sim.ts';
 import type { Track } from '../core/track.ts';
@@ -178,8 +179,9 @@ export class TvGraphics {
   private updateLap(f: GraphicsFrame): void {
     const sim = f.sim;
     const laps = sim.setup.laps;
-    const final = !sim.chequered && !sim.finished && sim.t > 0
-      && (sim.setup.duration !== null ? sim.t >= sim.setup.duration : laps !== null && sim.leaderLap >= laps);
+    const limit = sim.limit;
+    const final = !sim.setup.session && !sim.chequered && !sim.finished && sim.t > 0
+      && (sim.setup.duration !== null ? limit !== null && sim.t >= limit : laps !== null && sim.leaderLap >= laps);
     if (final && this.finalAt < 0) this.finalAt = f.time;
     this.lap.hidden = !(final && f.time - this.finalAt < FINAL_LAP_BANNER);
     if (!this.lap.hidden) setText(this.lap, 'Final lap');
@@ -232,12 +234,14 @@ export class TvGraphics {
     const sim = f.sim;
     if (sim.chequered && this.flagUntil < 0) {
       this.flagUntil = f.time + FLAG_BANNER;
-      const winners = sim.classes.map((c) => sim.order.find((car) => car.cls === c && car.status !== 'retired')).filter((c): c is RaceCar => !!c);
+      const session = sim.setup.session;
+      const winners = sim.classes.map((c) => sim.order.find((car) => car.cls === c && (session ? car.bestLap !== null : car.status !== 'retired'))).filter((c): c is RaceCar => !!c);
+      const said = (w: RaceCar) => (session ? `${w.driver.name} fastest, ${formatLapTime(w.bestLap!)}` : `${w.driver.name} wins`);
       setChildren(this.flag,
         h('div', { class: 'tv-flag-chequer' }),
         h('div', { class: 'tv-flag-text' },
-          h('div', { class: 'tv-flag-title' }, 'Chequered flag'),
-          ...winners.map((w) => h('div', { class: 'tv-flag-winner' }, h('span', { class: 'tv-team', style: `background:${w.entrant.color}` }), `${sim.multiClass ? `${w.cls.label} · ` : ''}${w.driver.name} wins`))));
+          h('div', { class: 'tv-flag-title' }, session ? `Chequered flag · ${session.name}` : 'Chequered flag'),
+          ...winners.map((w) => h('div', { class: 'tv-flag-winner' }, h('span', { class: 'tv-team', style: `background:${w.entrant.color}` }), `${sim.multiClass ? `${w.cls.label} · ` : ''}${said(w)}`))));
     }
     this.flag.hidden = !(this.flagUntil >= 0 && f.time < this.flagUntil);
     if (sim.finished && this.results.hidden) {
@@ -245,8 +249,9 @@ export class TvGraphics {
       this.flagUntil = 0;
       setChildren(this.results, ...sim.classes.map((c) => {
         const cars = sim.order.filter((car) => car.cls === c).slice(0, sim.multiClass ? RESULTS_ROWS : RESULTS_ROWS * 2);
+        const title = sim.setup.session ? sim.setup.session.name : 'Results';
         return h('div', { class: 'tv-card tv-results-card' },
-          h('div', { class: 'tv-card-head' }, sim.multiClass ? `Results · ${c.label}` : 'Results'),
+          h('div', { class: 'tv-card-head' }, sim.multiClass ? `${title} · ${c.label}` : title),
           ...cars.map((car) => resultRow(sim, car)));
       }));
       this.results.hidden = false;
@@ -258,7 +263,10 @@ export class TvGraphics {
 function resultRow(sim: RaceSim, car: RaceCar): HTMLElement {
   const g = sim.classGap(car);
   const pos = car.status === 'retired' ? 'DNF' : String(sim.multiClass ? car.classPosition : car.position);
-  const gap = car.status === 'retired' ? 'Out' : g.kind === 'leader' ? (car.finishTime !== null ? clock(car.finishTime, true) : '') : g.kind === 'time' ? `+${g.value.toFixed(3)}` : g.kind === 'laps' ? `+${g.value} lap${g.value > 1 ? 's' : ''}` : '';
+  // A session: the best lap, and the gap to the fastest.
+  const session = !!sim.setup.session;
+  const lead = session ? (car.bestLap !== null ? formatLapTime(car.bestLap) : 'No time') : car.finishTime !== null ? clock(car.finishTime, true) : '';
+  const gap = car.status === 'retired' && !(session && car.bestLap !== null) ? 'Out' : g.kind === 'leader' ? lead : g.kind === 'time' ? `+${g.value.toFixed(3)}` : g.kind === 'laps' ? `+${g.value} lap${g.value > 1 ? 's' : ''}` : session ? 'No time' : '';
   return h('div', { class: 'tv-row' },
     h('span', { class: 'tv-pos' }, pos),
     h('span', { class: 'tv-team', style: `background:${car.entrant.color}` }),

@@ -266,6 +266,36 @@ describe('the director', () => {
       expect(subjectIds(s.subject)).toContain(0);
     }
   });
+
+  it('follows cars on a push lap in practice and qualifying, the closing minutes of qualifying most', () => {
+    // Shots of each kind, with car 3 (P12) pushing as given.
+    const shots = (late: number) => {
+      const d = new Director(cams, track, rng(6));
+      const cars = [car(0, 1500), car(1, 1000, { pushing: 1 }), car(2, 600), car(3, 300, { pushing: late, position: 12, classPosition: 12 })];
+      const reasons: string[] = [];
+      let last: TvShot | null = null;
+      for (let i = 0; i < 3000; i++) {
+        for (const c of cars) c.u += (c.speed * 0.1) / t.ds;
+        const s = d.update(0.1, 1, cars)!;
+        if (s !== last) reasons.push(`${s.reason}:${subjectIds(s.subject).join()}`);
+        last = s;
+      }
+      return reasons;
+    };
+    const normal = shots(1);
+    expect(normal.filter((r) => r.startsWith('flying')).length).toBeGreaterThan(normal.length / 2);
+    // In the closing minutes of qualifying the same car gets more of the screen.
+    const count = (r: string[]) => r.filter((x) => x === 'flying:3').length;
+    expect(count(shots(2))).toBeGreaterThan(count(normal));
+  });
+
+  it('shows the head of the queue in the pit lane while a red flag stops the race', () => {
+    const d = new Director(cams, track, rng(6));
+    const queue = [0, 1, 2].map((i) => car(i, 4000 - i * 2, { running: false, inPit: true, stopped: false }));
+    const s = d.update(0.1, 1, queue)!;
+    expect(s.subject).toEqual({ kind: 'car', id: 0 });
+    expect(s.reason).toBe('leader');
+  });
 });
 
 describe('framing', () => {
