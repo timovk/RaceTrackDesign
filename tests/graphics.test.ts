@@ -6,6 +6,7 @@ import { lensBlur } from '../src/ui/postFx.ts';
 import { SunShadows, withLights } from '../src/ui/shadows.ts';
 import { skyTurn, sunDirection } from '../src/ui/sky.ts';
 import { surfaceFiles } from '../src/ui/surfaces.ts';
+import { broadleafTree, coniferTree } from '../src/ui/treeLayer.ts';
 
 describe('lens blur', () => {
   it('blurs a long lens on a distant car by a few pixels and a wide one not at all', () => {
@@ -84,4 +85,36 @@ describe('the surface textures', () => {
     expect(files.length).toBeGreaterThanOrEqual(10);
     for (const f of files) expect(existsSync(`public/${f}`), f).toBe(true);
   });
+});
+
+describe('the trees', () => {
+  for (const [name, shape] of [['broadleaf', broadleafTree], ['conifer', coniferTree]] as const) {
+    it(`${name}: a unit high, cards of foliage on bark, fewer far away`, () => {
+      const near = shape(1);
+      const far = shape(0);
+      const cards = (g: ReturnType<typeof shape>) => {
+        const leaf = g.getAttribute('leaf');
+        let n = 0;
+        for (let i = 0; i < leaf.count; i++) n += leaf.getX(i);
+        return n / 4;
+      };
+      expect(cards(near)).toBeGreaterThan(50);
+      expect(cards(far)).toBeLessThan(cards(near) / 3);
+      for (const g of [near, far]) {
+        const pos = g.getAttribute('position');
+        const uv = g.getAttribute('uv');
+        const nrm = g.getAttribute('normal');
+        for (let i = 0; i < pos.count; i++) {
+          expect(pos.getY(i)).toBeGreaterThanOrEqual(-0.05 - 1e-6);
+          expect(pos.getY(i)).toBeLessThanOrEqual(1 + 1e-6);
+          expect(Math.hypot(pos.getX(i), pos.getZ(i))).toBeLessThan(0.6);
+          expect(uv.getX(i)).toBeGreaterThanOrEqual(0);
+          expect(uv.getX(i)).toBeLessThanOrEqual(1);
+          expect(Math.hypot(nrm.getX(i), nrm.getY(i), nrm.getZ(i))).toBeCloseTo(1, 4);
+        }
+      }
+      // The same tree every time.
+      expect([...shape(1).getAttribute('position').array.slice(0, 30)]).toEqual([...near.getAttribute('position').array.slice(0, 30)]);
+    });
+  }
 });

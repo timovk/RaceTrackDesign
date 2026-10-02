@@ -44,13 +44,13 @@
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { COLORS, Earthworks, type MeshData, type Road, VERGE, anchoredHeight, buildRoads, buildSides, buildTerrain, pitRoad, startLine, trackRoad } from '../core/scene3d.ts';
 import {
   type Footprint, type PostSite, type RunoffArea, TrackIndex, type Trees, buildGrandstands, buildGridMarks, buildKerbs, buildMarshalPosts, buildPitBuilding, buildRunoff,
   forest, inside, kerbRuns, lineFlagSite, marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffPoints, runoffTest, treesInSight,
 } from '../core/scenery.ts';
 import { type Pose, type Shot, type ShotInput, type Vec3, flyoverDuration, flyoverPose, hotLapPose, trackShots } from '../core/shots.ts';
+import { type BarrierRun, barrierRuns, buildBarriers, buildFences, insideBarriers } from '../core/barriers.ts';
 import { RAMP_MIN_RANGE, ROCK, contourInterval } from '../core/terrainImage.ts';
 import type { Track } from '../core/track.ts';
 import { buckets, stationBuckets } from './colors.ts';
@@ -64,7 +64,8 @@ import { cloudCover, lineWetness, standingWater } from '../core/weatherFx.ts';
 import { CarLayer } from './carLayer.ts';
 import { FlagLayer } from './flagLayer.ts';
 import { type Grade, type Lens, PostFx } from './postFx.ts';
-import { SURFACE_GLSL, type SurfaceDetail, type SurfaceKind, SurfaceTextures, surfaceDetail, waterMaterial } from './surfaces.ts';
+import { TreeLayer } from './treeLayer.ts';
+import { SURFACE_GLSL, type SurfaceDetail, type SurfaceKind, SurfaceTextures, chainLink, surfaceDetail, waterMaterial } from './surfaces.ts';
 import { SunShadows } from './shadows.ts';
 import { sunDirection } from './sky.ts';
 import { FINE, type WeatherState, WeatherLayer, wetSurfaceMaterial } from './weatherLayer.ts';
@@ -83,8 +84,8 @@ const LABEL_LIFT = 8;
 /** Towards the sun: from the north-west, as the flat map's hillshade, as high as in the photographed sky. */
 const SUN = sunDirection();
 /** What receives the sun's shadows, and what casts them. */
-const SHADOW_RECEIVERS = new Set(['terrain', 'track', 'trackVerges', 'pit', 'pitVerges', 'otherRoads', 'otherVerges', 'start', 'kerbs', 'runoff', 'grid', 'pitBuilding', 'stands', 'posts', 'conifers', 'broadleaves', 'sides']);
-const SHADOW_CASTERS = new Set(['pitBuilding', 'stands', 'posts', 'conifers', 'broadleaves', 'terrain']);
+const SHADOW_RECEIVERS = new Set(['terrain', 'track', 'trackVerges', 'pit', 'pitVerges', 'otherRoads', 'otherVerges', 'start', 'kerbs', 'runoff', 'grid', 'pitBuilding', 'stands', 'posts', 'sides', 'barriers', 'tyres', 'fences']);
+const SHADOW_CASTERS = new Set(['pitBuilding', 'stands', 'posts', 'terrain', 'barriers', 'tyres', 'fences']);
 /** The graphics setting, kept per browser. */
 const GRAPHICS_KEY = 'racetrackdesign.graphics';
 /** The finish on the picture: a light one when looking round, a broadcast's on TV. */
@@ -174,8 +175,12 @@ export class View3D {
   private readonly surfaces: SurfaceTextures;
   /** The water's ripples move with the view's clock. */
   private readonly waterTime = { value: 0 };
-  private readonly treeMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9 });
-  private readonly treeShapes: [THREE.BufferGeometry, THREE.BufferGeometry];
+  /** The trees, card trees in tiles (ui/treeLayer.ts). */
+  private readonly treeLayer = new TreeLayer();
+  /** Catch fencing: wire mesh, see-through. */
+  private readonly fenceMaterial = new THREE.MeshStandardMaterial({
+    map: chainLink(), color: 0xc4c8cc, alphaTest: 0.3, alphaToCoverage: true, side: THREE.DoubleSide, metalness: 0.6, roughness: 0.5,
+  });
   /** A surface drawn over the ground (`offset` decides which wins), with a texture's `detail`, shining `gloss` much when wet. */
   private readonly surfaceMaterial = (offset: number, detail: SurfaceDetail, gloss = 1, racingLine = false) =>
     wetSurfaceMaterial(offset, gloss, this.weather.wet, this.weather.envMap, racingLine, detail);
@@ -281,7 +286,7 @@ export class View3D {
     this.surfaces = new SurfaceTextures(this.renderer, () => this.requestRender());
     this.terrainMaterial.onBeforeCompile = (shader) => terrainShader(shader, this.terrainUniforms, this.surfaces);
     this.terrainMaterial.customProgramCacheKey = () => 'terrain';
-    this.treeShapes = [conifer(), broadleaf()];
+    this.world.add(this.treeLayer.group);
 
     this.marker = new THREE.Group();
     const pinMaterial = new THREE.MeshStandardMaterial({ color: MARKER, emissive: MARKER, emissiveIntensity: 0.35, roughness: 0.5 });
@@ -660,6 +665,7 @@ export class View3D {
     const s = this.store;
     const hm = s.terrain?.heightmap;
     for (const key of [...this.meshes.keys()]) this.remove(key);
+    this.treeLayer.clear();
     this.earth = null;
     this.trees = null;
     this.shotInput = null;
@@ -689,11 +695,12 @@ export class View3D {
     // detail, so it does not show through between coarse cells.
     let areas: RunoffArea[] = [];
     let index: TrackIndex | null = null;
+    let blocked: ((x: number, y: number) => boolean) | undefined;
     if (t && ready) {
       index = new TrackIndex(t);
-      // Run-off stops at the other roads: a gravel trap ends where the rest of the circuit carries on.
+      // Run-off and barriers stop at the other roads: a gravel trap ends where the rest of the circuit carries on.
       const others = this.otherRoads.length ? new Earthworks(hm, this.otherRoads) : null;
-      const blocked = others ? (x: number, y: number) => others.clearance(x, y) < VERGE + 2 : undefined;
+      blocked = others ? (x: number, y: number) => others.clearance(x, y) < VERGE + 2 : undefined;
       areas = s.licence ? runoffAreas(t, s.metrics!.corners, s.licence.runoff, earth, index, blocked) : [];
     }
 
@@ -724,6 +731,7 @@ export class View3D {
 
     // Scenery, once the analysis belongs to this track.
     const footprints: Footprint[] = [];
+    let barriers: BarrierRun[] = [];
     if (t && ready && index) {
       const metrics = s.metrics!;
       this.add('kerbs', new THREE.Mesh(geometry(buildKerbs(t, kerbRuns(t, s.performance!.line, metrics.corners))), this.surfaceMaterial(-2, this.asphalt(0.35))));
@@ -737,14 +745,26 @@ export class View3D {
       const stands = placeGrandstands(t, metrics.corners, s.facilities!.overtaking, pitLane, areas, earth, footprints);
       footprints.push(...stands.map((x) => x.footprint));
       if (stands.length) this.add('stands', new THREE.Mesh(geometry(buildGrandstands(stands)), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 })));
+      // Barriers round the track, behind the run-off: steel rails, tyre walls at the gravel traps, catch fencing by the stands.
+      barriers = barrierRuns({ track: t, index, earth, runoff: areas, pit: pitLane, stands, avoid: footprints, blocked });
+      const built = buildBarriers(t, barriers, earth);
+      if (built.steel.indices.length) this.add('barriers', new THREE.Mesh(geometry(built.steel), new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.8, roughness: 0.38 })));
+      if (built.tyres.indices.length) this.add('tyres', new THREE.Mesh(geometry(built.tyres), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75 })));
+      const fences = buildFences(t, barriers, earth);
+      if (fences.indices.length) {
+        const mesh = new THREE.Mesh(geometry(fences), this.fenceMaterial);
+        mesh.userData.noAo = true;
+        this.add('fences', mesh);
+      }
       this.add('grid', new THREE.Mesh(geometry(buildGridMarks(t, s.facilities!.grid, index)), this.surfaceMaterial(-4, this.asphalt(0.6))));
     }
     const onRunoff = t && index && areas.length ? runoffTest(t, areas, index) : null;
+    const behindBarrier = t && index && barriers.length ? insideBarriers(t, barriers, index) : null;
     this.postSites = [];
     this.lineSite = null;
     if (t && ready) {
-      // Marshal posts behind the run-off and clear of the buildings, and the flag marshal's rostrum at the line.
-      const taken = (x: number, y: number) => (onRunoff?.(x, y, 2) ?? false) || footprints.some((f) => inside(f, x, y, 2));
+      // Marshal posts behind the run-off and the barriers, clear of the buildings, and the flag marshal's rostrum at the line.
+      const taken = (x: number, y: number) => (onRunoff?.(x, y, 2) ?? false) || (behindBarrier?.(x, y, 1.5) ?? false) || footprints.some((f) => inside(f, x, y, 2));
       this.postSites = marshalPostSites(t, s.facilities!.marshals.posts, earth, taken);
       this.lineSite = lineFlagSite(t, (pitLane?.side ?? 1) as 1 | -1, earth, taken);
       const sites = [...this.postSites, this.lineSite];
@@ -777,50 +797,16 @@ export class View3D {
     return this.forestCache.data;
   }
 
-  /** Trees as two instanced meshes (conifers and broadleaves), sized and turned per tree; not stretched by the height exaggeration. */
+  /** The trees, without those cleared from the broadcast cameras' way; at their real size whatever the height exaggeration. */
   private buildTrees(): void {
-    this.remove('conifers');
-    this.remove('broadleaves');
     const trees = this.trees;
-    if (!trees || !trees.count) return;
+    if (!trees || !trees.count) {
+      this.treeLayer.clear();
+      return;
+    }
     const hidden = this.treesCleared?.trees === trees ? this.treesCleared.hidden : null;
-    const counts = [0, 0];
-    for (let i = 0; i < trees.count; i++) if (!hidden?.[i]) counts[trees.data[i * 5 + 4]]++;
-    const meshes = [0, 1].map((kind) => {
-      const mesh = new THREE.InstancedMesh(this.treeShapes[kind], this.treeMaterial, Math.max(1, counts[kind]));
-      mesh.count = counts[kind];
-      mesh.frustumCulled = false;
-      return mesh;
-    });
-    const filled = [0, 0];
-    const color = new THREE.Color();
-    const relief = this.store.view.relief;
-    const m = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const axis = new THREE.Vector3(0, 1, 0);
-    for (let i = 0; i < trees.count; i++) {
-      if (hidden?.[i]) continue;
-      const d = trees.data;
-      const kind = d[i * 5 + 4];
-      const size = d[i * 5 + 3];
-      const turn = ((i * 2654435761) % 1000) / 1000;
-      q.setFromAxisAngle(axis, turn * Math.PI * 2);
-      m.compose(new THREE.Vector3(d[i * 5], d[i * 5 + 1], d[i * 5 + 2]), q, new THREE.Vector3(size, size / relief, size));
-      const mesh = meshes[kind];
-      mesh.setMatrixAt(filled[kind], m);
-      // Slightly different greens, darker for conifers.
-      const shade = 0.85 + 0.3 * (((i * 40503) % 997) / 997);
-      if (kind === 0) color.setRGB(0.13 * shade, 0.27 * shade, 0.15 * shade, THREE.SRGBColorSpace);
-      else color.setRGB(0.3 * shade, 0.45 * shade, 0.18 * shade, THREE.SRGBColorSpace);
-      mesh.setColorAt(filled[kind], color);
-      filled[kind]++;
-    }
-    for (const mesh of meshes) {
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    }
-    this.add('conifers', meshes[0]);
-    this.add('broadleaves', meshes[1]);
+    this.treeLayer.build(trees, hidden, this.extent, this.store.view.relief);
+    this.requestRender();
   }
 
   /**
@@ -980,7 +966,7 @@ export class View3D {
       }
       mesh.geometry?.dispose();
       const mat = mesh.material as THREE.Material | undefined;
-      if (mat && mat !== this.terrainMaterial && mat !== this.treeMaterial) mat.dispose();
+      if (mat && mat !== this.terrainMaterial && mat !== this.fenceMaterial) mat.dispose();
     });
   }
 
@@ -1194,6 +1180,7 @@ export class View3D {
     this.shadows.setupScene(this.scene);
     this.camera.updateMatrixWorld();
     this.shadows.update(this.camera, d);
+    this.treeLayer.update(this.camera, this.height, this.clock);
     this.draw();
     this.updateLabels();
     if (this.pendingPointer) {
@@ -1490,6 +1477,7 @@ function geometry(m: MeshData): THREE.BufferGeometry {
     for (let i = 0; i < lin.length; i++) lin[i] = srgbToLinear(m.colors[i]);
     g.setAttribute('color', new THREE.BufferAttribute(lin, 3));
   }
+  if (m.uvs) g.setAttribute('uv', new THREE.BufferAttribute(m.uvs, 2));
   g.setIndex(new THREE.BufferAttribute(m.indices, 1));
   if (m.anchors) anchor(g, m.anchors);
   g.computeBoundingSphere();
@@ -1524,29 +1512,6 @@ function reanchor(obj: THREE.Object3D, relief: number): void {
     g.computeBoundingSphere();
     a.relief = relief;
   });
-}
-
-/** Paints a geometry one colour (as vertex colours, linear). */
-function painted(g: THREE.BufferGeometry, rgb: readonly number[]): THREE.BufferGeometry {
-  const n = g.getAttribute('position').count;
-  const c = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) for (let j = 0; j < 3; j++) c[i * 3 + j] = srgbToLinear(rgb[j]);
-  g.setAttribute('color', new THREE.BufferAttribute(c, 3));
-  return g;
-}
-
-/** A conifer one unit high: a trunk and a cone, the foliage white for the tree's own colour to tint. */
-function conifer(): THREE.BufferGeometry {
-  const trunk = painted(new THREE.CylinderGeometry(0.035, 0.045, 0.25, 5, 1, true).translate(0, 0.125, 0), [0.55, 0.42, 0.3]);
-  const crown = painted(new THREE.ConeGeometry(0.24, 0.86, 7, 1).translate(0, 0.57, 0), [1, 1, 1]);
-  return mergeGeometries([trunk.toNonIndexed(), crown.toNonIndexed()])!;
-}
-
-/** A broadleaf tree one unit high: a trunk and a rounded crown. */
-function broadleaf(): THREE.BufferGeometry {
-  const trunk = painted(new THREE.CylinderGeometry(0.04, 0.05, 0.42, 5, 1, true).translate(0, 0.21, 0), [0.55, 0.42, 0.3]);
-  const crown = painted(new THREE.IcosahedronGeometry(0.3, 0).scale(1, 0.85, 1).translate(0, 0.68, 0), [1, 1, 1]);
-  return mergeGeometries([trunk.toNonIndexed(), crown.toNonIndexed()])!;
 }
 
 function srgbToLinear(c: number): number {

@@ -317,3 +317,45 @@ mat3 surfaceFrame(vec3 eye, vec3 n, vec2 uv) {
   return mat3(T * scale, B * scale, n);
 }
 `;
+
+/**
+ * Chain-link fencing as a texture of 0.6 m of fence: diamonds of wire 6 cm
+ * across, see-through between. Needs a DOM. Laid with uv in metres.
+ */
+export function chainLink(): THREE.DataTexture {
+  const S = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = S;
+  canvas.height = S;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  ctx.strokeStyle = 'rgb(200, 204, 208)';
+  ctx.lineWidth = 2.2;
+  const cells = 10;
+  const step = S / cells;
+  for (let i = -cells; i <= 2 * cells; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * step, 0);
+    ctx.lineTo(i * step + S, S);
+    ctx.moveTo(i * step, 0);
+    ctx.lineTo(i * step - S, S);
+    ctx.stroke();
+  }
+  const img = ctx.getImageData(0, 0, S, S);
+  // The wire's colour in the gaps too, so mipmaps fade the mesh to a grey haze rather than darken it.
+  for (let i = 0; i < img.data.length; i += 4) {
+    if (img.data[i + 3] > 0) continue;
+    img.data[i] = 200;
+    img.data[i + 1] = 204;
+    img.data[i + 2] = 208;
+  }
+  const tex = new THREE.DataTexture(new Uint8Array(img.data.buffer.slice(0)), S, S, THREE.RGBAFormat);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1 / 0.6, 1 / 0.6);
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.anisotropy = 8;
+  tex.needsUpdate = true;
+  return tex;
+}

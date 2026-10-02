@@ -72,6 +72,19 @@ export class PostFx {
     // picture's depth showed creases on the surfaces drawn over the ground (their polygon offset steps the depth
     // from one triangle to the next): dark scratches over the run-off.
     this.ao = new GTAOPass(scene, camera, 1, 1);
+    // That pass draws without alpha, so a tree's foliage cards would be solid squares to it: leave out what is marked
+    // `userData.noAo`. (GTAOPass hides points and lines the same way; this extends its private hook.)
+    const pass = this.ao as unknown as { _overrideVisibility(): void; _visibilityCache: THREE.Object3D[] };
+    const hide = pass._overrideVisibility.bind(pass);
+    pass._overrideVisibility = () => {
+      hide();
+      scene.traverse((o) => {
+        if (o.userData.noAo && o.visible) {
+          o.visible = false;
+          pass._visibilityCache.push(o);
+        }
+      });
+    };
     this.ao.updateGtaoMaterial({ radius: 2.5, distanceExponent: 1.4, thickness: 3, scale: 1.1, samples: 16, distanceFallOff: 0.6, screenSpaceRadius: false });
     this.ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
     this.ao.blendIntensity = 0.9;

@@ -25,6 +25,8 @@ export interface MeshData {
   indices: Uint32Array;
   /** rgb per vertex (sRGB, 0..1), when the mesh carries colours. */
   colors?: Float32Array;
+  /** uv per vertex, when the mesh is textured. */
+  uvs?: Float32Array;
   /**
    * Per vertex, for things of a real size (buildings, kerbs): the height the
    * vertex stands on, so it keeps its real height above it when the view
