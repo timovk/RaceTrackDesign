@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Director, type TvCar, framingFov, heliStart, heliStep, lineOfSight, timeInSight, tvCameras } from '../src/core/broadcast.ts';
+import { Director, type TvCar, type TvShot, framingFov, heliStart, heliStep, isOnboard, lineOfSight, subjectIds, timeInSight, tvCameras } from '../src/core/broadcast.ts';
 import { Earthworks, pitRoad, trackRoad } from '../src/core/scene3d.ts';
 import { flatMap } from './helpers.ts';
 import { facilities, metrics, track as t } from './raceFixture.ts';
@@ -73,20 +73,83 @@ describe('the director', () => {
     expect(d.update(0.5, 1, cars)).toBe(shot);
   });
 
-  it('uses trackside cameras at real speed and the helicopter when the race runs fast', () => {
+  it('uses trackside cameras at real speed, and the helicopter and onboard cameras when the race runs fast', () => {
+    const kind = (camera: string) => (camera === 'heli' ? 'heli' : isOnboard(camera) ? 'onboard' : 'trackside');
     const d = new Director(cams, track, rng(7));
     const cars = [car(0, 1500), car(1, 900)];
     const used = new Set<string>();
     for (let i = 0; i < 400; i++) {
       for (const c of cars) c.u += (c.speed * 0.1) / t.ds;
-      used.add(d.update(0.1, 1, cars)!.camera === 'heli' ? 'heli' : 'trackside');
+      used.add(kind(d.update(0.1, 1, cars)!.camera));
     }
-    expect(used).toEqual(new Set(['heli', 'trackside']));
+    expect(used.has('heli') && used.has('trackside')).toBe(true);
     const fast = new Director(cams, track, rng(7));
-    for (let i = 0; i < 100; i++) {
+    const fastUsed = new Set<string>();
+    for (let i = 0; i < 600; i++) {
       for (const c of cars) c.u += (c.speed * 0.1 * 50) / t.ds;
-      expect(fast.update(0.1, 50, cars)!.camera).toBe('heli');
+      fastUsed.add(kind(fast.update(0.1, 50, cars)!.camera));
     }
+    // The cars go by a trackside camera too fast to hold.
+    expect(fastUsed).toEqual(new Set(['heli', 'onboard']));
+  });
+
+  it('cuts to onboard cameras now and then, never twice running, on the right car', () => {
+    const d = new Director(cams, track, rng(11));
+    const cars = [car(0, 1500, { selected: true }), car(1, 1000, { interval: 4 }), car(2, 995, { interval: 0.3 }), car(3, 500, { interval: 9 })];
+    const shots: TvShot[] = [];
+    for (let i = 0; i < 3000; i++) {
+      for (const c of cars) c.u += (c.speed * 0.1) / t.ds;
+      const s = d.update(0.1, 1, cars)!;
+      if (s !== shots[shots.length - 1]) shots.push(s);
+    }
+    const onboard = shots.filter((s) => isOnboard(s.camera));
+    expect(onboard.length).toBeGreaterThan(shots.length * 0.1);
+    expect(onboard.length).toBeLessThan(shots.length * 0.5);
+    expect(new Set(onboard.map((s) => s.camera)).size).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < shots.length; i++) expect(isOnboard(shots[i].camera) && isOnboard(shots[i - 1].camera)).toBe(false);
+    for (const s of onboard) {
+      if (s.subject.kind === 'battle') expect(s.carrier).toBe(s.camera === 'rear' ? s.subject.ahead : s.subject.behind);
+      else expect(subjectIds(s.subject)).toContain(s.carrier);
+      expect(s.hold).toBeGreaterThanOrEqual(6);
+    }
+    // Never for an incident.
+    const crash = new Director(cams, track, rng(11));
+    for (let i = 0; i < 50; i++) {
+      crash.note('incident', 3);
+      const s = crash.update(4, 1, cars)!;
+      if (s.reason === 'incident') expect(isOnboard(s.camera)).toBe(false);
+    }
+  });
+
+  it('shows a car standing in its box from the pit lane while enough of the stop is left', () => {
+    const cars = [car(0, 1500), car(1, 700, { running: false, inPit: true, stopped: true, stopLeft: 8 })];
+    const d = new Director(cams, track, rng(3));
+    const s = d.update(0.1, 1, cars)!;
+    expect(s.camera).toBe('pitbox');
+    expect(s.carrier).toBe(1);
+    expect(s.hold).toBeLessThanOrEqual(8 + 2.5);
+    // Until the car leaves the pit lane.
+    expect(d.update(2, 1, cars)).toBe(s);
+    cars[1] = { ...cars[1], inPit: false, running: true, stopped: false, stopLeft: 0 };
+    expect(d.update(0.1, 1, cars)).not.toBe(s);
+    // At twenty times real speed the stop is over in a moment: not from the pit box.
+    const fast = new Director(cams, track, rng(3));
+    expect(fast.update(0.1, 20, [car(0, 1500), car(1, 700, { running: false, inPit: true, stopped: true, stopLeft: 8 })])!.camera).not.toBe('pitbox');
+  });
+
+  it('opens on the start from behind the grid, holding on the front of the field', () => {
+    const grid = Array.from({ length: 12 }, (_, i) => car(i, -10 - 4 * i, { speed: 0, position: i + 1, classPosition: i + 1 }));
+    const d = new Director(cams, track, rng(4));
+    const s = d.update(0.1, 1, grid, 0.1)!;
+    expect(s.camera).toBe('start');
+    expect(s.reason).toBe('start');
+    expect(s.subject).toEqual({ kind: 'group', ids: [0, 1, 2, 3, 4, 5, 6, 7] });
+    // It holds while the field gets away.
+    for (const c of grid) c.u += 30;
+    expect(d.update(5, 1, grid, 5)).toBe(s);
+    // Not after the start, nor when the race runs fast.
+    expect(new Director(cams, track, rng(4)).update(0.1, 1, grid, 60)!.reason).not.toBe('start');
+    expect(new Director(cams, track, rng(4)).update(0.1, 20, grid, 0.1)!.reason).not.toBe('start');
   });
 
   it('cuts to an incident, and keeps on the car the viewer picked', () => {
@@ -108,8 +171,7 @@ describe('the director', () => {
       for (const c of cars) c.u += (c.speed * 0.1) / t.ds;
       const s = picked.update(0.1, 1, cars)!;
       // The car itself, or the battle it is in.
-      const ids = s.subject.kind === 'car' ? [s.subject.id] : [s.subject.ahead, s.subject.behind];
-      expect(ids).toContain(0);
+      expect(subjectIds(s.subject)).toContain(0);
     }
   });
 });

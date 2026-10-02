@@ -20,7 +20,7 @@
  * height-scaled model group, so the cars never stretch.
  */
 import * as THREE from 'three';
-import { type CarModel, buildCar } from '../core/carBodies.ts';
+import { type CarCameras, type CarModel, buildCar } from '../core/carBodies.ts';
 import { LAMP } from '../core/carMesh.ts';
 import { DT, type RaceCar, type RaceSim } from '../core/race/sim.ts';
 import { RAIN_THRESHOLD } from '../core/race/weather.ts';
@@ -512,6 +512,18 @@ export class CarLayer {
   /** The middle of a car on screen, scene coordinates, or null when it is not shown. */
   positionOf(id: number): THREE.Vector3 | null {
     return this.shown.find((s) => s.id === id)?.position ?? null;
+  }
+
+  /** An onboard camera of a car as drawn: where it is, the way it looks and the car's up (scene coordinates), or null when the car is not shown. */
+  mount(id: number, view: keyof CarCameras): { position: THREE.Vector3; direction: THREE.Vector3; up: THREE.Vector3 } | null {
+    const s = this.shown.find((c) => c.id === id);
+    if (!s) return null;
+    const cam = s.look.set.model.cameras[view];
+    return {
+      position: new THREE.Vector3(...cam.at).applyMatrix4(s.matrix),
+      direction: new THREE.Vector3(...cam.look).normalize().transformDirection(s.matrix),
+      up: new THREE.Vector3(0, 1, 0).transformDirection(s.matrix),
+    };
   }
 
   /** The car under a point on screen (normalised device coordinates), within about `radius` pixels. */

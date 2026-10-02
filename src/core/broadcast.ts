@@ -15,7 +15,15 @@
  * Close battles come first, then incidents, overtakes, the leader, pit stops
  * and, for variety, the rest of the field; a car the viewer picked is shown
  * most. Its clock runs in screen time while the race plays, so shots last
- * as long at any playback speed (at high speeds that leaves the helicopter).
+ * as long at any playback speed (at high speeds that leaves the helicopter
+ * and the onboard cameras).
+ *
+ * Onboard cameras ride on the cars: above the driver looking ahead, low on
+ * the nose, looking back, and a chase camera following behind. The director
+ * cuts to them now and then for the car the viewer picked, a battle (from
+ * the car behind, or looking back from the car ahead), the leader and the
+ * field, never twice running. A car standing in its pit box is shown from a
+ * camera in the pit lane in front of it, and the start from behind the grid.
  */
 import type { TrackMetrics } from './analysis.ts';
 import type { PitLane } from './pitLane.ts';
@@ -204,21 +212,38 @@ export interface TvCar {
   inPit: boolean;
   /** Stationary in its pit box. */
   stopped: boolean;
+  /** Race seconds left of its stop in the box (0 when not stopped). */
+  stopLeft?: number;
   selected: boolean;
 }
 
-export type Subject = { kind: 'car'; id: number } | { kind: 'battle'; ahead: number; behind: number };
+export type Subject = { kind: 'car'; id: number } | { kind: 'battle'; ahead: number; behind: number } | { kind: 'group'; ids: number[] };
 
-export type ShotReason = 'battle' | 'incident' | 'overtake' | 'leader' | 'pit' | 'selected' | 'field';
+export type ShotReason = 'battle' | 'incident' | 'overtake' | 'leader' | 'pit' | 'selected' | 'field' | 'start';
+
+/** Cameras on a car: above the driver looking ahead, on the nose, looking back, and the chase camera behind it. */
+export type OnboardView = 'tcam' | 'nose' | 'rear' | 'chase';
+export const ONBOARD_VIEWS: readonly OnboardView[] = ['tcam', 'nose', 'rear', 'chase'];
+
+export function isOnboard(camera: string): camera is OnboardView {
+  return (ONBOARD_VIEWS as readonly string[]).includes(camera);
+}
 
 export interface TvShot {
   subject: Subject;
-  /** A trackside camera's id, or 'heli'. */
+  /** A trackside camera's id, 'heli', an onboard view, or 'pitbox' (a camera in the pit lane in front of a stopped car). */
   camera: string;
+  /** The car an onboard or pit box camera belongs to. */
+  carrier?: number;
   reason: ShotReason;
   /** Director time the shot started and how long it may last at most (seconds of screen time). */
   start: number;
   hold: number;
+}
+
+/** The cars in a subject, front first. */
+export function subjectIds(sub: Subject): number[] {
+  return sub.kind === 'car' ? [sub.id] : sub.kind === 'battle' ? [sub.ahead, sub.behind] : sub.ids;
 }
 
 /** Something that happened, for the director: a car in trouble or overtaking. */
@@ -233,6 +258,16 @@ const MIN_SHOT = 2.5;
 const BATTLE_GAP = 1.0;
 /** A trackside camera must keep the car in sight at least this long (screen seconds) to be cut to. */
 const MIN_IN_SIGHT = 3;
+/** Chance of an onboard camera for each kind of shot, when one is due. */
+const ONBOARD_CHANCE: Partial<Record<ShotReason, number>> = { selected: 0.35, battle: 0.3, leader: 0.25, field: 0.3 };
+/** A pit stop is shown from the pit box only when this many screen seconds of it are left. */
+const MIN_PIT_SHOT = 2;
+/** The start is shown from behind the grid within this many race seconds of it, for this many race seconds, at up to this playback speed. */
+const START_WINDOW = 3;
+const START_HOLD = 12;
+const START_MAX_RATE = 5;
+/** Cars in the start shot. */
+const START_GROUP = 8;
 
 export interface DirectorTrack {
   n: number;
@@ -274,6 +309,14 @@ export class Director {
     return this.byId.get(id);
   }
 
+  /** Starts afresh, for a new race on the same circuit. */
+  reset(): void {
+    this.shot = null;
+    this.recent = [];
+    this.events = [];
+    this.shownStops.clear();
+  }
+
   /** Something worth showing happened (at the current clock). */
   note(kind: TvEvent['kind'], car: number): void {
     this.events.push({ kind, car, at: this.clock });
@@ -283,15 +326,18 @@ export class Director {
    * Advances the clock by `dt` screen seconds (0 while paused), with the
    * race running `rate` race seconds per screen second, and cuts when the
    * shot has run its time, its car has left the camera's sight, or something
-   * more important happened. Returns the shot to show.
+   * more important happened. The first shot within a few seconds of the
+   * start (`raceTime`, race seconds) is the start from behind the grid.
+   * Returns the shot to show.
    */
-  update(dt: number, rate: number, cars: readonly TvCar[]): TvShot | null {
+  update(dt: number, rate: number, cars: readonly TvCar[], raceTime = Infinity): TvShot | null {
     this.clock += Math.max(0, dt);
     this.events = this.events.filter((e) => this.clock - e.at < 12);
     const byId = new Map(cars.map((c) => [c.id, c]));
     const s = this.shot;
     if (s && !this.mustCut(s, byId, rate)) return s;
-    this.shot = this.choose(cars, byId, rate);
+    const opening = !s && this.recent.length === 0 && raceTime < START_WINDOW && rate <= START_MAX_RATE;
+    this.shot = (opening ? this.startShot(cars, rate) : null) ?? this.choose(cars, byId, rate);
     if (this.shot) {
       this.recent.push(this.shot);
       if (this.recent.length > 6) this.recent.shift();
@@ -299,9 +345,16 @@ export class Director {
     return this.shot;
   }
 
+  /** The start, from the camera behind the grid, on the front of the field. */
+  private startShot(cars: readonly TvCar[], rate: number): TvShot | null {
+    if (!this.byId.has('start')) return null;
+    const ids = cars.filter((c) => c.running).sort((a, b) => a.position - b.position).slice(0, START_GROUP).map((c) => c.id);
+    if (!ids.length) return null;
+    return { subject: { kind: 'group', ids }, camera: 'start', reason: 'start', start: this.clock, hold: Math.max(MIN_SHOT, START_HOLD / rate) };
+  }
+
   private subjectCars(sub: Subject, byId: Map<number, TvCar>): TvCar[] {
-    const ids = sub.kind === 'car' ? [sub.id] : [sub.ahead, sub.behind];
-    return ids.map((id) => byId.get(id)).filter((c): c is TvCar => !!c);
+    return subjectIds(sub).map((id) => byId.get(id)).filter((c): c is TvCar => !!c);
   }
 
   private mustCut(s: TvShot, byId: Map<number, TvCar>, rate: number): boolean {
@@ -309,18 +362,26 @@ export class Director {
     if (elapsed >= s.hold) return true;
     const cars = this.subjectCars(s.subject, byId);
     if (cars.length === 0) return true;
-    // A battle that has broken up, a car that has stopped running (an incident shot may linger on it).
-    if (s.subject.kind === 'battle' && elapsed > MIN_SHOT && cars.some((c) => !c.running || c.interval > BATTLE_GAP * 1.6)) return true;
-    if (s.reason !== 'incident' && s.reason !== 'pit' && cars.some((c) => !c.running && !c.inPit)) return true;
-    // About to leave the camera's sight (the car at the back of a battle).
-    if (s.camera !== 'heli' && elapsed > 1) {
+    // Something more important.
+    const incident = elapsed > MIN_SHOT && s.reason !== 'incident' && this.events.some((e) => e.kind === 'incident' && e.at > s.start);
+    // The start holds on the field as it gets away, until the back of it leaves the camera's sight.
+    if (s.reason !== 'start') {
+      // An onboard camera goes with its car, the pit box camera until the car has left the pit lane.
+      const carrier = s.carrier === undefined ? null : byId.get(s.carrier);
+      if (s.carrier !== undefined && !carrier) return true;
+      if (carrier && isOnboard(s.camera) && !carrier.running) return true;
+      if (carrier && s.camera === 'pitbox' && !carrier.inPit) return true;
+      // A battle that has broken up, a car that has stopped running (an incident shot may linger on it).
+      if (s.subject.kind === 'battle' && elapsed > MIN_SHOT && cars.some((c) => !c.running || c.interval > BATTLE_GAP * 1.6)) return true;
+      if (s.reason !== 'incident' && s.reason !== 'pit' && cars.some((c) => !c.running && !c.inPit)) return true;
+    }
+    // About to leave a trackside camera's sight (the car at the back of a battle).
+    if (this.byId.has(s.camera) && elapsed > 1) {
       const cam = this.byId.get(s.camera);
       const rear = cars[cars.length - 1];
       if (!cam || (rear.running && timeInSight(cam.sees, this.track, rear.u, rear.speed, rate + 1) / rate < 0.3)) return true;
     }
-    // Something more important.
-    if (elapsed > MIN_SHOT && s.reason !== 'incident' && this.events.some((e) => e.kind === 'incident' && e.at > s.start)) return true;
-    return false;
+    return incident;
   }
 
   private choose(cars: readonly TvCar[], byId: Map<number, TvCar>, rate: number): TvShot | null {
@@ -383,13 +444,27 @@ export class Director {
     return null;
   }
 
-  /** The camera for a subject: the trackside camera that keeps it in sight longest (preferring one it drives towards), or the helicopter. */
+  /**
+   * The camera for a subject: the pit box camera for a car standing in its
+   * box, now and then an onboard camera, otherwise the trackside camera that
+   * keeps it in sight longest (preferring one it drives towards), or the
+   * helicopter.
+   */
   private frame(subject: Subject, reason: ShotReason, byId: Map<number, TvCar>, rate: number): TvShot | null {
     const cars = this.subjectCars(subject, byId);
     if (cars.length === 0) return null;
     const lead = cars[cars.length - 1];
+    // A stop in the box, while enough of it is left to see at this speed.
+    if (reason === 'pit' && lead.stopped) {
+      const left = (lead.stopLeft ?? 0) / Math.max(1e-6, rate);
+      if (left >= MIN_PIT_SHOT) return { subject, camera: 'pitbox', carrier: lead.id, reason, start: this.clock, hold: Math.min(12, left + 2.5) };
+    }
     const hold = 5 + this.rng() * 7;
     const last = this.recent[this.recent.length - 1];
+    // Now and then onboard, but never twice running and at most two in four shots.
+    const chance = ONBOARD_CHANCE[reason] ?? 0;
+    const onboardDue = chance > 0 && cars.every((c) => c.running) && !(last && isOnboard(last.camera))
+      && this.recent.slice(-3).filter((r) => isOnboard(r.camera)).length < 2;
     // Now and then the helicopter, but not twice running.
     const heliDue = !!last && last.camera !== 'heli' && this.recent.slice(-3).every((r) => r.camera !== 'heli') && this.rng() < 0.4;
     let best: { cam: TvCamera; score: number; sight: number } | null = null;
@@ -412,9 +487,35 @@ export class Director {
         }
       }
     }
+    // With no trackside camera to hold it (a fast playback), onboard as often as the helicopter.
+    if (onboardDue && this.rng() < (best ? chance : 0.5)) return this.onboard(subject, reason);
     const useHeli = !best || (heliDue && reason !== 'pit' && reason !== 'incident');
     if (useHeli) return { subject, camera: 'heli', reason, start: this.clock, hold: 6 + this.rng() * 5 };
     return { subject, camera: best!.cam.id, reason, start: this.clock, hold: Math.max(MIN_SHOT, Math.min(hold, best!.sight - 0.5)) };
+  }
+
+  /**
+   * An onboard shot: a battle from the car behind (above the driver, or on
+   * the nose) or looking back from the car ahead; a single car from above
+   * the driver, the nose or the chase camera.
+   */
+  private onboard(subject: Subject, reason: ShotReason): TvShot {
+    const r = this.rng();
+    let carrier: number;
+    let camera: OnboardView;
+    if (subject.kind === 'battle') {
+      if (r < 0.25) {
+        carrier = subject.ahead;
+        camera = 'rear';
+      } else {
+        carrier = subject.behind;
+        camera = r < 0.85 ? 'tcam' : 'nose';
+      }
+    } else {
+      carrier = subjectIds(subject)[0];
+      camera = r < 0.45 ? 'tcam' : r < 0.65 ? 'nose' : 'chase';
+    }
+    return { subject, camera, carrier, reason, start: this.clock, hold: 6 + this.rng() * 4 };
   }
 
   /** Whether the camera's closest seen station lies ahead of progress u (the car is still approaching it). */

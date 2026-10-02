@@ -981,8 +981,11 @@ export class View3D {
         const s = this.cars?.shown.find((c) => c.id === id);
         if (!s) return null;
         const m = s.matrix.elements;
-        return { position: s.position, heading: Math.atan2(m[2], m[0]), length: s.look.set.model.length };
+        return { position: s.position, heading: Math.atan2(m[2], m[0]), length: s.look.set.model.length, width: s.look.set.model.width };
       },
+      mount: (id, view) => this.cars?.mount(id, view) ?? null,
+      pathPoint: (u, back, side, up) => this.cars?.pathPoint(u, back, side, up, new THREE.Vector3()) ?? null,
+      pitSide: this.store.facilities?.pitLane?.side ?? 1,
       fromDrawn: (p) => this.fromDrawn(p),
       groundY: (x, z) => {
         const local = this.world.worldToLocal(new THREE.Vector3(x, 0, z));
@@ -996,6 +999,8 @@ export class View3D {
         return { width: this.width, height: this.height, covered };
       },
     }, r, this.tvCams.cams, t.n, t.ds);
+    // A race started while the broadcast is on waits on the grid until the broadcast has shown it.
+    r.holdStart = true;
     this.controls.enabled = false;
     this.marker.visible = false;
     this.player.hidden = false;
@@ -1011,6 +1016,7 @@ export class View3D {
     if (!tv) return;
     this.tv = null;
     tv.dispose();
+    if (this.race) this.race.holdStart = false;
     this.camera.clearViewOffset();
     this.camera.fov = FOV;
     this.camera.updateProjectionMatrix();

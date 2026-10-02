@@ -1153,6 +1153,47 @@ input[type='range'] {
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* The pit stop timer: the time standing in the box, green once the car is away. */
+.tv-timer {
+  position: absolute;
+  right: 14px;
+  bottom: 62px;
+  min-width: 150px;
+  background: rgba(10, 12, 16, 0.88);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  color: #f4f6f8;
+  text-align: center;
+  animation: tv-pop 0.3s ease-out;
+}
+
+.tv-timer-head {
+  padding: 3px 12px;
+  background: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tv-timer-time {
+  padding: 4px 12px 0;
+  font-size: 30px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.tv-timer-time.done {
+  color: #3ad06b;
+}
+
+.tv-timer-work {
+  padding: 0 12px 7px;
+  font-size: 11px;
+  color: #aeb6c0;
+}
+
 .map3d-player {
   position: absolute;
   left: 50%;

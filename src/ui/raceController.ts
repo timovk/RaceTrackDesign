@@ -43,6 +43,8 @@ const NO_TELEMETRY: TelemetrySelection = { car: null, lap: 'last', compare: 'non
 export class RaceController {
   sim: RaceSim | null = null;
   playing = false;
+  /** A new race waits on the grid instead of starting at once (the broadcast shows the grid, then starts it). */
+  holdStart = false;
   speed = 20;
   /** Interpolation between the last two simulation steps, 0..1. */
   alpha = 1;
@@ -106,7 +108,8 @@ export class RaceController {
     this.telemetry = { ...NO_TELEMETRY };
     this.acc = 0;
     this.alpha = 1;
-    this.play();
+    if (this.holdStart) this.pause();
+    else this.play();
     s.emit('race');
   }
 

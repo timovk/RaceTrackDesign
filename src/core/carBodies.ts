@@ -48,11 +48,47 @@ export interface CarModel {
   lods: CarLod[];
   /** The driver's eye, for an onboard view. */
   eye: V3;
+  /** Onboard cameras for television, in car coordinates (x forward, y up). */
+  cameras: CarCameras;
   /** The wheel mesh is built at this radius and width; each wheel scales it to its own. */
   wheelRadius: number;
   wheelWidth: number;
   /** The lights that switch on and off (LAMP kinds), each at its middle in car coordinates. */
   lamps: LampPlace[];
+}
+
+/** An onboard camera: where it sits and the direction it looks, in car coordinates. */
+export interface CarCamera {
+  at: V3;
+  look: V3;
+}
+
+/**
+ * The onboard cameras a broadcast uses: above the driver looking ahead (the
+ * T-cam on a single-seater's airbox, a roof camera on a closed car, the tail
+ * camera over a rider), low at the front looking ahead, and looking back.
+ */
+export interface CarCameras {
+  tcam: CarCamera;
+  nose: CarCamera;
+  rear: CarCamera;
+}
+
+/** An onboard camera: where it sits and the direction it looks, in car coordinates. */
+export interface CarCamera {
+  at: V3;
+  look: V3;
+}
+
+/**
+ * The onboard cameras a broadcast uses: above the driver looking ahead (the
+ * T-cam on a single-seater's airbox, a roof camera on a closed car, the tail
+ * camera over a rider), low at the front looking ahead, and looking back.
+ */
+export interface CarCameras {
+  tcam: CarCamera;
+  nose: CarCamera;
+  rear: CarCamera;
 }
 
 export interface LampPlace {
@@ -410,6 +446,12 @@ function singleSeaterModel(s: SingleSeaterSpec): CarModel {
       { x: -fa, y: s.tyreR, z: -rz, radius: s.tyreR, width: s.rearW, front: false },
     ],
     lods, eye: [fa - 1.55, 0.78, 0], wheelRadius: s.tyreR, wheelWidth: s.rearW, lamps: lampPlaces(lods[0].body),
+    cameras: {
+      // The pod on top of the airbox, behind the driver's head (the cockpit ends 1.95 m behind the front axle).
+      tcam: { at: [fa - 2.16, s.height + 0.07, 0], look: [1, -0.06, 0] },
+      nose: { at: [fa + 0.45, 0.5, 0], look: [1, -0.06, 0] },
+      rear: { at: [fa - 2.16, s.height + 0.07, 0], look: [-1, -0.1, 0] },
+    },
   };
 }
 
@@ -643,6 +685,7 @@ function closedCar(s: ClosedSpec, lod: number): { body: CarMeshData; decals: Car
 
 function closedModel(s: ClosedSpec): CarModel {
   const fa = s.wheelbase / 2;
+  const deck = curve(s.deck);
   const fwz = s.width / 2 - 0.012 - s.frontW / 2;
   const rwz = s.width / 2 - 0.012 - s.rearW / 2;
   const lods = [0, 1, 2].map((lod) => ({ ...closedCar(s, lod), wheel: buildWheel(s.tyreR, s.rearW, s.rimR, lod, s.spokes) }));
@@ -655,6 +698,12 @@ function closedModel(s: ClosedSpec): CarModel {
       { x: -fa, y: s.tyreR, z: -rwz, radius: s.tyreR, width: s.rearW, front: false },
     ],
     lods, eye: [s.cabin.roofFront - 0.35, s.cabin.roof - 0.2, -0.32], wheelRadius: s.tyreR, wheelWidth: s.rearW, lamps: lampPlaces(lods[0].body),
+    cameras: {
+      // At the front of the roof, so the road ahead fills the picture over a strip of roof.
+      tcam: { at: [s.cabin.roofFront - 0.05, s.cabin.roof + 0.18, 0], look: [1, -0.04, 0] },
+      nose: { at: [fa + s.front - 0.3, deck(fa + s.front - 0.3) + 0.1, 0], look: [1, -0.04, 0] },
+      rear: { at: [s.cabin.roofRear + 0.05, s.cabin.roof + 0.12, 0], look: [-1, -0.1, 0] },
+    },
   };
 }
 
@@ -811,6 +860,12 @@ function bikeModel(s: BikeSpec): CarModel {
       { x: -fa, y: s.rearR, z: 0, radius: s.rearR, width: s.rearW, front: false },
     ],
     lods, eye: [0.36, 1.03, 0], wheelRadius: s.rearR, wheelWidth: s.rearW, lamps: lampPlaces(lods[0].body),
+    cameras: {
+      // Behind and above the rider, over the helmet; on top of the fairing's nose.
+      tcam: { at: [-fa - 0.25, 1.28, 0], look: [1, -0.16, 0] },
+      nose: { at: [fa, 0.92, 0], look: [1, -0.06, 0] },
+      rear: { at: [-fa - 0.15, 0.95, 0], look: [-1, -0.1, 0] },
+    },
   };
 }
 

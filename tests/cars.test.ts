@@ -174,6 +174,25 @@ describe('car models', () => {
     const gt = buildCar('gt3').lods[0].body;
     for (let i = 0; i < gt.hinge.length; i += 3) expect(gt.hinge[i + 2]).toBe(0);
   });
+
+  it('carries onboard cameras: above the driver and on the nose looking ahead, and one looking back', () => {
+    for (const body of BODIES) {
+      const m = buildCar(body);
+      const { tcam, nose, rear } = m.cameras;
+      for (const c of [tcam, nose, rear]) {
+        expect(Math.abs(c.at[0])).toBeLessThan(m.length / 2 + 0.2);
+        expect(Math.abs(c.at[2])).toBeLessThan(m.width / 2);
+        expect(c.at[1]).toBeGreaterThan(0.3);
+      }
+      expect(tcam.look[0]).toBeGreaterThan(0.9);
+      expect(nose.look[0]).toBeGreaterThan(0.9);
+      expect(rear.look[0]).toBeLessThan(-0.9);
+      // Above the driver's eye, and the nose camera in front of it and lower.
+      expect(tcam.at[1]).toBeGreaterThan(m.eye[1]);
+      expect(nose.at[0]).toBeGreaterThan(m.eye[0]);
+      expect(nose.at[1]).toBeLessThan(m.eye[1]);
+    }
+  });
 });
 
 describe('race cars in 3D', () => {
