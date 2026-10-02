@@ -17,20 +17,32 @@
  * drops settle on the lens (a fresh set at every cut), except the
  * helicopter's.
  *
- * Before the start, the camera walks the grid from the back to pole, a
- * caption for each car, then looks down the grid from behind it; the start
- * itself is shown from there.
+ * Before the start, the camera walks the grid from tenth to pole, a caption
+ * for each car, then looks down the grid from behind it while the start
+ * lights come on and go out (or the green flag waves for a rolling start);
+ * the start itself is shown from there.
+ *
+ * Every step of the race is kept for the last 40 seconds (core/race/replay.ts),
+ * so the director can replay an overtake or an incident a few seconds later:
+ * the cars are drawn as they were, at half speed, behind a REPLAY sting. The
+ * graphics (tvGraphics.ts) add a map of the circuit, a gap graphic for a
+ * battle, the final lap, and the chequered flag and the results.
  */
 import * as THREE from 'three';
 import { type Heli, type OnboardView, type TvCamera, type TvCar, type TvShot, Director, framingFov, heliStart, heliStep, isOnboard, subjectIds } from '../core/broadcast.ts';
 import { formatLapTime } from '../core/calibration.ts';
+import { type RaceView, ReplayBuffer } from '../core/race/replay.ts';
 import { DT, type RaceCar, type RaceSim } from '../core/race/sim.ts';
 import type { Vec3 } from '../core/shots.ts';
+import type { Track } from '../core/track.ts';
 import { h, setChildren } from './dom.ts';
 import type { RaceController } from './raceController.ts';
+import { TvGraphics } from './tvGraphics.ts';
 
 export interface TvHost {
   camera: THREE.PerspectiveCamera;
+  /** The circuit the race runs on, for the map. */
+  track: Track;
   /** Where the graphics go. */
   overlay: HTMLElement;
   /** A car's middle (scene coordinates), heading (world, radians), length and width, or null when it is not drawn. */
@@ -69,7 +81,12 @@ const GRID_WALK = 10;
 const GRID_PER_CAR = 3;
 const GRID_MOVE = 0.45;
 const GRID_WIDE = 6;
-const GRID_WIDE_HOLD = 4;
+/** The start lights: seconds on the wide shot before the first comes on, one more a second, and then out after between these. */
+const LIGHTS_FROM = 1.5;
+const LIGHTS_OUT_MIN = 0.4;
+const LIGHTS_OUT_MAX = 2.4;
+/** Race seconds of the race kept for replays. */
+const REPLAY_KEEP = 40;
 const VIEW_LABEL: Record<OnboardView, string> = { tcam: 'Onboard', nose: 'Nose camera', rear: 'Rear camera', chase: 'Chase camera' };
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -82,6 +99,15 @@ export class TvBroadcast {
   private readonly pops: HTMLElement;
   private readonly drops: HTMLElement;
   private readonly timer: HTMLElement;
+  private readonly sting: HTMLElement;
+  private readonly badge: HTMLElement;
+  private readonly graphics: TvGraphics;
+  private readonly buffer = new ReplayBuffer(REPLAY_KEEP);
+  private readonly stopRecording: () => void;
+  /** The race as drawn in a replay, or null when live. */
+  private replayed: { view: RaceView; alpha: number } | null = null;
+  /** When the start lights went out (screen seconds), to clear them away. */
+  private lightsOut = -1;
   private shot: TvShot | null = null;
   private aim = new THREE.Vector3();
   private fov = 30;
@@ -108,13 +134,23 @@ export class TvBroadcast {
     this.pops = h('div', { class: 'tv-pops' });
     this.drops = h('div', { class: 'tv-drops' });
     this.timer = h('div', { class: 'tv-timer', hidden: true });
-    this.layer = h('div', { class: 'tv' }, this.drops, this.lower, this.timer, this.pops);
+    this.sting = h('div', { class: 'tv-sting', hidden: true }, h('span', null, 'Replay'));
+    this.badge = h('div', { class: 'tv-replay', hidden: true }, 'Replay');
+    this.graphics = new TvGraphics(host.track);
+    this.layer = h('div', { class: 'tv' }, this.drops, this.graphics.el, this.lower, this.timer, this.pops, this.badge, this.sting);
     host.overlay.append(this.layer);
+    this.stopRecording = race.onStep((sim) => this.buffer.record(sim));
   }
 
   dispose(): void {
+    this.stopRecording();
     this.layer.remove();
     this.host.camera.up.copy(UP);
+  }
+
+  /** The race as it was, while a replay is on (for drawing the cars), or null. */
+  get replay(): { view: RaceView; alpha: number } | null {
+    return this.replayed;
   }
 
   /** What the camera looks at, scene coordinates. */
@@ -128,9 +164,8 @@ export class TvBroadcast {
     const s = this.shot;
     if (!s) return '';
     const code = s.carrier !== undefined ? this.race.sim?.cars[s.carrier]?.entrant.code ?? '' : '';
-    if (isOnboard(s.camera)) return `${VIEW_LABEL[s.camera]} · ${code}`;
-    if (s.camera === 'pitbox') return `Pit box · ${code}`;
-    return s.camera === 'heli' ? 'Helicopter' : this.director.camera(s.camera)?.label ?? '';
+    const name = isOnboard(s.camera) ? `${VIEW_LABEL[s.camera]} · ${code}` : s.camera === 'pitbox' ? `Pit box · ${code}` : s.camera === 'heli' ? 'Helicopter' : this.director.camera(s.camera)?.label ?? '';
+    return s.replay ? `Replay · ${name}` : name;
   }
 
   /** Moves on by `dt` screen seconds: the director decides, the camera follows. */
@@ -146,6 +181,8 @@ export class TvBroadcast {
       this.seenEvents = sim.events.length;
       this.walk = null;
       this.shot = null;
+      this.replayed = null;
+      this.buffer.clear();
     }
     this.readEvents(sim);
     if (sim.t === 0 && !r.playing) {
@@ -156,18 +193,60 @@ export class TvBroadcast {
         this.walk = null;
         this.lower.hidden = true;
       }
+      if (this.lightsOut >= 0 && this.time - this.lightsOut > 1.2) {
+        this.graphics.setLights(null);
+        this.lightsOut = -1;
+      }
+      // Once the race is over, no more replays.
+      if (sim.finished && this.director.shot?.replay) this.director.endShot();
       const cars = sim.cars.map((c) => tvCar(sim, c, r.alpha, r.selected));
-      const shot = this.director.update(r.playing ? dt : 0, Math.max(0.05, r.speed), cars, sim.t);
+      let shot = this.director.update(r.playing ? dt : 0, Math.max(0.05, r.speed), cars, sim.t);
+      // A replay draws the race as it was; one that is no longer kept ends at once.
+      this.replayed = shot?.replay ? this.buffer.view(sim, Math.min(shot.replay.to, shot.replay.from + (this.director.clock - shot.start) * shot.replay.speed)) : null;
+      if (shot?.replay && !this.replayed) {
+        this.director.endShot();
+        shot = this.director.update(0, Math.max(0.05, r.speed), cars, sim.t);
+      }
       const cut = shot !== this.shot;
+      if (cut) this.onReplayCut(this.shot, shot);
       if (cut && shot) this.onCut(shot, sim);
       this.shot = shot;
       if (shot) {
         this.point(shot, dt, cut);
-        this.showTiming(shot, sim, cut);
+        if (!shot.replay) this.showTiming(shot, sim, cut);
       }
-      this.showStop(shot, sim);
+      this.showStop(shot?.replay ? null : shot, sim);
     }
     if (this.time > this.captionUntil) this.lower.hidden = true;
+    this.updateGraphics(sim);
+  }
+
+  /** The map, lap counter, gap graphic and the finish, for this frame. */
+  private updateGraphics(sim: RaceSim): void {
+    const shot = this.walk ? null : this.shot;
+    const live = !shot?.replay;
+    const battle = shot && live && shot.subject.kind === 'battle' && this.lower.hidden ? { ahead: shot.subject.ahead, behind: shot.subject.behind } : null;
+    this.graphics.update({
+      sim,
+      view: this.replayed?.view ?? sim,
+      alpha: this.replayed?.alpha ?? this.race.alpha,
+      onScreen: shot ? subjectIds(shot.subject) : [],
+      battle,
+      selected: this.race.selected,
+      time: this.time,
+    });
+  }
+
+  /** Into or out of a replay: the sting, and the badge while it runs. */
+  private onReplayCut(from: TvShot | null, to: TvShot | null): void {
+    const into = !!to?.replay;
+    const out = !!from?.replay && !into;
+    this.badge.hidden = !into;
+    if (!into && !out) return;
+    this.sting.hidden = false;
+    this.sting.classList.remove('run');
+    void this.sting.offsetWidth;
+    this.sting.classList.add('run');
   }
 
   /** Centres the picture in what the timing tower leaves free; returns the free part's aspect ratio. */
@@ -311,8 +390,7 @@ export class TvBroadcast {
     const step = w.time / GRID_PER_CAR;
     if (step >= last + 1) {
       this.gridWide(order.slice(-GRID_WIDE), aspect);
-      // Lights out.
-      if (w.time >= (last + 1) * GRID_PER_CAR + GRID_WIDE_HOLD) this.race.play();
+      this.startLights(sim, w.time - (last + 1) * GRID_PER_CAR);
       return;
     }
     const i = Math.min(last, Math.floor(step));
@@ -334,6 +412,34 @@ export class TvBroadcast {
       w.shown = i;
       this.gridCaption(sim, order[i]);
     }
+  }
+
+  /**
+   * The start lights over the wide shot, `t` seconds into it: one more a
+   * second up to five, then all out after a moment (the same for the same
+   * race), and the race starts. A rolling start gets the green flag.
+   */
+  private startLights(sim: RaceSim, t: number): void {
+    const from = t - LIGHTS_FROM;
+    if (from < 0) return;
+    if (sim.classes[0].rules.race.start === 'rolling') {
+      this.graphics.setLights('green');
+      if (from > 1.5) this.go();
+      return;
+    }
+    const hold = LIGHTS_OUT_MIN + (LIGHTS_OUT_MAX - LIGHTS_OUT_MIN) * hash01(sim.setup.settings.seed);
+    if (from < 5 + hold) {
+      this.graphics.setLights({ lit: Math.min(5, Math.floor(from) + 1) });
+      return;
+    }
+    this.graphics.setLights('out');
+    this.go();
+  }
+
+  /** Lights out: the race starts. */
+  private go(): void {
+    if (this.lightsOut < 0) this.lightsOut = this.time;
+    this.race.play();
   }
 
   /** The front of the grid from the camera behind it, waiting for the start. */
@@ -440,7 +546,7 @@ export class TvBroadcast {
   }
 
   private caption(shot: TvShot, sim: RaceSim): HTMLElement | null {
-    const head = { battle: 'Battle', incident: 'Incident', overtake: 'Overtake', leader: '', pit: 'Pit stop', selected: '', field: '', start: '' }[shot.reason];
+    const head = { battle: 'Battle', incident: 'Incident', overtake: 'Overtake', leader: '', pit: 'Pit stop', selected: '', field: '', start: '', replay: 'Replay' }[shot.reason];
     if (shot.subject.kind === 'group') return null;
     if (shot.subject.kind === 'battle') {
       const a = sim.cars[shot.subject.ahead];
@@ -486,8 +592,11 @@ export class TvBroadcast {
     const events = sim.events;
     for (let i = Math.max(0, this.seenEvents); i < events.length; i++) {
       const e = events[i];
-      if (e.kind === 'overtake') this.director.note('overtake', e.car);
-      if (e.kind === 'off' || e.kind === 'contact' || e.kind === 'retired') this.director.note('incident', e.car);
+      // Where a car was when it happened, for a replay: from the replay buffer if it is kept.
+      const at = (id: number) => this.buffer.view(sim, e.t)?.view.cars[id]?.u ?? sim.cars[id]?.u ?? 0;
+      if (e.kind === 'overtake') this.director.note('overtake', e.car, sim.cars[e.car]?.position <= 10 ? { other: e.other, raceTime: e.t, u: at(e.car) } : undefined);
+      if (e.kind === 'off' || e.kind === 'contact') this.director.note('incident', e.car, { raceTime: e.t, u: at(e.car) });
+      if (e.kind === 'retired') this.director.note('incident', e.car);
       if (['overtake', 'fastest', 'off', 'contact', 'retired', 'pit', 'flag', 'weather'].includes(e.kind)) {
         const car = sim.cars[e.car];
         // Only the front of the field's passes and stops, to keep the screen clear.
@@ -529,6 +638,13 @@ export class TvBroadcast {
     this.pops.prepend(el);
     while (this.pops.children.length > 3) this.pops.lastElementChild?.remove();
   }
+}
+
+/** A number in [0, 1) from a string, the same every time. */
+function hash01(text: string): number {
+  let x = 2166136261;
+  for (let i = 0; i < text.length; i++) x = Math.imul(x ^ text.charCodeAt(i), 16777619) >>> 0;
+  return x / 4294967296;
 }
 
 function smooth(x: number): number {

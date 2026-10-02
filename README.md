@@ -21,6 +21,7 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | 9 | Rain and flags in 3D: weather, wet track, spray, lights, marshals and their flags | **done** |
 | 10 | Several layouts on one circuit: links, shared start line and pit lane, each layout's own lap times, licence and races | **done** |
 | 16a | Broadcast extras: onboard and chase cameras, the pit box camera with the stop timer, the grid walk and the start | **done** |
+| 16b | Broadcast extras: action replays, start lights, circuit map, gap graphic, final lap, chequered flag and results | **done** |
 
 ## Running it
 
@@ -109,7 +110,9 @@ Warnings flag corners tighter than the track is wide, very tight corners, steep 
 - A caption names the car or the battle when the camera picks it up: position, driver, number, team, gap and tyre. Overtakes and pit stops among the first ten, fastest laps, incidents, retirements, race control's flags and the weather pop up as they happen, and so do the sector and lap times of the car on screen (purple for the best of all, green for its own best).
 - Onboard cameras ride on the cars: above the driver (the T-cam on a single-seater's airbox, a camera on a closed car's roof, the tail camera behind a rider), on the nose, looking back, and a chase camera following behind. The director cuts to them now and then for the car you pick, a battle (from the car behind, or looking back from the car ahead), the leaders and the rest of the field, never twice running. They tilt with the car, and lean with a bike.
 - A car standing in its pit box is shown from the pit wall across the lane, with the stop timer running and the work done (new tyres, fuel, a driver change).
-- Start a race with TV on and it waits on the grid: the camera walks the grid from tenth to pole, a caption for each car, looks down the grid from behind it, and then the lights go out (press play to start sooner). At 1× or 5× the start itself is shown from behind the grid.
+- Start a race with TV on and it waits on the grid: the camera walks the grid from tenth to pole, a caption for each car, then looks down the grid from behind it while the five start lights come on one by one and go out (a rolling start gets the green flag), and the race starts (press play to start sooner). At 1× or 5× the start itself is shown from behind the grid.
+- Action replays: a few seconds after an overtake in the top ten or an incident, the director replays it at half speed from another camera (often from on board), behind a REPLAY sting, then cuts back to the race. The broadcast keeps the last 40 seconds of the race for this, and replays only at 1× or 5×.
+- A map of the circuit shows every car, the cars on screen larger and named. During a battle a gap graphic shows the gap now and at the line on the last five laps, closing or growing. "Final lap" comes up as the leader starts it, the chequered flag names the winner (each class's in a multi-class race), and once the race is over the results stay on screen.
 - In the rain, drops settle on the lens, a fresh set at every cut; the helicopter's stays clear.
 - Shots last as long at any playback speed. At high speeds the cars go by a trackside camera too fast to hold, so the helicopter and the onboard cameras take over; at 1× you get the whole broadcast.
 - Drag the view or press **Stop** to take the camera back. **Save image** saves the broadcast frame.

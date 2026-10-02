@@ -1084,7 +1084,7 @@ input[type='range'] {
 .tv-pops {
   position: absolute;
   right: 14px;
-  top: 96px;
+  top: 300px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1192,6 +1192,322 @@ input[type='range'] {
   padding: 0 12px 7px;
   font-size: 11px;
   color: #aeb6c0;
+}
+
+/* The circuit map: the track, every car as a dot, the cars on screen larger and named. */
+.tv-map {
+  position: absolute;
+  right: 14px;
+  top: 96px;
+  width: 190px;
+  height: 190px;
+  padding: 6px;
+  box-sizing: border-box;
+  background: rgba(10, 12, 16, 0.72);
+  border-radius: 8px;
+}
+
+.tv-map-edge {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-linejoin: round;
+}
+
+.tv-map-road {
+  fill: none;
+  stroke: #d9dee5;
+  stroke-linejoin: round;
+}
+
+.tv-map-car {
+  stroke: #0b0d10;
+  stroke-width: 0;
+}
+
+.tv-map-car.on {
+  stroke: #fff;
+  stroke-width: 0.4%;
+}
+
+.tv-map-car.picked {
+  stroke: var(--accent);
+  stroke-width: 0.6%;
+}
+
+.tv-map-label {
+  fill: #fff;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-weight: 800;
+  paint-order: stroke;
+  stroke: #0b0d10;
+  stroke-width: 0.5%;
+}
+
+.tv-map-sc {
+  fill: #ffd60a;
+  stroke: #0b0d10;
+  stroke-width: 0.3%;
+}
+
+/* The final lap. */
+.tv-lap {
+  position: absolute;
+  left: var(--tv-centre, 50%);
+  top: 130px;
+  transform: translateX(-50%);
+  animation: tv-pop 0.3s ease-out;
+  padding: 5px 12px;
+  border-radius: 5px;
+  background: rgba(10, 12, 16, 0.88);
+  border-left: 4px solid var(--accent);
+  color: #f4f6f8;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The start lights: five pairs of red lights, and the green flag of a rolling start. */
+.tv-lights {
+  position: absolute;
+  left: var(--tv-centre, 50%);
+  top: 18%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(10, 12, 16, 0.9);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.tv-light {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #16191e;
+}
+
+.tv-light span {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #2a1214;
+}
+
+.tv-light.on span {
+  background: radial-gradient(circle at 40% 35%, #ff8a80, #e10600 60%);
+  box-shadow: 0 0 14px rgba(255, 30, 20, 0.85);
+}
+
+.tv-lights.green {
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.tv-green {
+  padding: 10px 26px;
+  border-radius: 6px;
+  background: #1fae4b;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  animation: tv-pop 0.3s ease-out;
+}
+
+/* A battle on screen: the gap now and at the line on the last few laps. */
+.tv-gap-box {
+  position: absolute;
+  left: var(--tv-centre, 50%);
+  bottom: 62px;
+  transform: translateX(-50%);
+  min-width: 260px;
+  background: rgba(10, 12, 16, 0.88);
+  border-radius: 6px;
+  overflow: hidden;
+  color: #f4f6f8;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.tv-gap-now {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 12px 2px;
+}
+
+.tv-gap-value {
+  font-size: 26px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.tv-gap-trend {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tv-gap-trend.closing {
+  color: #3ad06b;
+}
+
+.tv-gap-trend.growing {
+  color: #ff6b5e;
+}
+
+.tv-gap-bars {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+  height: 46px;
+  padding: 4px 12px 8px;
+}
+
+.tv-gap-bar {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 2px;
+}
+
+.tv-gap-fill {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+}
+
+.tv-gap-lap {
+  font-size: 9px;
+  color: #aeb6c0;
+}
+
+/* The chequered flag as the winner takes it, below the map. */
+.tv-flag {
+  position: absolute;
+  left: var(--tv-centre, 50%);
+  top: 36%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: stretch;
+  background: rgba(10, 12, 16, 0.92);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  animation: tv-pop 0.4s ease-out;
+}
+
+.tv-flag-chequer {
+  width: 64px;
+  background: conic-gradient(#fff 25%, #111 0 50%, #fff 0 75%, #111 0) 0 0 / 16px 16px;
+}
+
+.tv-flag-text {
+  padding: 10px 18px;
+  color: #f4f6f8;
+}
+
+.tv-flag-title {
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tv-flag-winner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.tv-flag-winner .tv-team {
+  height: 16px;
+}
+
+/* The results, once the race is over. */
+.tv-results {
+  position: absolute;
+  left: var(--tv-centre, 50%);
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  max-height: 80%;
+  overflow: auto;
+}
+
+.tv-results-card {
+  min-width: 340px;
+}
+
+.tv-results-card .tv-row {
+  padding: 4px 12px;
+}
+
+.tv-results-card .tv-driver {
+  font-size: 14px;
+}
+
+/* A replay: a sweeping band at the start and the end, and a badge while it runs. */
+.tv-sting {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.tv-sting span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 70%;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(90deg, rgba(255, 90, 54, 0), var(--accent) 25% 75%, rgba(255, 90, 54, 0));
+  color: #fff;
+  font-size: 44px;
+  font-weight: 900;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  transform: translateX(160%) skewX(-12deg);
+}
+
+.tv-sting.run span {
+  animation: tv-sting 0.75s ease-in-out;
+}
+
+@keyframes tv-sting {
+  from { transform: translateX(-110%) skewX(-12deg); }
+  to { transform: translateX(160%) skewX(-12deg); }
+}
+
+.tv-replay {
+  position: absolute;
+  left: var(--tv-centre, 50%);
+  top: 96px;
+  transform: translateX(-50%);
+  padding: 4px 14px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
 }
 
 .map3d-player {

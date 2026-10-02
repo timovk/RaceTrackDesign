@@ -976,6 +976,7 @@ export class View3D {
     const earth = this.earth;
     this.tv = new TvBroadcast({
       camera: this.camera,
+      track: t,
       overlay: this.el,
       car: (id) => {
         const s = this.cars?.shown.find((c) => c.id === id);
@@ -1160,14 +1161,16 @@ export class View3D {
     this.cars.group.visible = true;
     this.sun.castShadow = true;
     const relief = this.store.view.relief;
-    this.cars.update(r.sim, r.alpha, {
+    // A broadcast replay draws the race as it was.
+    const replay = this.tv?.replay ?? null;
+    this.cars.update(r.sim, replay ? replay.alpha : r.alpha, {
       earth: this.earth!,
       sceneY: (z) => (z - this.zRef) * relief,
       pitSide: this.store.facilities?.pitLane?.side ?? 1,
       rain: r.sim.rain,
       wetness: r.sim.wetness,
       clock: this.clock,
-    }, this.camera, this.height);
+    }, this.camera, this.height, replay?.view);
     if (r.follow && r.selected !== null && !this.path && !this.tv) {
       const p = this.cars.positionOf(r.selected);
       if (p) {

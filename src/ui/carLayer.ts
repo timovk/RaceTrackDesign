@@ -22,6 +22,7 @@
 import * as THREE from 'three';
 import { type CarCameras, type CarModel, buildCar } from '../core/carBodies.ts';
 import { LAMP } from '../core/carMesh.ts';
+import type { RaceView } from '../core/race/replay.ts';
 import { DT, type RaceCar, type RaceSim } from '../core/race/sim.ts';
 import { RAIN_THRESHOLD } from '../core/race/weather.ts';
 import { type Livery, SAFETY_LIVERY, bodyFor, liveryFor, spreadCars } from '../core/raceCars.ts';
@@ -261,8 +262,12 @@ export class CarLayer {
     this.emitters = [];
   }
 
-  /** Places every car for the race at `alpha` between its last two steps, as seen by `camera` (for the level of detail). */
-  update(sim: RaceSim, alpha: number, ctx: CarContext, camera: THREE.PerspectiveCamera, viewHeight: number): void {
+  /**
+   * Places every car for the race at `alpha` between its last two steps, as
+   * seen by `camera` (for the level of detail); or, given a `view`, as the
+   * race was then (a replay).
+   */
+  update(sim: RaceSim, alpha: number, ctx: CarContext, camera: THREE.PerspectiveCamera, viewHeight: number, view: RaceView = sim): void {
     if (sim !== this.sim) this.setRace(sim);
     this.ctx = ctx;
     const m = sim.model;
@@ -270,12 +275,13 @@ export class CarLayer {
     const line = m.line;
     const n = t.n;
     const ds = t.ds;
-    const now = sim.t - DT * (1 - alpha);
-    const dt = this.lastT < 0 ? Infinity : now - this.lastT;
+    const now = view.t - DT * (1 - alpha);
+    // A jump back in time (into a replay or out of one) snaps cars into place.
+    const dt = this.lastT < 0 || now < this.lastT ? Infinity : now - this.lastT;
     this.lastT = now;
     const lerpU = (car: RaceCar) => car.prevU + (car.u - car.prevU) * alpha;
     // Side by side where cars would overlap.
-    const onTrack = sim.cars.filter((c) => c.status === 'running');
+    const onTrack = view.cars.filter((c) => c.status === 'running');
     this.spread = spreadCars(
       onTrack.map((c) => ({ id: c.id, u: lerpU(c), lateral: c.lateral, length: this.looks[c.id].set.model.length, width: this.looks[c.id].set.model.width })),
       { n, ds, width: t.width, lineOffset: line.offset },
@@ -338,13 +344,13 @@ export class CarLayer {
       s.lod = px > LOD_FULL ? 0 : px > LOD_MEDIUM ? 1 : 2;
       shown.push(s);
     };
-    for (const car of sim.cars) {
+    for (const car of view.cars) {
       if (car.status === 'finished') continue;
       const look = this.looks[car.id];
       const compoundHex = car.rules.tyres.compounds[car.compound]?.color ?? '#dddddd';
       const compound = linearRgb(compoundHex);
       if (car.status === 'retired') {
-        const pose = sim.pose(car, alpha);
+        const pose = view.pose(car, alpha);
         if (!pose) continue;
         // Parked beside the track, turned off the racing line.
         const near = this.index?.nearest(pose.x, pose.y, 60);
@@ -353,7 +359,7 @@ export class CarLayer {
         continue;
       }
       if (car.status === 'pit') {
-        const pose = sim.pose(car, alpha);
+        const pose = view.pose(car, alpha);
         if (!pose) continue;
         // In its box: aside from the fast lane, towards the garage.
         const want = car.pit?.stopped ? 3.2 : 0;
@@ -376,7 +382,7 @@ export class CarLayer {
       place(car.id, look, p.x, p.y, p.heading, u * ds, car.v, line.curvature[k], line.curvature[k], drs, compound, lightsOf(car));
       emitters.push({ id: car.id, u, lateral, speed: car.v, body: sprayBody(look.set.model.kind), length: look.set.model.length, width: look.set.model.width });
     }
-    const sc = sim.safetyCar;
+    const sc = view.safetyCar;
     if (sc && this.safetyLook) {
       const u = sc.prevU + (sc.u - sc.prevU) * alpha;
       const p = linePoint(line, n, u, 0);

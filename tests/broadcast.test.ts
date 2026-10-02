@@ -137,13 +137,45 @@ describe('the director', () => {
     expect(fast.update(0.1, 20, [car(0, 1500), car(1, 700, { running: false, inPit: true, stopped: true, stopLeft: 8 })])!.camera).not.toBe('pitbox');
   });
 
+  it('replays an overtake a few seconds later, slowed down, from another camera, and plays it to the end', () => {
+    const d = new Director(cams, track, rng(9));
+    const cars = [car(0, 1500), car(1, 1000, { interval: 0.5 }), car(2, 300, { interval: 9 })];
+    let now = 100;
+    const step = (dt = 0.1) => {
+      now += dt;
+      for (const c of cars) c.u += (c.speed * dt) / t.ds;
+      return d.update(dt, 1, cars, now)!;
+    };
+    step();
+    // Car 1 passes car 0.
+    const at = now;
+    d.note('overtake', 1, { other: 0, raceTime: at, u: cars[1].u });
+    let replay: TvShot | null = null;
+    for (let i = 0; i < 400 && !replay; i++) {
+      const s = step();
+      if (s.reason === 'replay') replay = s;
+    }
+    expect(replay).not.toBeNull();
+    // Not before the overtake is a couple of seconds old.
+    expect(now - at).toBeGreaterThan(2.4);
+    expect(replay!.subject).toEqual({ kind: 'battle', ahead: 1, behind: 0 });
+    expect(replay!.replay).toEqual({ from: at - 4, to: at + 2, speed: 0.5 });
+    expect(replay!.hold).toBeCloseTo(12, 9);
+    // An incident does not cut it short.
+    d.note('incident', 2);
+    for (let i = 0; i < 100; i++) expect(step()).toBe(replay);
+    const fast = new Director(cams, track, rng(9));
+    fast.note('overtake', 1, { other: 0, raceTime: 100, u: 1000 });
+    for (let i = 0; i < 100; i++) expect(fast.update(0.1, 20, cars, 104 + i)!.reason).not.toBe('replay');
+  });
+
   it('opens on the start from behind the grid, holding on the front of the field', () => {
     const grid = Array.from({ length: 12 }, (_, i) => car(i, -10 - 4 * i, { speed: 0, position: i + 1, classPosition: i + 1 }));
     const d = new Director(cams, track, rng(4));
     const s = d.update(0.1, 1, grid, 0.1)!;
     expect(s.camera).toBe('start');
     expect(s.reason).toBe('start');
-    expect(s.subject).toEqual({ kind: 'group', ids: [0, 1, 2, 3, 4, 5, 6, 7] });
+    expect(s.subject).toEqual({ kind: 'group', ids: [0, 1, 2, 3] });
     // It holds while the field gets away.
     for (const c of grid) c.u += 30;
     expect(d.update(5, 1, grid, 5)).toBe(s);

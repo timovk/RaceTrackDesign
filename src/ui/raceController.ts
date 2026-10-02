@@ -62,6 +62,7 @@ export class RaceController {
 
   private readonly store: Store;
   private readonly tickListeners = new Set<() => void>();
+  private readonly stepListeners = new Set<(sim: RaceSim) => void>();
   private acc = 0;
   private lastFrame = 0;
   private frame = 0;
@@ -74,6 +75,12 @@ export class RaceController {
 
   onTick(fn: () => void): void {
     this.tickListeners.add(fn);
+  }
+
+  /** Calls `fn` after every simulation step while the race plays (not while skipping to the finish); returns how to stop. */
+  onStep(fn: (sim: RaceSim) => void): () => void {
+    this.stepListeners.add(fn);
+    return () => this.stepListeners.delete(fn);
   }
 
   /** Why a race cannot start right now, or null when it can. */
@@ -243,6 +250,7 @@ export class RaceController {
     const end = performance.now() + FRAME_BUDGET_MS;
     while (this.acc >= DT && !sim.finished) {
       sim.step();
+      for (const fn of this.stepListeners) fn(sim);
       this.acc -= DT;
       if (performance.now() > end) {
         // Too much work for one frame: drop the backlog rather than fall ever further behind.
