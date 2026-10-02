@@ -10,8 +10,11 @@
  * (the same road at the same height), counted from the start line, which
  * every layout keeps. A link leaves and joins the track along its direction
  * of travel, through its own control points, and is graded over the ground
- * to meet the circuit's heights at both ends.
+ * to meet the circuit's heights at both ends. Until its road and verges part
+ * from the circuit's, it keeps the circuit's surface height: where the two
+ * overlap they are one surface, so neither shows a step or the other's grass.
  */
+import { VERGE } from './earthworks.ts';
 import { type Vec2, dist, mod, sampleOpenSpline, segmentIntersection } from './geometry.ts';
 import type { PitLane } from './pitLane.ts';
 import type { RaceSettings } from './race/setup.ts';
@@ -54,6 +57,11 @@ export interface LayoutBuild {
   /** Problems that do not stop it: a link crossing the circuit on the level. */
   warnings: { link: number; message: string }[];
 }
+
+/** A link eases from the circuit's surface to its own grading over at least this many metres. */
+const MIN_EASE = 30;
+/** Most gradient the easing adds. */
+const EASE_GRADE = 0.05;
 
 /** A link's end must lie within this distance of the track's edge (metres). */
 export const LINK_SNAP = 25;
@@ -116,7 +124,7 @@ export function buildLayout(full: Track, layout: LayoutDesign, heightAt: HeightS
 
   // Each link's path: leaving along the track, through its points, joining along the track; resampled at the station spacing.
   const ds = full.ds;
-  const paths = new Map<number, { x: number[]; y: number[]; width: number[] }>();
+  const paths = new Map<number, { x: number[]; y: number[]; width: number[]; pinned: Float64Array }>();
   for (const r of resolved) {
     const at = (k: number): Vec2 => ({ x: full.x[k], y: full.y[k] });
     const pts: Vec2[] = [at(r.a), ...r.points, at(r.b)];
@@ -127,7 +135,7 @@ export function buildLayout(full: Track, layout: LayoutDesign, heightAt: HeightS
     for (let k = 1; k < dense.length; k++) cum[k] = cum[k - 1] + dist(dense[k - 1].x, dense[k - 1].y, dense[k].x, dense[k].y);
     const length = cum[dense.length - 1];
     const m = Math.max(1, Math.round(length / ds));
-    const path = { x: [] as number[], y: [] as number[], width: [] as number[] };
+    const path = { x: [] as number[], y: [] as number[], width: [] as number[], pinned: new Float64Array(0) };
     let j = 0;
     for (let s = 1; s < m; s++) {
       const target = (s * length) / m;
@@ -141,6 +149,16 @@ export function buildLayout(full: Track, layout: LayoutDesign, heightAt: HeightS
       const w = u * u * (3 - 2 * u);
       path.width.push(widths[p.seg] + (widths[p.seg + 1] - widths[p.seg]) * w);
     }
+    // Where it leaves and joins, the link shares the circuit's surface until their roads and verges part.
+    path.pinned = new Float64Array(path.x.length).fill(NaN);
+    const pin = (s: number, near: number) => {
+      const on = surfaceNear(full, path.x[s], path.y[s], near);
+      if (on.d >= on.half + path.width[s] / 2 + VERGE) return false;
+      path.pinned[s] = on.z;
+      return true;
+    };
+    for (let s = 0; s < path.x.length && pin(s, r.a); s++);
+    for (let s = path.x.length - 1; s >= 0 && Number.isNaN(path.pinned[s]) && pin(s, r.b); s--);
     paths.set(r.index, path);
   }
 
@@ -183,6 +201,30 @@ export function buildLayout(full: Track, layout: LayoutDesign, heightAt: HeightS
 
   const terrainArr = Float64Array.from(terrain);
   const z = gradeProfile(terrainArr, ds, grading, Float64Array.from(fixed));
+  // Each link takes the circuit's surface where they overlap, then eases back to its own grading.
+  for (const r of resolved) {
+    const [first, end] = ranges.get(r.index)!;
+    const pinned = paths.get(r.index)!.pinned;
+    const m = end - first;
+    let left = 0;
+    while (left < m && !Number.isNaN(pinned[left])) left++;
+    let right = m;
+    while (right > left && !Number.isNaN(pinned[right - 1])) right--;
+    // How far each end's surface sits off the link's own grading, eased out over the grading's smoothing
+    // length, or longer where they differ more (easing adds at most EASE_GRADE to the gradient).
+    const ease = (offset: number) => {
+      const steps = Math.min(right - left - 1, Math.max(grading.smoothing, MIN_EASE, (1.5 * Math.abs(offset)) / EASE_GRADE) / ds);
+      return (s: number) => {
+        const u = Math.min(1, s / (steps + 1));
+        return offset * (1 - u * u * (3 - 2 * u));
+      };
+    };
+    const fromLeft = left > 0 ? ease(pinned[left - 1] - z[first + left - 1]) : () => 0;
+    const fromRight = right < m ? ease(pinned[right] - z[first + right]) : () => 0;
+    for (let s = 0; s < m; s++) {
+      z[first + s] = s < left || s >= right ? pinned[s] : z[first + s] + fromLeft(s - left + 1) + fromRight(right - s);
+    }
+  }
   const sharedArr = Int32Array.from(shared);
   const track = finishTrack({
     ds, x: Float64Array.from(x), y: Float64Array.from(y), width: Float64Array.from(width), terrain: terrainArr, z,
@@ -248,6 +290,27 @@ export function layoutPitLane(build: LayoutBuild, pit: PitLane, n: number): PitL
   const m = build.shared.length;
   for (let s = 0; s <= steps; s++) if (build.shared[(entry + s) % m] !== (pit.entry + s) % n) return null;
   return { ...pit, entry, exit };
+}
+
+/**
+ * The track's surface near station `near` (within 200 m along it) closest to
+ * a point: the distance from its centreline, its half width and its height
+ * there (the surface is level across).
+ */
+function surfaceNear(t: Track, x: number, y: number, near: number): { d: number; half: number; z: number } {
+  const reach = Math.min(Math.floor(t.n / 2), Math.ceil(200 / t.ds));
+  let best = { d: Infinity, half: 0, z: 0 };
+  for (let i = -reach; i < reach; i++) {
+    const k = mod(near + i, t.n);
+    const k1 = (k + 1) % t.n;
+    const dx = t.x[k1] - t.x[k];
+    const dy = t.y[k1] - t.y[k];
+    const len2 = dx * dx + dy * dy;
+    const f = len2 > 0 ? Math.max(0, Math.min(1, ((x - t.x[k]) * dx + (y - t.y[k]) * dy) / len2)) : 0;
+    const d = dist(x, y, t.x[k] + dx * f, t.y[k] + dy * f);
+    if (d < best.d) best = { d, half: (t.width[k] + (t.width[k1] - t.width[k]) * f) / 2, z: t.z[k] + (t.z[k1] - t.z[k]) * f };
+  }
+  return best;
 }
 
 function nearestStation(t: Track, p: Vec2): { k: number; d: number } {

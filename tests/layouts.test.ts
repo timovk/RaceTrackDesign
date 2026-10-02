@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { VERGE } from '../src/core/earthworks.ts';
 import { placeFacilities } from '../src/core/facilities.ts';
 import { simulateLap } from '../src/core/lapSim.ts';
 import { type LayoutDesign, type LinkDesign, buildLayout, layoutPitLane, layoutStation } from '../src/core/layouts.ts';
@@ -66,6 +67,33 @@ describe('layouts', () => {
       expect(Math.abs(t.z[k1] - t.z[k])).toBeLessThan(0.3);
       expect(Math.abs(t.z[k] - t.terrain[k])).toBeLessThanOrEqual(DEFAULT_GRADING.maxCutFill + 1e-9);
     }
+  });
+
+  it('keeps the circuit’s surface where the link still overlaps it, so neither road’s grass covers the other', () => {
+    const l = build.links[0];
+    // The full circuit's centreline distance, half width and surface height nearest a point.
+    const under = (x: number, y: number) => {
+      let best = { d: Infinity, half: 0, z: 0 };
+      for (let k = 0; k < full.n; k++) {
+        const k1 = (k + 1) % full.n;
+        const dx = full.x[k1] - full.x[k];
+        const dy = full.y[k1] - full.y[k];
+        const f = Math.max(0, Math.min(1, ((x - full.x[k]) * dx + (y - full.y[k]) * dy) / (dx * dx + dy * dy)));
+        const d = Math.hypot(x - full.x[k] - dx * f, y - full.y[k] - dy * f);
+        if (d < best.d) best = { d, half: full.width[k] / 2, z: full.z[k] + (full.z[k1] - full.z[k]) * f };
+      }
+      return best;
+    };
+    let overlapping = 0;
+    for (let j = 1; j < l.x.length - 1; j++) {
+      const s = under(l.x[j], l.y[j]);
+      // The two roads and their verges overlap.
+      if (s.d >= s.half + l.width[j] / 2 + VERGE) continue;
+      overlapping++;
+      expect(Math.abs(l.z[j] - s.z)).toBeLessThan(0.01);
+    }
+    // At both ends: the link parts from the track at a shallow angle.
+    expect(overlapping).toBeGreaterThan(20);
   });
 
   it('gives the same lap when its link moves by a millimetre or so', () => {
