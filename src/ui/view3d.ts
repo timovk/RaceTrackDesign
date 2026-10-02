@@ -13,15 +13,22 @@
  * the labels drawn in.
  *
  * In Race mode the race runs on it (ui/carLayer.ts): every car drawn as its
- * model where the race puts it, under sun shadows around what the camera
- * looks at; the camera can follow the selected car, and clicking a car
- * selects it. TV shows it as a broadcast (ui/tvBroadcast.ts): trackside
- * cameras and the helicopter, chosen by a director, with captions.
- *
- * The race's weather shows too (ui/weatherLayer.ts): cloud before a shower,
- * rain, a wet and glossy track, spray behind the cars. Marshals stand at
+ * model where the race puts it; the camera can follow the selected car, and
+ * clicking a car selects it. TV shows it as a broadcast (ui/tvBroadcast.ts):
+ * trackside cameras and the helicopter, chosen by a director, with
+ * captions; the trees in the cameras' way are left out. Marshals stand at
  * their posts and show the flags and boards race control calls for
  * (ui/flagLayer.ts).
+ *
+ * The race's weather shows too (ui/weatherLayer.ts): cloud before a shower,
+ * rain, a wet and glossy track, spray behind the cars.
+ *
+ * The picture: a photographed sky (ui/sky.ts) lights the scene, the sun
+ * casts shadows over the whole view (ui/shadows.ts), everything is drawn
+ * with physically based materials, and the picture is finished with ambient
+ * occlusion, depth of field on the broadcast's long lenses, bloom and a
+ * light grade, flatter and duller under cloud (ui/postFx.ts). Graphics
+ * "Basic" leaves out the finish.
  *
  * With layouts, the track is the layout shown; the rest of the circuit and
  * the other layouts' links are built as plain roads round it, so the ground
@@ -40,7 +47,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { COLORS, Earthworks, type MeshData, type Road, VERGE, anchoredHeight, buildRoads, buildSides, buildTerrain, pitRoad, startLine, trackRoad } from '../core/scene3d.ts';
 import {
   type Footprint, type PostSite, type RunoffArea, TrackIndex, type Trees, buildGrandstands, buildGridMarks, buildKerbs, buildMarshalPosts, buildPitBuilding, buildRunoff,
-  forest, inside, kerbRuns, lineFlagSite, marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffTest,
+  forest, inside, kerbRuns, lineFlagSite, marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffTest, treesInSight,
 } from '../core/scenery.ts';
 import { type Pose, type Shot, type ShotInput, type Vec3, flyoverDuration, flyoverPose, hotLapPose, trackShots } from '../core/shots.ts';
 import { RAMP, RAMP_MIN_RANGE, ROCK, contourInterval } from '../core/terrainImage.ts';
@@ -55,6 +62,9 @@ import { DT } from '../core/race/sim.ts';
 import { cloudCover, lineWetness, standingWater } from '../core/weatherFx.ts';
 import { CarLayer } from './carLayer.ts';
 import { FlagLayer } from './flagLayer.ts';
+import { type Grade, type Lens, PostFx } from './postFx.ts';
+import { SunShadows } from './shadows.ts';
+import { sunDirection } from './sky.ts';
 import { FINE, type WeatherState, WeatherLayer, wetSurfaceMaterial } from './weatherLayer.ts';
 import { TvBroadcast } from './tvBroadcast.ts';
 import type { RaceController } from './raceController.ts';
@@ -68,12 +78,16 @@ const MARKER = 0x3fb6ff;
 const LINE = 0xff5a36;
 /** Height of the corner labels over the track, metres. */
 const LABEL_LIFT = 8;
-/** Towards the sun, from the north-west as the flat map's hillshade. */
-const SUN = new THREE.Vector3(-1, 1.3, -1).normalize();
-/** Half the side of the patch the sun's shadows cover, metres. */
-const SHADOW_REACH = 70;
-/** What receives the sun's shadows (when cars are shown). */
-const SHADOW_RECEIVERS = new Set(['terrain', 'track', 'trackVerges', 'pit', 'pitVerges', 'otherRoads', 'otherVerges', 'start', 'kerbs', 'runoff', 'grid', 'pitBuilding', 'stands', 'posts']);
+/** Towards the sun: from the north-west, as the flat map's hillshade, as high as in the photographed sky. */
+const SUN = sunDirection();
+/** What receives the sun's shadows, and what casts them. */
+const SHADOW_RECEIVERS = new Set(['terrain', 'track', 'trackVerges', 'pit', 'pitVerges', 'otherRoads', 'otherVerges', 'start', 'kerbs', 'runoff', 'grid', 'pitBuilding', 'stands', 'posts', 'conifers', 'broadleaves', 'sides']);
+const SHADOW_CASTERS = new Set(['pitBuilding', 'stands', 'posts', 'conifers', 'broadleaves', 'terrain']);
+/** The graphics setting, kept per browser. */
+const GRAPHICS_KEY = 'racetrackdesign.graphics';
+/** The finish on the picture: a light one when looking round, a broadcast's on TV. */
+const GRADE_VIEW: Grade = { contrast: 1.05, saturation: 1.12, vignette: 0 };
+const GRADE_TV: Grade = { contrast: 1.08, saturation: 1.15, vignette: 0.3 };
 /** Driver codes show over this many cars nearest the camera, within this distance (metres). */
 const CAR_LABELS = 12;
 const CAR_LABEL_REACH = 400;
@@ -103,7 +117,15 @@ export class View3D {
   private readonly readout: HTMLElement;
   private readonly race: RaceController | null;
   private cars: CarLayer | null = null;
+  /** The sun's colour and strength as the weather sets them; the shadow cascades shine with them. */
   private readonly sun: THREE.DirectionalLight;
+  private readonly shadows: SunShadows;
+  private readonly post: PostFx;
+  /** The grade of the picture, from the view's or the broadcast's and the weather. */
+  private readonly grade: Grade = { ...GRADE_VIEW };
+  /** All effects ('high'), or the plain picture ('basic'). */
+  private graphics: 'high' | 'basic' = 'high';
+  private readonly graphicsSelect: HTMLSelectElement;
   private readonly weather: WeatherLayer;
   private readonly flags = new FlagLayer();
   /** The marshal posts and the line's rostrum as placed in the scenery, once the analysis belongs to the track. */
@@ -145,8 +167,8 @@ export class View3D {
     uContours: { value: 1 },
     uWetGround: { value: 0 },
   };
-  private readonly terrainMaterial: THREE.MeshLambertMaterial;
-  private readonly treeMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+  private readonly terrainMaterial: THREE.MeshStandardMaterial;
+  private readonly treeMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9 });
   private readonly treeShapes: [THREE.BufferGeometry, THREE.BufferGeometry];
   /** A surface drawn over the ground (`offset` decides which wins), shining `gloss` much when wet. */
   private readonly surfaceMaterial = (offset: number, gloss = 1, racingLine = false) => wetSurfaceMaterial(offset, gloss, this.weather.wet, this.weather.envMap, racingLine);
@@ -159,6 +181,8 @@ export class View3D {
   private shots: Shot[] = [];
   private shotInput: ShotInput | null = null;
   private trees: Trees | null = null;
+  /** The trees left out of the broadcast cameras' way, for these trees and cameras. */
+  private treesCleared: { trees: Trees; cams: TvCamera[]; hidden: Uint8Array } | null = null;
   private forestCache: { hm: unknown; seed: string; data: Float32Array } | null = null;
   private visible = false;
   private needsBuild = true;
@@ -183,12 +207,16 @@ export class View3D {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    // A film-like picture, as on television.
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.25;
-    // Shadows only while cars are shown: the sun casts them over a patch round what the camera looks at.
+    // A film-like picture that keeps colours natural in bright light (the grade puts some saturation back).
+    this.renderer.toneMapping = THREE.AgXToneMapping;
+    this.renderer.toneMappingExposure = 1;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    try {
+      if (localStorage.getItem(GRAPHICS_KEY) === 'basic') this.graphics = 'basic';
+    } catch {
+      // No stored setting: all effects.
+    }
     this.labelLayer = h('div', { class: 'map3d-labels' });
     this.note = h('div', { class: 'map3d-note', hidden: true }, 'Switch to 2D to edit the track.');
 
@@ -213,38 +241,39 @@ export class View3D {
     });
     this.sizeSelect = h('select', { title: 'Image size' },
       h('option', { value: 'screen' }, 'Screen'), h('option', { value: '2x' }, '2×'), h('option', { value: '4k' }, '4K'));
+    this.graphicsSelect = h('select', {
+      title: 'Graphics: High finishes the picture (ambient occlusion, depth of field on TV, bloom, a light grade); Basic draws it plain, for a slower computer',
+      onchange: () => this.setGraphics(this.graphicsSelect.value === 'basic' ? 'basic' : 'high'),
+    }, h('option', { value: 'high' }, 'High'), h('option', { value: 'basic' }, 'Basic'));
+    this.graphicsSelect.value = this.graphics;
     this.tvButton = h('button', { class: 'chip map3d-tv', hidden: true, title: 'Watch the race as on television: trackside cameras and the helicopter, chosen by a director', onclick: () => this.toggleTv() }, 'TV');
     this.toolbar = h('div', { class: 'map3d-tools' },
       this.tvButton,
       this.shotSelect,
       h('button', { class: 'chip', title: 'Save the view as a PNG image', onclick: () => this.saveImage(this.sizeSelect.value as ImageSize) }, 'Save image'),
-      this.sizeSelect);
+      this.sizeSelect,
+      this.graphicsSelect);
     this.updateShotMenu();
 
     this.scene.fog = new THREE.Fog(HORIZON, 10_000, 40_000);
     const hemi = new THREE.HemisphereLight(0xe4efff, 0x5d5243, 1.4);
     this.scene.add(hemi);
-    // Sun from the north-west, as the hillshade of the flat map.
-    const sun = new THREE.DirectionalLight(0xfff1dc, 2.2);
-    sun.position.copy(SUN);
-    sun.shadow.mapSize.set(2048, 2048);
-    Object.assign(sun.shadow.camera, { left: -SHADOW_REACH, right: SHADOW_REACH, top: SHADOW_REACH, bottom: -SHADOW_REACH, near: 1, far: 2000 });
-    sun.shadow.bias = -0.0004;
-    sun.shadow.normalBias = 0.04;
-    this.sun = sun;
-    this.scene.add(sun, sun.target);
+    // The sun, from the north-west: the weather sets its colour and strength, and the shadow cascades shine with them.
+    this.sun = new THREE.DirectionalLight(0xfff1dc, 2.2);
+    this.shadows = new SunShadows(this.scene, this.camera, SUN);
     this.scene.add(this.world);
     // The sky, light and fog follow the weather; fine outside a race.
-    this.weather = new WeatherLayer(this.renderer, this.scene, sun, hemi);
+    this.weather = new WeatherLayer(this.renderer, this.scene, this.sun, hemi, SUN, () => this.requestRender());
     this.scene.add(this.weather.group, this.flags.group);
+    this.post = new PostFx(this.renderer, this.scene, this.camera);
 
-    this.terrainMaterial = new THREE.MeshLambertMaterial();
+    this.terrainMaterial = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0 });
     this.terrainMaterial.onBeforeCompile = (shader) => terrainShader(shader, this.terrainUniforms);
     this.terrainMaterial.customProgramCacheKey = () => 'terrain';
     this.treeShapes = [conifer(), broadleaf()];
 
     this.marker = new THREE.Group();
-    const pinMaterial = new THREE.MeshLambertMaterial({ color: MARKER, emissive: MARKER, emissiveIntensity: 0.35 });
+    const pinMaterial = new THREE.MeshStandardMaterial({ color: MARKER, emissive: MARKER, emissiveIntensity: 0.35, roughness: 0.5 });
     const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 10, 8), pinMaterial);
     stem.position.y = 5;
     const head = new THREE.Mesh(new THREE.SphereGeometry(1.4, 16, 12), pinMaterial);
@@ -385,9 +414,11 @@ export class View3D {
     this.marker.visible = false;
     this.renderer.setPixelRatio(1);
     this.renderer.setSize(W, H, false);
+    this.post.setSize(W, H, 1);
     this.camera.aspect = W / H;
     this.camera.updateProjectionMatrix();
-    this.renderer.render(this.scene, this.camera);
+    this.shadows.update(this.camera, this.camera.position.distanceTo(this.tv ? this.tv.focus : this.controls.target));
+    this.draw();
     const out = document.createElement('canvas');
     out.width = W;
     out.height = H;
@@ -396,6 +427,7 @@ export class View3D {
     if (this.store.view.labels) this.drawLabels(ctx, W, H, size === '4k' ? 2 : W / w);
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(w, hgt, false);
+    this.post.setSize(w, hgt, ratio);
     this.camera.aspect = w / hgt;
     this.camera.updateProjectionMatrix();
     this.marker.visible = marker;
@@ -655,11 +687,11 @@ export class View3D {
     this.terrainUniforms.uContour.value = contourInterval(Math.max(hm.max - landMin, 1e-6));
 
     const base = hm.min - Math.max(30, hm.extent * 0.012);
-    this.add('sides', new THREE.Mesh(geometry(buildSides(earth, base)), new THREE.MeshLambertMaterial({ vertexColors: true })));
+    this.add('sides', new THREE.Mesh(geometry(buildSides(earth, base)), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 })));
     if (hasWater && hm.waterLevel > hm.min) {
       const water = new THREE.Mesh(
         new THREE.PlaneGeometry(hm.extent, hm.extent).rotateX(-Math.PI / 2),
-        new THREE.MeshPhongMaterial({ color: 0x3a78b2, transparent: true, opacity: 0.78, shininess: 80, specular: 0x6a8aa8 }),
+        new THREE.MeshStandardMaterial({ color: 0x24506e, transparent: true, opacity: 0.82, roughness: 0.08, metalness: 0 }),
       );
       water.position.set(hm.extent / 2, hm.waterLevel, hm.extent / 2);
       this.add('water', water);
@@ -684,11 +716,11 @@ export class View3D {
       if (pitLane && pit) {
         const building = buildPitBuilding(pitLane, pit);
         footprints.push(building.footprint);
-        this.add('pitBuilding', new THREE.Mesh(geometry(building.mesh), new THREE.MeshLambertMaterial({ vertexColors: true })));
+        this.add('pitBuilding', new THREE.Mesh(geometry(building.mesh), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75 })));
       }
       const stands = placeGrandstands(t, metrics.corners, s.facilities!.overtaking, pitLane, areas, earth, footprints);
       footprints.push(...stands.map((x) => x.footprint));
-      if (stands.length) this.add('stands', new THREE.Mesh(geometry(buildGrandstands(stands)), new THREE.MeshLambertMaterial({ vertexColors: true })));
+      if (stands.length) this.add('stands', new THREE.Mesh(geometry(buildGrandstands(stands)), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 })));
       this.add('grid', new THREE.Mesh(geometry(buildGridMarks(t, s.facilities!.grid, index)), this.surfaceMaterial(-4)));
     }
     const onRunoff = t && index && areas.length ? runoffTest(t, areas, index) : null;
@@ -701,7 +733,7 @@ export class View3D {
       this.lineSite = lineFlagSite(t, (pitLane?.side ?? 1) as 1 | -1, earth, taken);
       const sites = [...this.postSites, this.lineSite];
       footprints.push(...sites.map((p) => p.footprint));
-      this.add('posts', new THREE.Mesh(geometry(buildMarshalPosts(sites)), new THREE.MeshLambertMaterial({ vertexColors: true })));
+      this.add('posts', new THREE.Mesh(geometry(buildMarshalPosts(sites)), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 })));
     }
     this.placeMarshals();
     this.trees = placeTrees(earth, this.forestFor(hm), (x, y) => (onRunoff?.(x, y, 10) ?? false) || footprints.some((f) => inside(f, x, y, 8)));
@@ -735,8 +767,9 @@ export class View3D {
     this.remove('broadleaves');
     const trees = this.trees;
     if (!trees || !trees.count) return;
+    const hidden = this.treesCleared?.trees === trees ? this.treesCleared.hidden : null;
     const counts = [0, 0];
-    for (let i = 0; i < trees.count; i++) counts[trees.data[i * 5 + 4]]++;
+    for (let i = 0; i < trees.count; i++) if (!hidden?.[i]) counts[trees.data[i * 5 + 4]]++;
     const meshes = [0, 1].map((kind) => {
       const mesh = new THREE.InstancedMesh(this.treeShapes[kind], this.treeMaterial, Math.max(1, counts[kind]));
       mesh.count = counts[kind];
@@ -750,6 +783,7 @@ export class View3D {
     const q = new THREE.Quaternion();
     const axis = new THREE.Vector3(0, 1, 0);
     for (let i = 0; i < trees.count; i++) {
+      if (hidden?.[i]) continue;
       const d = trees.data;
       const kind = d[i * 5 + 4];
       const size = d[i * 5 + 3];
@@ -913,7 +947,7 @@ export class View3D {
     this.meshes.set(key, obj);
     this.world.add(obj);
     obj.receiveShadow = SHADOW_RECEIVERS.has(key);
-    obj.castShadow = key === 'pitBuilding' || key === 'stands';
+    obj.castShadow = SHADOW_CASTERS.has(key);
     reanchor(obj, this.store.view.relief);
   }
 
@@ -973,6 +1007,7 @@ export class View3D {
     if (!this.tvCams || this.tvCams.input !== input || this.tvCams.relief !== relief) {
       this.tvCams = { input, relief, cams: tvCameras({ ...input, display: this.drawn }) };
     }
+    this.clearTreesFor(this.tvCams.cams);
     const earth = this.earth;
     this.tv = new TvBroadcast({
       camera: this.camera,
@@ -1009,6 +1044,15 @@ export class View3D {
     this.tvButton.classList.add('on');
     this.lastStep = 0;
     this.requestRender();
+  }
+
+  /** Leaves out the trees in the broadcast cameras' way, until the trees are placed again. */
+  private clearTreesFor(cams: TvCamera[]): void {
+    const trees = this.trees;
+    const t = this.store.track;
+    if (!trees || !t || (this.treesCleared?.trees === trees && this.treesCleared.cams === cams)) return;
+    this.treesCleared = { trees, cams, hidden: treesInSight(trees, cams, t, this.drawn) };
+    this.buildTrees();
   }
 
   /** Back to the orbit camera, looking where the broadcast looked. */
@@ -1057,9 +1101,40 @@ export class View3D {
     this.width = rect.width;
     this.height = rect.height;
     this.renderer.setSize(this.width, this.height, false);
+    this.post.setSize(this.width, this.height, this.renderer.getPixelRatio());
     this.camera.aspect = this.width / this.height;
     this.camera.updateProjectionMatrix();
     this.requestRender();
+  }
+
+  /** All effects, or the plain picture; kept for next time. */
+  private setGraphics(g: 'high' | 'basic'): void {
+    this.graphics = g;
+    this.graphicsSelect.value = g;
+    try {
+      localStorage.setItem(GRAPHICS_KEY, g);
+    } catch {
+      // Storage unavailable: the setting lasts for this session.
+    }
+    this.requestRender();
+  }
+
+  /** Draws the scene: finished (ambient occlusion, depth of field, bloom, grade) or plain. */
+  private draw(): void {
+    if (this.graphics === 'basic') {
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+    // A broadcast's long lens focuses on what it shows; a camera on a car keeps everything sharp.
+    const tv = this.tv;
+    const lens: Lens | null = tv && !tv.onboard ? { fov: this.camera.fov, focus: this.camera.position.distanceTo(tv.focus) } : null;
+    // A grey day looks flatter and duller than a sunny one.
+    const base = tv ? GRADE_TV : GRADE_VIEW;
+    const cloud = this.weather.state.cloud;
+    this.grade.contrast = base.contrast - 0.02 * cloud;
+    this.grade.saturation = base.saturation * (1 - 0.25 * cloud);
+    this.grade.vignette = base.vignette;
+    this.post.render(this.scene, this.camera, lens, this.grade);
   }
 
   private requestRender(): void {
@@ -1095,16 +1170,14 @@ export class View3D {
     this.camera.far = d * 4 + this.extent * 3;
     this.camera.updateProjectionMatrix();
     this.updateMarker(d);
-    if (this.sun.castShadow) {
-      // The sun's shadows cover a patch round what the camera looks at.
-      const focus = this.tv ? this.tv.focus.clone() : this.path ? this.camera.position.clone().add(this.camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(40)) : this.controls.target.clone();
-      this.sun.target.position.copy(focus);
-      this.sun.position.copy(focus).addScaledVector(SUN, 600);
-      this.sun.target.updateMatrixWorld();
-    }
     this.updateWeather(d);
     this.updateFlags();
-    this.renderer.render(this.scene, this.camera);
+    // The sun's shadows over the whole view, fitted to it; every lit material takes part.
+    this.shadows.setSun(this.sun.color, this.sun.intensity);
+    this.shadows.setupScene(this.scene);
+    this.camera.updateMatrixWorld();
+    this.shadows.update(this.camera, d);
+    this.draw();
     this.updateLabels();
     if (this.pendingPointer) {
       this.hoverAt(this.pendingPointer.x, this.pendingPointer.y);
@@ -1151,7 +1224,6 @@ export class View3D {
     const active = this.raceActive && !!this.earth;
     if (!active || !r?.sim) {
       if (this.cars) this.cars.group.visible = false;
-      this.sun.castShadow = false;
       return;
     }
     if (!this.cars) {
@@ -1159,7 +1231,6 @@ export class View3D {
       this.scene.add(this.cars.group);
     }
     this.cars.group.visible = true;
-    this.sun.castShadow = true;
     const relief = this.store.view.relief;
     // A broadcast replay draws the race as it was.
     const replay = this.tv?.replay ?? null;

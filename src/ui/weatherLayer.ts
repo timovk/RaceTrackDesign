@@ -1,9 +1,12 @@
 /**
- * Weather in the 3D view during a race (core/weatherFx.ts works out the
+ * The sky and weather in the 3D view (core/weatherFx.ts works out the
  * figures from the race's weather):
  *
- * - the sky clouds over before a shower and clears after it: a grey sky and
- *   horizon, a dim sun, softer light, and haze in the rain;
+ * - the sky (ui/sky.ts): photographed skies, partly cloudy on a fine day,
+ *   blending to overcast before a shower and back after it, with the light
+ *   they give (image-based lighting) and the sun; a dim sun, softer light
+ *   and haze in the rain. Until the photographs have loaded, a painted
+ *   gradient and a hemisphere light stand in;
  * - rain falls round what the camera looks at, as streaks;
  * - the track darkens and turns glossy as it gets wet (wetSurfaceMaterial):
  *   the racing line less so while it rains and first to dry once it stops,
@@ -16,6 +19,7 @@ import * as THREE from 'three';
 import { SPRAY_SLOTS, type Puff, sprayPuffs, sprayStrength } from '../core/weatherFx.ts';
 import type { CarLayer } from './carLayer.ts';
 import { skyEnvironment } from './carMaterials.ts';
+import { Sky } from './sky.ts';
 
 /** The weather to show; all zero outside a race. */
 export interface WeatherState {
@@ -38,6 +42,8 @@ export interface WetUniforms {
   uWet: THREE.IUniform<number>;
   uLineWet: THREE.IUniform<number>;
   uPuddles: THREE.IUniform<number>;
+  /** 1 once the sky lights the scene (the surfaces take its light as the ground does), 0 before. */
+  uIbl: THREE.IUniform<number>;
 }
 
 const SKY_CLEAR = ['#3f78b8', '#9cc2e2', '#dce8f1'];
@@ -52,19 +58,27 @@ const HEMI_GREY = new THREE.Color(0xd2d7dc);
 const STREAKS = 9000;
 const FALL = 9;
 const WIND = new THREE.Vector2(1.6, 0.8);
-/** Cloud cover levels with an environment map of their own. */
+/** Cloud cover levels with an environment map of their own (the painted sky). */
 const COVER_LEVELS = [0, 0.5, 1];
+/**
+ * Sun, hemisphere light and exposure, on a fine day and under full cloud:
+ * lit by the photographed sky (the hemisphere light is left out, the sky's
+ * own light does its work), or by the painted sky while that loads.
+ */
+const LIGHT_PHOTO = { sun: [2.8, 0.35], hemi: [0, 0], exposure: [1.0, 0.9] };
+const LIGHT_PAINTED = { sun: [2.2, 0.3], hemi: [1.4, 2.1], exposure: [1.15, 1.3] };
 
 export class WeatherLayer {
   readonly group = new THREE.Group();
-  readonly wet: WetUniforms = { uWet: { value: 0 }, uLineWet: { value: 0 }, uPuddles: { value: 0 } };
+  readonly wet: WetUniforms = { uWet: { value: 0 }, uLineWet: { value: 0 }, uPuddles: { value: 0 }, uIbl: { value: 0 } };
+  readonly sky: Sky;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
   private readonly sun: THREE.DirectionalLight;
   private readonly hemi: THREE.HemisphereLight;
   private readonly envMaps: THREE.Texture[] = [];
   private readonly skyCanvas: HTMLCanvasElement;
-  private readonly sky: THREE.CanvasTexture;
+  private readonly painted: THREE.CanvasTexture;
   private skyCover = -1;
   private readonly rain: THREE.LineSegments;
   private readonly rainUniforms = {
@@ -75,20 +89,29 @@ export class WeatherLayer {
   private sprayCapacity = 0;
   private readonly sprayColor = new THREE.Color();
   private readonly puffs: Puff[] = [];
-  /** The state last shown. */
+  /** The state last shown, and the map's size. */
   state: WeatherState = FINE;
+  private extent = 8192;
 
-  constructor(renderer: THREE.WebGLRenderer, scene: THREE.Scene, sun: THREE.DirectionalLight, hemi: THREE.HemisphereLight) {
+  /** `towardsSun` is where the sun shines from; `onSky` is called once the photographed sky has loaded. */
+  constructor(renderer: THREE.WebGLRenderer, scene: THREE.Scene, sun: THREE.DirectionalLight, hemi: THREE.HemisphereLight, towardsSun: THREE.Vector3, onSky: () => void) {
     this.renderer = renderer;
     this.scene = scene;
     this.sun = sun;
     this.hemi = hemi;
+    this.sky = new Sky(renderer, towardsSun);
+    this.group.add(this.sky.mesh);
+    this.sky.load(() => {
+      this.skyCover = -1;
+      this.apply(this.state, null, 1000, null, this.extent);
+      onSky();
+    });
     this.skyCanvas = document.createElement('canvas');
     this.skyCanvas.width = 2;
     this.skyCanvas.height = 256;
-    this.sky = new THREE.CanvasTexture(this.skyCanvas);
-    this.sky.colorSpace = THREE.SRGBColorSpace;
-    scene.background = this.sky;
+    this.painted = new THREE.CanvasTexture(this.skyCanvas);
+    this.painted.colorSpace = THREE.SRGBColorSpace;
+    scene.background = this.painted;
     this.rain = rainStreaks(this.rainUniforms);
     this.group.add(this.rain);
     this.apply(FINE, null, 1000, null, 8192);
@@ -100,6 +123,8 @@ export class WeatherLayer {
   }
 
   private envFor(cover: number): THREE.Texture {
+    const photo = this.sky.envMap(cover);
+    if (photo) return photo;
     let best = 0;
     for (let i = 1; i < COVER_LEVELS.length; i++) if (Math.abs(COVER_LEVELS[i] - cover) < Math.abs(COVER_LEVELS[best] - cover)) best = i;
     if (!this.envMaps[best]) this.envMaps[best] = skyEnvironment(this.renderer, COVER_LEVELS[best]);
@@ -113,22 +138,36 @@ export class WeatherLayer {
    */
   apply(s: WeatherState, camera: THREE.PerspectiveCamera | null, focus: number, cars: CarLayer | null, extent: number): void {
     this.state = s;
+    this.extent = extent;
     const c = s.cloud;
-    this.paintSky(c);
+    const photo = this.sky.ready;
+    this.sky.setCover(c);
+    if (camera) this.sky.follow(camera);
+    if (photo) this.scene.background = null;
+    else {
+      this.scene.background = this.painted;
+      this.paintSky(c);
+    }
+    // The sky lights everything once it is in: no hemisphere light then.
+    const env = this.envFor(c);
+    this.scene.environment = photo ? env : null;
+    this.wet.uIbl.value = photo ? 1 : 0;
     const fog = this.scene.fog as THREE.Fog | null;
     if (fog) {
-      fog.color.copy(HORIZON_CLEAR).lerp(HORIZON_GREY, c);
+      if (photo) this.sky.horizon(c, fog.color);
+      else fog.color.copy(HORIZON_CLEAR).lerp(HORIZON_GREY, c);
       // Haze in the rain, closing in round what the camera looks at.
       const haze = Math.min(1, s.rain * 1.3);
       fog.near = THREE.MathUtils.lerp(extent * 0.9, focus * 0.8 + 150, haze);
       fog.far = THREE.MathUtils.lerp(extent * 4, focus * 4 + 1500, haze);
     }
-    this.sun.intensity = THREE.MathUtils.lerp(2.2, 0.3, c);
+    const light = photo ? LIGHT_PHOTO : LIGHT_PAINTED;
+    this.sun.intensity = THREE.MathUtils.lerp(light.sun[0], light.sun[1], c);
     this.sun.color.copy(SUN_CLEAR).lerp(SUN_GREY, c);
-    this.hemi.intensity = THREE.MathUtils.lerp(1.4, 2.1, c);
+    this.hemi.intensity = THREE.MathUtils.lerp(light.hemi[0], light.hemi[1], c);
     this.hemi.color.copy(HEMI_CLEAR).lerp(HEMI_GREY, c);
-    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.25, 1.4, c);
-    cars?.setEnvironment(this.envFor(c));
+    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(light.exposure[0], light.exposure[1], c);
+    cars?.setEnvironment(env);
     this.wet.uWet.value = s.wetness;
     this.wet.uLineWet.value = s.lineWetness;
     this.wet.uPuddles.value = s.puddles;
@@ -164,7 +203,7 @@ export class WeatherLayer {
     grad.addColorStop(1, mix(SKY_CLEAR[2], SKY_GREY[2]));
     g.fillStyle = grad;
     g.fillRect(0, 0, 2, 256);
-    this.sky.needsUpdate = true;
+    this.painted.needsUpdate = true;
   }
 
   /** Spray behind every car on a wet track, as soft puffs facing the camera. */
@@ -237,6 +276,7 @@ export class WeatherLayer {
   dispose(): void {
     for (const t of this.envMaps) t?.dispose();
     this.sky.dispose();
+    this.painted.dispose();
     this.rain.geometry.dispose();
     (this.rain.material as THREE.Material).dispose();
     if (this.spray) {
@@ -281,6 +321,7 @@ uniform float uWet;
 uniform float uLineWet;
 uniform float uPuddles;
 uniform float uGloss;
+uniform float uIbl;
 #ifdef WET_LINE
 varying vec2 vWetLine;
 #endif
@@ -312,10 +353,10 @@ diffuseColor.rgb *= mix(1.0, 0.45, wetSurface * min(1.0, uGloss + 0.4)) * (1.0 -
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
 roughnessFactor = mix(roughnessFactor, 0.14, wetSurface * uGloss);
 roughnessFactor = mix(roughnessFactor, 0.03, puddle);`)
-      // Lit by the sun and the sky's light as the ground is (not the sky map), it mirrors the sky the more the wetter it is.
+      // Lit as the ground is (by the sky's light, or the hemisphere light before it loads), it mirrors the sky the more the wetter it is.
       .replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
 #if defined( RE_IndirectDiffuse )
-iblIrradiance = vec3( 0.0 );
+iblIrradiance *= uIbl;
 #endif
 #if defined( RE_IndirectSpecular )
 radiance *= mix(0.35, 1.25, max(wetSurface * uGloss, puddle)) * (1.0 + 1.2 * puddle);

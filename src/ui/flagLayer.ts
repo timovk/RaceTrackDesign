@@ -53,10 +53,10 @@ export class FlagLayer {
   private readonly flagGeo = flagGeometry();
   private readonly boardGeo = new THREE.PlaneGeometry(0.8, 0.6);
   private readonly panelGeo = new THREE.PlaneGeometry(0.5, 0.5);
-  private readonly marshalMat = new THREE.MeshLambertMaterial({ vertexColors: true });
-  private readonly flagMat: THREE.MeshLambertMaterial;
+  private readonly marshalMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 });
+  private readonly flagMat: THREE.MeshStandardMaterial;
   private readonly boardTex: THREE.CanvasTexture;
-  private readonly boardMat: THREE.MeshLambertMaterial;
+  private readonly boardMat: THREE.MeshStandardMaterial;
   private readonly panelMat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: true });
   private readonly time = { value: 0 };
   private marshals: THREE.InstancedMesh | null = null;
@@ -69,7 +69,7 @@ export class FlagLayer {
   private boardText: Board | null = null;
 
   constructor() {
-    this.flagMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    this.flagMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.9 });
     this.flagMat.onBeforeCompile = (shader) => flagShader(shader, this.time);
     this.flagMat.customProgramCacheKey = () => 'marshal-flag';
     const c = document.createElement('canvas');
@@ -77,7 +77,7 @@ export class FlagLayer {
     c.height = 192;
     this.boardTex = new THREE.CanvasTexture(c);
     this.boardTex.colorSpace = THREE.SRGBColorSpace;
-    this.boardMat = new THREE.MeshLambertMaterial({ map: this.boardTex, side: THREE.DoubleSide });
+    this.boardMat = new THREE.MeshStandardMaterial({ map: this.boardTex, side: THREE.DoubleSide, roughness: 0.7 });
     this.group.visible = false;
   }
 

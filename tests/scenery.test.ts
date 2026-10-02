@@ -3,7 +3,7 @@ import { assessLicence } from '../src/core/licence.ts';
 import { Earthworks, type MeshData, VERGE, anchoredHeight, pitRoad, trackRoad } from '../src/core/scene3d.ts';
 import {
   KERB_WIDTH, PAD_HALF, TrackIndex, buildGrandstands, buildGridMarks, buildKerbs, buildMarshalPosts, buildPitBuilding, buildRunoff, forest, inside, kerbRuns, lineFlagSite,
-  marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffTest,
+  marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffTest, treesInSight,
 } from '../src/core/scenery.ts';
 import { clearView, flyoverPose, hotLapPose, trackShots } from '../src/core/shots.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
@@ -235,6 +235,30 @@ describe('trees', () => {
       expect(avoid(x, y)).toBe(false);
       expect(trees.data[i * 5 + 1]).toBeCloseTo(100 - 0.3, 3);
     }
+  });
+
+  it('are cleared from in front of a trackside camera, not from behind it or below its view', () => {
+    // A camera 30 m beside station 40, 8 m up, seeing the stretch round it.
+    const k = 40;
+    const h = t.heading[k];
+    const at: [number, number, number] = [t.x[k] + Math.sin(h) * 30, t.y[k] - Math.cos(h) * 30, 108];
+    const sees = new Uint8Array(t.n);
+    for (let j = k - 15; j <= k + 15; j++) sees[j] = 1;
+    const towards = (f: number, side = 0) => [
+      at[0] + (t.x[k] - at[0]) * f + Math.cos(h) * side,
+      at[1] + (t.y[k] - at[1]) * f + Math.sin(h) * side,
+    ];
+    const placed = [
+      [...towards(0.5), 20], // a tall tree halfway to the track
+      [...towards(0.5), 1.5], // a bush halfway, below the line of sight
+      [...towards(-1.5), 20], // a tall tree behind the camera
+      [...towards(0.2, 3), 20], // a tall tree just off the line, its crown in it
+      [...towards(0.02), 4], // a small tree at the stand
+    ];
+    const data = new Float32Array(placed.length * 5);
+    placed.forEach(([x, y, size], i) => data.set([x, 99.7, y, size, 0], i * 5));
+    const hidden = treesInSight({ data, count: placed.length }, [{ at, sees }], t, (z) => z);
+    expect([...hidden]).toEqual([1, 0, 0, 1, 1]);
   });
 });
 

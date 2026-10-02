@@ -161,6 +161,12 @@ export class TvBroadcast {
     return this.aim;
   }
 
+  /** Whether the picture comes from a camera on a car (a wide lens, everything sharp). */
+  get onboard(): boolean {
+    const s = this.shot;
+    return !this.walk && !!s && isOnboard(s.camera);
+  }
+
   /** The camera's name, for the player bar. */
   get label(): string {
     if (this.walk) return 'Grid';

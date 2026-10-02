@@ -15,7 +15,7 @@
  *   plan needs it, and the flag marshal's rostrum at the line;
  * - trees, seeded from the terrain seed: forests and scattered trees where
  *   the ground is not too steep, wet or high, clear of the track, its banks,
- *   run-off and buildings.
+ *   run-off and buildings, and out of the broadcast cameras' way.
  */
 import { CORNER_LABELS, type Corner } from './analysis.ts';
 import type { OvertakingZone } from './facilities.ts';
@@ -846,6 +846,77 @@ export function placeTrees(earth: Earthworks, candidates: Float32Array, avoid: (
     data[j * 5 + 4] = candidates[i + 4];
   }
   return { data, count };
+}
+
+/** A trackside camera, for clearing its view: where it stands (heights as drawn) and which stations it sees. */
+export interface SightCamera {
+  at: readonly [number, number, number];
+  sees: Uint8Array;
+}
+
+/** Bearings round a camera are binned by a quarter of a degree. */
+const SIGHT_BINS = 1440;
+/** Trees this close to a camera are cleared whatever the direction: its stand. */
+const STAND_CLEARING = 12;
+
+/**
+ * Which trees stand in a trackside camera's way (1 for those): trees whose
+ * crown reaches up into the line of sight from a camera to a stretch of
+ * track it sees, and the trees round its stand. Real camera positions are
+ * kept clear, and the trees are placed by noise alone, so they are cleared
+ * here. Heights are compared as drawn (`display`), the trees at their real
+ * height; a crown is taken as 0.3 of the tree's height wide, plus 2 m.
+ */
+export function treesInSight(trees: Trees, cams: readonly SightCamera[], t: Track, display: (z: number) => number): Uint8Array {
+  const hidden = new Uint8Array(trees.count);
+  const d = trees.data;
+  const perRad = SIGHT_BINS / (Math.PI * 2);
+  // Per bearing bin: the seen stations' distances and the slope of the line of sight to each.
+  const bins: number[][] = Array.from({ length: SIGHT_BINS }, () => []);
+  for (const c of cams) {
+    const [cx, cy, cz] = c.at;
+    for (const b of bins) b.length = 0;
+    let far = 0;
+    let lowest = Infinity;
+    for (let k = 0; k < t.n; k++) {
+      if (!c.sees[k]) continue;
+      const dx = t.x[k] - cx;
+      const dy = t.y[k] - cy;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 1) continue;
+      const slope = (display(t.z[k]) + 1 - cz) / dist;
+      bins[Math.floor(mod(Math.atan2(dy, dx) * perRad, SIGHT_BINS))].push(dist, slope);
+      far = Math.max(far, dist);
+      lowest = Math.min(lowest, slope);
+    }
+    for (let i = 0; i < trees.count; i++) {
+      if (hidden[i]) continue;
+      const dx = d[i * 5] - cx;
+      const dy = d[i * 5 + 2] - cy;
+      if (Math.abs(dx) > far || Math.abs(dy) > far) continue;
+      const dist = Math.hypot(dx, dy);
+      if (dist < STAND_CLEARING) {
+        hidden[i] = 1;
+        continue;
+      }
+      const top = display(d[i * 5 + 1]) + d[i * 5 + 3];
+      if (dist > far || top <= cz + dist * lowest) continue;
+      const radius = d[i * 5 + 3] * 0.3 + 2;
+      const centre = mod(Math.atan2(dy, dx) * perRad, SIGHT_BINS);
+      const half = Math.atan2(radius, dist) * perRad;
+      search: for (let b = Math.floor(centre - half); b <= Math.floor(centre + half); b++) {
+        const seen = bins[mod(b, SIGHT_BINS)];
+        // A station beyond the crown, its line of sight passing below the treetop.
+        for (let j = 0; j < seen.length; j += 2) {
+          if (seen[j] > dist + radius && top > cz + dist * seen[j + 1]) {
+            hidden[i] = 1;
+            break search;
+          }
+        }
+      }
+    }
+  }
+  return hidden;
 }
 
 /**
