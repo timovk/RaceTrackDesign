@@ -4,21 +4,21 @@
   "classes": [
     {
       "id": "f1", "name": "Formula 1", "spec": "2025", "kind": "car", "color": "#ff3b30",
-      "mass": 805, "powerKw": 700, "cdA": [1.05, 1.45], "clA": [3.593, 5.29],
-      "grip": 1.848, "loadSensitivity": 0.031, "driveShare": 0.6, "rollingResistance": 0.015,
+      "mass": 805, "powerKw": 700, "cdA": [1.05, 1.45], "clA": [3.592, 5.289],
+      "grip": 1.849, "loadSensitivity": 0.034, "driveShare": 0.6, "rollingResistance": 0.015,
       "drs": 0.22,
       "topSpeedKmh": 355, "gears": 8, "firstGearKmh": 110,
       "licence": "FIA 1", "pitSpeedKmh": 80,
-      "calibration": {"laps": 6, "rmsError": 0.0256}
+      "calibration": {"laps": 6, "rmsError": 0.0254}
     },
     {
       "id": "f2", "name": "Formula 2", "spec": "2025", "kind": "car", "color": "#3fb6ff",
-      "mass": 800, "powerKw": 430, "cdA": [0.9, 1.2], "clA": [4.52, 6.026],
-      "grip": 1.404, "loadSensitivity": 0.042, "driveShare": 0.6, "rollingResistance": 0.015,
+      "mass": 800, "powerKw": 430, "cdA": [0.9, 1.2], "clA": [4.57, 6.092],
+      "grip": 1.409, "loadSensitivity": 0.052, "driveShare": 0.6, "rollingResistance": 0.015,
       "drs": 0.18,
       "topSpeedKmh": 335, "gears": 6, "firstGearKmh": 120,
       "licence": "FIA 2", "pitSpeedKmh": 60,
-      "calibration": {"laps": 4, "rmsError": 0.0226}
+      "calibration": {"laps": 4, "rmsError": 0.0223}
     },
     {
       "id": "indycar", "name": "IndyCar", "spec": "road course", "kind": "car", "color": "#a78bfa",

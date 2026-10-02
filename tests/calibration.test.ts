@@ -45,7 +45,7 @@ describe('real circuits', () => {
   it('give the same lap when every point moves by a millimetre or so', () => {
     // Each point moves its own way, so the shape changes (moving them all alike would change nothing).
     const f1 = VEHICLES.find((v) => v.id === 'f1')!;
-    for (const name of ['Montreal', 'Zandvoort', 'BrandsHatch', 'Spa', 'Silverstone', 'Sochi']) {
+    for (const name of ['Montreal', 'Zandvoort', 'BrandsHatch', 'Spa', 'Silverstone', 'Sochi', 'Monza']) {
       const base = loadCircuitDesign(name);
       const laps = [0, 0.001, -0.002, 0.003, 0.01].map((d) => {
         const points = base.points.map((p) => ({ ...p, x: p.x + d * Math.sin(p.y), y: p.y + d * Math.cos(p.x) }));

@@ -152,7 +152,7 @@ A quasi-steady-state point mass on the racing line:
 
 Both passes start at the slowest corner and run twice round the loop, so the lap closes on itself. The speed is the lowest of the three. Throttle and brake come from the force each speed change needs (full throttle on the rev limiter). Gears are spaced geometrically from first gear to top speed. Cars with an aero range are run at five wing settings and the fastest is kept.
 
-F1 and F2 open DRS in up to three zones, the longest straights of the racing line of at least 400 m.
+F1 and F2 open DRS in up to three zones, the longest straights of the racing line of at least 400 m. A straight is where the line's radius is above 1 km, and it carries on through a kink that turns the line by less than 5°. The kink is judged by its total turn, which the straights either side fix, not by its peak curvature, which depends on how the line takes it: at Monza the Serraglio kink peaks right at the 1 km limit, and a few centimetres' change to the line used to split its 960 m zone in two (0.2 s on an F1 lap). On the real circuits the slight kinks inside straights turn under 2° and the bends between straights at least 10°. A straight close to 400 m long can still gain or lose its zone when the line changes by a few centimetres, as the corner exits it runs between tighten or open out.
 
 Sectors split the lap of a reference class (GT3) into thirds of time, each line moved to the nearest full-throttle station within 6% of the lap time.
 

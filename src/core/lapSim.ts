@@ -213,6 +213,8 @@ export function simulateLapAtTrim(track: Track, line: RacingLine, car: VehicleCl
 /** A DRS zone needs a straight on the racing line (radius above 1 km) of at least 400 m. */
 const DRS_MIN_STRAIGHT = 400;
 const DRS_MAX_CURVATURE = 1 / 1000;
+/** A straight carries on through a kink that turns the line by less than this, in radians (5 degrees). */
+const DRS_MAX_KINK = (5 * Math.PI) / 180;
 /** At most this many zones, on the longest straights, as in Formula One. */
 export const DRS_MAX_ZONES = 3;
 
@@ -223,29 +225,41 @@ export interface DrsZone {
   length: number;
 }
 
-/** DRS zones: the longest straights of the racing line, up to three, each at least 400 m. */
+/**
+ * DRS zones: the longest straights of the racing line, up to three, each at
+ * least 400 m. A straight carries on through a kink of under 5 degrees, so a
+ * slight bend whose curvature hovers around the limit does not split it.
+ */
 export function drsZones(line: { n: number; curvature: Float64Array; ds: Float64Array }): DrsZone[] {
   const n = line.n;
-  // Start from a curved station so no straight is split by the wrap-around.
+  // Start from the most curved station so no straight is split by the wrap-around.
   let origin = 0;
   for (let k = 1; k < n; k++) if (Math.abs(line.curvature[k]) > Math.abs(line.curvature[origin])) origin = k;
   const runs: DrsZone[] = [];
-  let runStart = -1;
-  let runLength = 0;
-  for (let i = 0; i <= n; i++) {
+  // The current straight's first and last straight station (counted from the origin), and the turn since the last.
+  let first = -1;
+  let last = -1;
+  let turn = 0;
+  const close = () => {
+    if (first < 0) return;
+    let length = 0;
+    for (let i = first; i <= last; i++) length += line.ds[(origin + i) % n];
+    if (length >= DRS_MIN_STRAIGHT) runs.push({ start: (origin + first) % n, end: (origin + last) % n, length });
+    first = -1;
+  };
+  for (let i = 0; i < n; i++) {
     const k = (origin + i) % n;
-    const straight = i < n && Math.abs(line.curvature[k]) < DRS_MAX_CURVATURE;
-    if (straight) {
-      if (runStart < 0) {
-        runStart = i;
-        runLength = 0;
-      }
-      runLength += line.ds[k];
-    } else if (runStart >= 0) {
-      if (runLength >= DRS_MIN_STRAIGHT) runs.push({ start: (origin + runStart) % n, end: (origin + i - 1) % n, length: runLength });
-      runStart = -1;
+    const c = Math.abs(line.curvature[k]);
+    if (c < DRS_MAX_CURVATURE) {
+      if (first < 0) first = i;
+      last = i;
+      turn = 0;
+    } else if (first >= 0) {
+      turn += c * line.ds[k];
+      if (turn >= DRS_MAX_KINK) close();
     }
   }
+  close();
   return runs.sort((a, b) => b.length - a.length).slice(0, DRS_MAX_ZONES).sort((a, b) => a.start - b.start);
 }
 

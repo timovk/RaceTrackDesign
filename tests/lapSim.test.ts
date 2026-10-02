@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyseTrack } from '../src/core/analysis.ts';
-import { drsStations, gearTopSpeeds, GRAVITY, simulateLap, simulateLapAtTrim } from '../src/core/lapSim.ts';
+import { drsStations, drsZones, gearTopSpeeds, GRAVITY, simulateLap, simulateLapAtTrim } from '../src/core/lapSim.ts';
 import { placeSectors, sectorTimes, analysePerformance } from '../src/core/performance.ts';
 import { computeRacingLine } from '../src/core/racingLine.ts';
 import { buildTrack, type Track } from '../src/core/track.ts';
@@ -112,6 +112,19 @@ describe('lap simulation', () => {
     expect(open[Math.round(400 / t.ds)]).toBe(1);
     const corner = analyseTrack(t).corners[0];
     expect(open[corner.apex]).toBe(0);
+  });
+
+  it('keeps a DRS zone open through a slight kink, but not through a bend', () => {
+    // Stations 2 m apart: a corner, a 1000 m straight with a 40 m kink in the middle, then a long bend.
+    const zones = (kink: number) => {
+      const n = 1000;
+      const curvature = Float64Array.from({ length: n }, (_, k) => (k < 100 ? 0.02 : k >= 600 ? 0.01 : k >= 340 && k < 360 ? kink : 0));
+      return drsZones({ n, curvature, ds: new Float64Array(n).fill(2) }).map((z) => [z.start, z.end, z.length]);
+    };
+    // A radius of 700 m over 40 m turns the line 3.3 degrees: one zone along the whole straight.
+    expect(zones(1 / 700)).toEqual([[100, 599, 1000]]);
+    // A radius of 250 m turns it 9.2 degrees: two straights of 480 m.
+    expect(zones(1 / 250)).toEqual([[100, 339, 480], [360, 599, 480]]);
   });
 
   it('picks the fastest aero trim', () => {
