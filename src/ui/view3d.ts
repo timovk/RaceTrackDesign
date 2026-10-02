@@ -25,10 +25,11 @@
  *
  * The picture: a photographed sky (ui/sky.ts) lights the scene, the sun
  * casts shadows over the whole view (ui/shadows.ts), everything is drawn
- * with physically based materials, and the picture is finished with ambient
- * occlusion, depth of field on the broadcast's long lenses, bloom and a
- * light grade, flatter and duller under cloud (ui/postFx.ts). Graphics
- * "Basic" leaves out the finish.
+ * with physically based materials, the ground, track, verges and run-off
+ * take photographed textures and the lakes ripple (ui/surfaces.ts), and the
+ * picture is finished with ambient occlusion, depth of field on the
+ * broadcast's long lenses, bloom and a light grade, flatter and duller under
+ * cloud (ui/postFx.ts). Graphics "Basic" leaves out the finish.
  *
  * With layouts, the track is the layout shown; the rest of the circuit and
  * the other layouts' links are built as plain roads round it, so the ground
@@ -50,7 +51,7 @@ import {
   forest, inside, kerbRuns, lineFlagSite, marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffTest, treesInSight,
 } from '../core/scenery.ts';
 import { type Pose, type Shot, type ShotInput, type Vec3, flyoverDuration, flyoverPose, hotLapPose, trackShots } from '../core/shots.ts';
-import { RAMP, RAMP_MIN_RANGE, ROCK, contourInterval } from '../core/terrainImage.ts';
+import { RAMP_MIN_RANGE, ROCK, contourInterval } from '../core/terrainImage.ts';
 import type { Track } from '../core/track.ts';
 import { buckets, stationBuckets } from './colors.ts';
 import { h, setChildren, setText } from './dom.ts';
@@ -63,6 +64,7 @@ import { cloudCover, lineWetness, standingWater } from '../core/weatherFx.ts';
 import { CarLayer } from './carLayer.ts';
 import { FlagLayer } from './flagLayer.ts';
 import { type Grade, type Lens, PostFx } from './postFx.ts';
+import { SURFACE_GLSL, type SurfaceDetail, type SurfaceKind, SurfaceTextures, surfaceDetail, waterMaterial } from './surfaces.ts';
 import { SunShadows } from './shadows.ts';
 import { sunDirection } from './sky.ts';
 import { FINE, type WeatherState, WeatherLayer, wetSurfaceMaterial } from './weatherLayer.ts';
@@ -168,10 +170,18 @@ export class View3D {
     uWetGround: { value: 0 },
   };
   private readonly terrainMaterial: THREE.MeshStandardMaterial;
+  /** The surface textures: detail on the ground, the track, the verges and the run-off. */
+  private readonly surfaces: SurfaceTextures;
+  /** The water's ripples move with the view's clock. */
+  private readonly waterTime = { value: 0 };
   private readonly treeMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9 });
   private readonly treeShapes: [THREE.BufferGeometry, THREE.BufferGeometry];
-  /** A surface drawn over the ground (`offset` decides which wins), shining `gloss` much when wet. */
-  private readonly surfaceMaterial = (offset: number, gloss = 1, racingLine = false) => wetSurfaceMaterial(offset, gloss, this.weather.wet, this.weather.envMap, racingLine);
+  /** A surface drawn over the ground (`offset` decides which wins), with a texture's `detail`, shining `gloss` much when wet. */
+  private readonly surfaceMaterial = (offset: number, detail: SurfaceDetail, gloss = 1, racingLine = false) =>
+    wetSurfaceMaterial(offset, gloss, this.weather.wet, this.weather.envMap, racingLine, detail);
+  /** Asphalt (full, or faint under paint), grass and run-off detail for the surfaces. */
+  private readonly asphalt = (amount = 1.2) => surfaceDetail(this.surfaces, 'asphalt', { amount, normal: amount, patches: amount >= 1 });
+  private readonly grass = () => surfaceDetail(this.surfaces, 'grass', { amount: 1.4, chroma: 0.5, normal: 1 });
   private readonly meshes = new Map<string, THREE.Object3D>();
   private earth: Earthworks | null = null;
   /** The roads round the track shown: the rest of the full circuit and the other layouts' links. */
@@ -268,7 +278,8 @@ export class View3D {
     this.post = new PostFx(this.renderer, this.scene, this.camera);
 
     this.terrainMaterial = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0 });
-    this.terrainMaterial.onBeforeCompile = (shader) => terrainShader(shader, this.terrainUniforms);
+    this.surfaces = new SurfaceTextures(this.renderer, () => this.requestRender());
+    this.terrainMaterial.onBeforeCompile = (shader) => terrainShader(shader, this.terrainUniforms, this.surfaces);
     this.terrainMaterial.customProgramCacheKey = () => 'terrain';
     this.treeShapes = [conifer(), broadleaf()];
 
@@ -691,7 +702,7 @@ export class View3D {
     if (hasWater && hm.waterLevel > hm.min) {
       const water = new THREE.Mesh(
         new THREE.PlaneGeometry(hm.extent, hm.extent).rotateX(-Math.PI / 2),
-        new THREE.MeshStandardMaterial({ color: 0x24506e, transparent: true, opacity: 0.82, roughness: 0.08, metalness: 0 }),
+        waterMaterial(this.waterTime),
       );
       water.position.set(hm.extent / 2, hm.waterLevel, hm.extent / 2);
       this.add('water', water);
@@ -706,13 +717,13 @@ export class View3D {
     if (t && ready) {
       const metrics = s.metrics!;
       index = new TrackIndex(t);
-      this.add('kerbs', new THREE.Mesh(geometry(buildKerbs(t, kerbRuns(t, s.performance!.line, metrics.corners))), this.surfaceMaterial(-2)));
+      this.add('kerbs', new THREE.Mesh(geometry(buildKerbs(t, kerbRuns(t, s.performance!.line, metrics.corners))), this.surfaceMaterial(-2, this.asphalt(0.35))));
       // Run-off stops at the other roads: a gravel trap ends where the rest of the circuit carries on.
       const others = this.otherRoads.length ? new Earthworks(hm, this.otherRoads) : null;
       const blocked = others ? (x: number, y: number) => others.clearance(x, y) < VERGE + 2 : undefined;
       areas = s.licence ? runoffAreas(t, metrics.corners, s.licence.runoff, earth, index, blocked) : [];
       // Run-off lies beyond the verges and never overlaps a road, so it can win over the ground by a wide margin.
-      if (areas.length) this.add('runoff', new THREE.Mesh(geometry(buildRunoff(t, areas, earth)), this.surfaceMaterial(-4, 0.5)));
+      if (areas.length) this.add('runoff', new THREE.Mesh(geometry(buildRunoff(t, areas, earth)), this.surfaceMaterial(-4, surfaceDetail(this.surfaces, 'asphalt', { amount: 1.2, normal: 1.2, gravel: true, patches: true }), 0.5)));
       if (pitLane && pit) {
         const building = buildPitBuilding(pitLane, pit);
         footprints.push(building.footprint);
@@ -721,7 +732,7 @@ export class View3D {
       const stands = placeGrandstands(t, metrics.corners, s.facilities!.overtaking, pitLane, areas, earth, footprints);
       footprints.push(...stands.map((x) => x.footprint));
       if (stands.length) this.add('stands', new THREE.Mesh(geometry(buildGrandstands(stands)), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 })));
-      this.add('grid', new THREE.Mesh(geometry(buildGridMarks(t, s.facilities!.grid, index)), this.surfaceMaterial(-4)));
+      this.add('grid', new THREE.Mesh(geometry(buildGridMarks(t, s.facilities!.grid, index)), this.surfaceMaterial(-4, this.asphalt(0.6))));
     }
     const onRunoff = t && index && areas.length ? runoffTest(t, areas, index) : null;
     this.postSites = [];
@@ -843,21 +854,21 @@ export class View3D {
     if (this.otherRoads.length) {
       // Under the track where they share it.
       const other = buildRoads(this.otherRoads.map((road) => ({ road, style: { surface: COLORS.asphalt, lines: true } })));
-      this.add('otherRoads', new THREE.Mesh(geometry(other.paved), this.surfaceMaterial(-2)));
-      this.add('otherVerges', new THREE.Mesh(geometry(other.verges), this.surfaceMaterial(-1, 0.15)));
+      this.add('otherRoads', new THREE.Mesh(geometry(other.paved), this.surfaceMaterial(-2, this.asphalt())));
+      this.add('otherVerges', new THREE.Mesh(geometry(other.verges), this.surfaceMaterial(-1, this.grass(), 0.15)));
     }
     const main = buildRoads([{ road: trackRoad(t), style: { surface: this.surfaceColors(t), lines: true } }]);
     // The track wins over the pit lane where they meet, and both over the verges.
     const paved = geometry(main.paved);
     paved.setAttribute('wetLine', this.wetLine(t, paved));
-    this.add('track', new THREE.Mesh(paved, this.surfaceMaterial(-3, 1, true)));
-    this.add('trackVerges', new THREE.Mesh(geometry(main.verges), this.surfaceMaterial(-1, 0.15)));
+    this.add('track', new THREE.Mesh(paved, this.surfaceMaterial(-3, this.asphalt(), 1, true)));
+    this.add('trackVerges', new THREE.Mesh(geometry(main.verges), this.surfaceMaterial(-1, this.grass(), 0.15)));
     if (pit) {
       const lane = buildRoads([{ road: pit, style: { surface: COLORS.pitAsphalt, lines: false } }]);
-      this.add('pit', new THREE.Mesh(geometry(lane.paved), this.surfaceMaterial(-2)));
-      this.add('pitVerges', new THREE.Mesh(geometry(lane.verges), this.surfaceMaterial(-1, 0.15)));
+      this.add('pit', new THREE.Mesh(geometry(lane.paved), this.surfaceMaterial(-2, this.asphalt())));
+      this.add('pitVerges', new THREE.Mesh(geometry(lane.verges), this.surfaceMaterial(-1, this.grass(), 0.15)));
     }
-    this.add('start', new THREE.Mesh(geometry(startLine(t)), this.surfaceMaterial(-4)));
+    this.add('start', new THREE.Mesh(geometry(startLine(t)), this.surfaceMaterial(-4, this.asphalt(0.6))));
   }
 
   /**
@@ -1172,6 +1183,7 @@ export class View3D {
     this.updateMarker(d);
     this.updateWeather(d);
     this.updateFlags();
+    this.waterTime.value = this.clock;
     // The sun's shadows over the whole view, fitted to it; every lit material takes part.
     this.shadows.setSun(this.sun.color, this.sun.intensity);
     this.shadows.setupScene(this.scene);
@@ -1547,49 +1559,119 @@ function clock(seconds: number): string {
 }
 
 /**
- * Colours the ground in the shader: the height ramp of the flat map, bare
- * rock on steep slopes, grass on embankments and earth in cuttings, the bed
- * under water, and contour lines.
+ * The ground's colour by height in 3D (share of the land's range, sRGB): the
+ * flat map's zones (lowland, drier slopes, high ground, rock, the tops) in
+ * deeper, more natural colours; the textures add the rest.
  */
-function terrainShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms: Record<string, THREE.IUniform>): void {
-  Object.assign(shader.uniforms, uniforms);
+const GROUND_RAMP: readonly [number, number, number, number][] = [
+  [0.0, 86, 128, 56],
+  [0.3, 104, 136, 64],
+  [0.55, 128, 136, 80],
+  [0.75, 128, 116, 86],
+  [0.9, 124, 117, 108],
+  [1.0, 214, 214, 212],
+];
+
+/**
+ * Colours the ground in the shader: a height ramp after the flat map's, bare
+ * rock on steep slopes, grass on embankments and earth in cuttings, the bed
+ * under water, and contour lines. Over that colour the surface textures add
+ * their detail (ui/surfaces.ts): grass, dirt in cuttings, on high dry ground
+ * and under water, rock on steep slopes, with the aerial photographs'
+ * variation over the grass, and their normal maps.
+ */
+function terrainShader(shader: THREE.WebGLProgramParametersWithUniforms, uniforms: Record<string, THREE.IUniform>, surfaces: SurfaceTextures): void {
+  Object.assign(shader.uniforms, uniforms, surfaces.uniforms({ Grass: 'grass', Dirt: 'dirt', Rock: 'rock', Meadow: 'meadow', Hills: 'hills' }));
+  const size = (k: SurfaceKind) => surfaces.sets[k].size.toFixed(2);
   const c = (rgb: readonly number[]) => `vec3(${(rgb[0] / 255).toFixed(4)}, ${(rgb[1] / 255).toFixed(4)}, ${(rgb[2] / 255).toFixed(4)})`;
-  let ramp = `vec3 c = ${c(RAMP[RAMP.length - 1].slice(1))};\n`;
-  for (let i = RAMP.length - 1; i >= 1; i--) {
-    const a = RAMP[i - 1];
-    const b = RAMP[i];
+  let ramp = `vec3 c = ${c(GROUND_RAMP[GROUND_RAMP.length - 1].slice(1))};\n`;
+  for (let i = GROUND_RAMP.length - 1; i >= 1; i--) {
+    const a = GROUND_RAMP[i - 1];
+    const b = GROUND_RAMP[i];
     ramp += `if (t <= ${b[0].toFixed(3)}) c = mix(${c(a.slice(1))}, ${c(b.slice(1))}, (t - ${a[0].toFixed(3)}) / ${(b[0] - a[0]).toFixed(3)});\n`;
   }
-  shader.vertexShader = `attribute float bank;\nvarying float vHeight;\nvarying float vUp;\nvarying float vBank;\n${shader.vertexShader}`.replace(
+  // The textures are laid on the ground as drawn (vDrawn, vDrawnN: world position and normal), so the steep drawn slopes are not stretched.
+  shader.vertexShader = `attribute float bank;\nvarying float vHeight;\nvarying float vUp;\nvarying float vBank;\nvarying vec3 vDrawn;\nvarying vec3 vDrawnN;\n${shader.vertexShader}`.replace(
     '#include <begin_vertex>',
-    '#include <begin_vertex>\nvHeight = position.y;\nvUp = normal.y;\nvBank = bank;',
+    '#include <begin_vertex>\nvHeight = position.y;\nvUp = normal.y;\nvBank = bank;\nvDrawn = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvDrawnN = inverseTransformDirection(transformedNormal, viewMatrix);',
   );
-  shader.fragmentShader = `varying float vHeight;\nvarying float vUp;\nvarying float vBank;
+  shader.fragmentShader = `varying float vHeight;\nvarying float vUp;\nvarying float vBank;\nvarying vec3 vDrawn;\nvarying vec3 vDrawnN;
 uniform float uLandMin;
 uniform float uRampRange;
 uniform float uWater;
 uniform float uContour;
 uniform float uContours;
 uniform float uWetGround;
+uniform float uSurfaces;
+uniform sampler2D tGrass;
+uniform sampler2D tGrassN;
+uniform vec3 uGrassMean;
+uniform sampler2D tDirt;
+uniform sampler2D tDirtN;
+uniform vec3 uDirtMean;
+uniform sampler2D tRock;
+uniform sampler2D tRockN;
+uniform vec3 uRockMean;
+uniform sampler2D tMeadow;
+uniform vec3 uMeadowMean;
+uniform sampler2D tHills;
+uniform vec3 uHillsMean;
+${SURFACE_GLSL}
+// How much of the ground is grass, dirt and rock, and where each texture is read (from above and the sides).
+vec3 groundW;
+Tri groundT[3];
 vec3 groundColour() {
   float t = clamp((vHeight - uLandMin) / uRampRange, 0.0, 1.0);
   ${ramp}
   float up = max(vUp, 0.05);
   float slope = sqrt(max(0.0, 1.0 - up * up)) / up;
-  c = mix(c, ${c(ROCK)}, clamp((slope - 0.35) / 0.4, 0.0, 0.75));
-  c = mix(c, vec3(0.42, 0.58, 0.28), clamp(vBank / 1.5, 0.0, 1.0) * 0.8);
-  c = mix(c, vec3(0.55, 0.43, 0.30), clamp(-vBank / 1.5, 0.0, 1.0) * 0.8);
-  if (vHeight < uWater) c = mix(c, vec3(0.20, 0.33, 0.36), 0.45 + 0.4 * clamp((uWater - vHeight) / 15.0, 0.0, 1.0));
+  float rock = clamp((slope - 0.35) / 0.4, 0.0, 1.0);
+  float bank = clamp(vBank / 1.5, 0.0, 1.0);
+  float cut = clamp(-vBank / 1.5, 0.0, 1.0);
+  bool under = vHeight < uWater;
+  c = mix(c, ${c(ROCK)}, min(rock, 0.75));
+  c = mix(c, vec3(0.42, 0.58, 0.28), bank * 0.8);
+  c = mix(c, vec3(0.55, 0.43, 0.30), cut * 0.8);
+  if (under) c = mix(c, vec3(0.20, 0.33, 0.36), 0.45 + 0.4 * clamp((uWater - vHeight) / 15.0, 0.0, 1.0));
+  vec3 lin = pow(c, vec3(2.2));
+  float dirt = (1.0 - rock) * (under ? 1.0 : max(cut, smoothstep(0.5, 0.8, t) * (1.0 - bank)));
+  groundW = vec3(1.0 - rock - dirt, dirt, rock);
+  if (uSurfaces > 0.5) {
+    vec3 n = normalize(vDrawnN);
+    groundT[0] = triTiling(vDrawn, n, ${size('grass')});
+    groundT[1] = triTiling(vDrawn, n, ${size('dirt')});
+    groundT[2] = triTiling(vDrawn, n, ${size('rock')});
+    vec3 d = vec3(0.0);
+    if (groundW.x > 0.01) d += groundW.x * detail(triColour(tGrass, groundT[0]), uGrassMean, 1.4, 0.5);
+    if (groundW.y > 0.01) d += groundW.y * detail(triColour(tDirt, groundT[1]), uDirtMean, 1.2, 0.25);
+    if (groundW.z > 0.01) d += groundW.z * detail(triColour(tRock, groundT[2]), uRockMean, 1.3, 0.4);
+    // Over the grass, variation across tens and hundreds of metres.
+    vec3 meadow = detail(tiledBlur(tMeadow, tiling(vDrawn.xz / ${size('meadow')}), 6.0), uMeadowMean, 0.55, 0.2);
+    vec3 hills = detail(tiledBlur(tHills, tiling(vDrawn.xz / ${size('hills')}), 10.0), uHillsMean, 0.45, 0.0);
+    lin *= d * mix(vec3(1.0), meadow * hills, groundW.x + 0.5 * groundW.y);
+  }
   if (uContours > 0.5) {
     float h = vHeight / uContour;
     float f = abs(fract(h + 0.5) - 0.5) / max(fwidth(h), 1e-4);
     float line = 1.0 - clamp(f, 0.0, 1.0);
     float major = abs(mod(floor(h + 0.5), 5.0)) < 0.5 ? 0.5 : 0.28;
-    c = mix(c, vec3(0.23, 0.16, 0.09), line * major);
+    lin = mix(lin, pow(vec3(0.23, 0.16, 0.09), vec3(2.2)), line * major);
   }
   // Wet ground is darker.
-  c *= 1.0 - 0.2 * uWetGround;
-  return pow(c, vec3(2.2));
+  return lin * pow(1.0 - 0.2 * uWetGround, 2.2);
 }
-${shader.fragmentShader}`.replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( groundColour(), opacity );');
+${shader.fragmentShader}`
+    .replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( groundColour(), opacity );')
+    .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+if (uSurfaces > 0.5) {
+  vec3 eye = -vViewPosition;
+  mat3 fx = surfaceFrame(eye, normal, vDrawn.zy);
+  mat3 fy = surfaceFrame(eye, normal, vDrawn.xz);
+  mat3 fz = surfaceFrame(eye, normal, vDrawn.xy);
+  vec3 gn = vec3(0.0);
+  if (groundW.x > 0.01) gn += groundW.x * triNormal(tGrassN, groundT[0], fx, fy, fz, 1.0, normal);
+  if (groundW.y > 0.01) gn += groundW.y * triNormal(tDirtN, groundT[1], fx, fy, fz, 1.0, normal);
+  if (groundW.z > 0.01) gn += groundW.z * triNormal(tRockN, groundT[2], fx, fy, fz, 1.0, normal);
+  normal = normalize(gn);
+}`);
 }

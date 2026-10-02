@@ -24,6 +24,7 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | 16a | Broadcast extras: onboard and chase cameras, the pit box camera with the stop timer, the grid walk and the start | **done** |
 | 16b | Broadcast extras: action replays, start lights, circuit map, gap graphic, final lap, chequered flag and results | **done** |
 | G1 | Graphics, phase 1: a photographed sky lighting the scene, shadows across the whole view, physically based materials, ambient occlusion, depth of field, bloom and a grade | **done** |
+| G2 | Graphics, phase 2: photographed textures on the ground, track, verges and run-off, a rubbered racing line, rippled water, reflections of the sky on every surface | **done** |
 
 ## Running it
 
@@ -98,8 +99,9 @@ Warnings flag corners tighter than the track is wide, very tight corners, steep 
 - **Save image** saves the view as a PNG at the screen size, twice it, or 4K (3840 × 2160), with the labels drawn in.
 - The track colouring, **Contours**, **Labels** (corner numbers and the start) and **Line** (the racing line) work in 3D too. Hovering the track marks it on the elevation profile, and hovering the profile marks the spot in 3D; the readout shows the position and height under the cursor.
 - The sky lights the scene as well as filling the background, and the sun casts shadows across the whole view, from a car close by to woods kilometres away. The picture gets a finish: shading where surfaces meet (under cars, round buildings and trees), a soft glow round the brightest highlights, and a light grade. **Graphics** in the 3D toolbar picks High (all of it) or Basic (no finish, for a slower computer); the choice is remembered.
+- The surfaces are textured from photographs: grass on the ground, bare earth in cuttings and on the high dry ground, rock on steep slopes, the asphalt's grain with a darker rubbered racing line and patches of a different tone, gravel in the traps. The colours stay the view's own (the track colouring, the lines, the kerbs); the ground's height colours are deeper and more natural than on the flat map. Lakes ripple in the wind and mirror the sky.
 - Editing happens in 2D. In Race mode **Map image** saves the 3D view.
-- The 3D view (three.js) loads the first time it is opened. It needs WebGL; the sky (about 38 MB) loads in the background, with a painted sky until it is in.
+- The 3D view (three.js) loads the first time it is opened. It needs WebGL; the sky (about 38 MB) and the surface textures (about 17 MB) load in the background, with a painted sky and plain surfaces until they are in.
 
 **The race in 3D.** In Race mode the 3D view shows the race: every car as a model of its class (Formula 1, Formula 2 and IndyCar single-seaters, Hypercar and LMP2 prototypes, GT3, GT4 and TCR cars, MotoGP and Superbike bikes with their riders, and the safety car), at its real size and in its team's livery, where the race puts it.
 - Liveries come from each team's colour: a second colour, an accent and one of five patterns, the same for both cars of a team. Single-seaters carry their number on the nose and the engine cover, closed cars in a roundel on the doors and the bonnet (in the class colour in a multi-class race), bikes on the fairing and the tail; team names are on the rear wing endplates.
@@ -243,6 +245,6 @@ Limits: no drying line, one weather for the whole circuit, and no rule on each e
 
 ## Credits
 
-The sky panoramas are "Kloofendal 48d Partly Cloudy (Pure Sky)" and "Kloofendal Overcast (Pure Sky)" by Greg Zaal and Jarod Guest, from [Poly Haven](https://polyhaven.com), CC0 (see [public/sky](public/sky/README.md)).
+The sky panoramas are "Kloofendal 48d Partly Cloudy (Pure Sky)" and "Kloofendal Overcast (Pure Sky)" by Greg Zaal and Jarod Guest, from [Poly Haven](https://polyhaven.com), CC0 (see [public/sky](public/sky/README.md)). The surface textures are Poly Haven's too, CC0, by Dimitrios Savva, Charlotte Baglioni, Rob Tuytel, Amal Kumar, Greg Zaal, Dario Barresi and Jenelle van Heerden (see [public/textures](public/textures/README.md)).
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works inside.

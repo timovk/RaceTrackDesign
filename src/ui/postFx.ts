@@ -3,7 +3,8 @@
  *
  * - the scene is drawn with four-sample antialiasing into a high dynamic
  *   range buffer, keeping its depth;
- * - ambient occlusion (three.js's GTAO, from that depth): darkening where
+ * - ambient occlusion (three.js's GTAO, from a normal and depth pass of
+ *   its own): darkening where
  *   surfaces meet, under cars and round buildings and trees, so things sit
  *   in the ground rather than float on it;
  * - depth of field for the broadcast's long lenses: what the camera focuses
@@ -67,9 +68,10 @@ export class PostFx {
     this.target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4, depthTexture: depth });
     this.composer = new EffectComposer(renderer);
     this.composer.addPass(new TexturePass(this.target.texture));
-    // Ambient occlusion from the scene's own depth (normals rebuilt from it), so nothing is drawn twice.
+    // Ambient occlusion from a pass of its own drawing the scene's normals and depth. Normals rebuilt from the
+    // picture's depth showed creases on the surfaces drawn over the ground (their polygon offset steps the depth
+    // from one triangle to the next): dark scratches over the run-off.
     this.ao = new GTAOPass(scene, camera, 1, 1);
-    this.ao.setGBuffer(depth);
     this.ao.updateGtaoMaterial({ radius: 2.5, distanceExponent: 1.4, thickness: 3, scale: 1.1, samples: 16, distanceFallOff: 0.6, screenSpaceRadius: false });
     this.ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
     this.ao.blendIntensity = 0.9;

@@ -24,6 +24,26 @@ function lit(m: THREE.Material): boolean {
     || (m as THREE.MeshPhongMaterial).isMeshPhongMaterial === true;
 }
 
+/**
+ * CSM swaps in its own copy of three.js's lights_fragment_begin chunk for
+ * every material, and its copy predates three.js 0.186: it leaves out what
+ * the chunk sets up before the lights (the DFG term and the multiple
+ * scattering compensation), so no physically based material reflected the
+ * sky or showed the sun's highlight. This keeps three.js's own chunk and
+ * takes only CSM's lights from `csm` (its directional lights, one cascade
+ * each, faded into each other).
+ */
+export function withLights(three: string, csm: string): string {
+  const lights = 'IncidentLight directLight;';
+  const indirect = '#if defined( RE_IndirectDiffuse )';
+  const a = three.indexOf(lights);
+  const b = three.indexOf(indirect);
+  const c = csm.indexOf(lights);
+  const d = csm.indexOf(indirect);
+  if (a < 0 || b < a || c < 0 || d < c) return csm;
+  return three.slice(0, a) + csm.slice(c, d) + three.slice(b);
+}
+
 export class SunShadows {
   private readonly csm: CSM;
   private readonly done = new WeakSet<THREE.Material>();
@@ -34,6 +54,7 @@ export class SunShadows {
   private offset = '';
 
   constructor(scene: THREE.Scene, camera: THREE.PerspectiveCamera, towardsSun: THREE.Vector3) {
+    const lightsBegin = THREE.ShaderChunk.lights_fragment_begin;
     this.csm = new CSM({
       camera,
       parent: scene,
@@ -49,6 +70,7 @@ export class SunShadows {
     });
     this.csm.fade = true;
     for (const light of this.csm.lights) light.shadow.bias = -0.0001;
+    THREE.ShaderChunk.lights_fragment_begin = withLights(lightsBegin, THREE.ShaderChunk.lights_fragment_begin);
   }
 
   /** The cascades' lights (for colour and intensity from the weather). */

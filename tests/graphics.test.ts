@@ -1,6 +1,11 @@
+import { existsSync } from 'node:fs';
+import * as THREE from 'three';
+import { CSM } from 'three/addons/csm/CSM.js';
 import { describe, expect, it } from 'vitest';
 import { lensBlur } from '../src/ui/postFx.ts';
+import { SunShadows, withLights } from '../src/ui/shadows.ts';
 import { skyTurn, sunDirection } from '../src/ui/sky.ts';
+import { surfaceFiles } from '../src/ui/surfaces.ts';
 
 describe('lens blur', () => {
   it('blurs a long lens on a distant car by a few pixels and a wide one not at all', () => {
@@ -39,5 +44,44 @@ describe('the sky', () => {
       const deg = ((((lon * 180) / Math.PI) % 360) + 360) % 360;
       expect(deg).toBeCloseTo(34.2, 6);
     }
+  });
+});
+
+describe('the shadow cascades', () => {
+  // CSM puts its own copy of three.js's chunk in place for every material.
+  const three = THREE.ShaderChunk.lights_fragment_begin;
+  new CSM({ camera: new THREE.PerspectiveCamera(), parent: new THREE.Scene() });
+  const csm = THREE.ShaderChunk.lights_fragment_begin;
+  THREE.ShaderChunk.lights_fragment_begin = three;
+  const merged = withLights(three, csm);
+
+  it("keep three.js's set-up before the lights, so materials reflect the sky", () => {
+    expect(csm).not.toContain('material.dfg');
+    expect(merged).toContain('material.dfg = texture2D( dfgLUT');
+    expect(merged).toContain('material.multiScatteringCompensation');
+  });
+
+  it("light with CSM's cascades, once", () => {
+    expect(merged).toContain('CSM_cascades');
+    expect(merged.split('IncidentLight directLight;').length).toBe(2);
+    expect(merged.split('#if defined( RE_IndirectDiffuse )').length).toBe(2);
+  });
+
+  it("fall back to CSM's chunk when either is not as expected", () => {
+    expect(withLights('something else', csm)).toBe(csm);
+  });
+
+  it('are set up with the merged chunk', () => {
+    new SunShadows(new THREE.Scene(), new THREE.PerspectiveCamera(), new THREE.Vector3(0, 1, 0));
+    expect(THREE.ShaderChunk.lights_fragment_begin).toBe(merged);
+    THREE.ShaderChunk.lights_fragment_begin = three;
+  });
+});
+
+describe('the surface textures', () => {
+  it('are all in public/textures', () => {
+    const files = surfaceFiles();
+    expect(files.length).toBeGreaterThanOrEqual(10);
+    for (const f of files) expect(existsSync(`public/${f}`), f).toBe(true);
   });
 });

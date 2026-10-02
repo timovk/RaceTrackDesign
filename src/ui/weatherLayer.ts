@@ -20,6 +20,7 @@ import { SPRAY_SLOTS, type Puff, sprayPuffs, sprayStrength } from '../core/weath
 import type { CarLayer } from './carLayer.ts';
 import { skyEnvironment } from './carMaterials.ts';
 import { Sky } from './sky.ts';
+import { SURFACE_GLSL, type SurfaceDetail } from './surfaces.ts';
 
 /** The weather to show; all zero outside a race. */
 export interface WeatherState {
@@ -292,29 +293,38 @@ export class WeatherLayer {
  * and grass darken but hardly shine). `envMap` is the sky it mirrors (the
  * weather layer's envMap; marked `userData.wet` for swapping it). Track geometry with a `wetLine`
  * attribute (metres from the racing line, metres from the edge) shows the
- * racing line's own wetness and puddles near the edges.
+ * racing line's own wetness and puddles near the edges. With `detail`, a
+ * surface texture adds its grain and relief (ui/surfaces.ts), laid in world
+ * metres; water filling it smooths the relief as the surface gets wet.
  */
-export function wetSurfaceMaterial(offset: number, gloss: number, wet: WetUniforms, envMap: THREE.Texture, racingLine = false): THREE.MeshStandardMaterial {
+export function wetSurfaceMaterial(offset: number, gloss: number, wet: WetUniforms, envMap: THREE.Texture, racingLine = false, detail: SurfaceDetail | null = null): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({
     vertexColors: true, roughness: 0.9, metalness: 0, envMap, envMapIntensity: 1,
     polygonOffset: true, polygonOffsetFactor: offset, polygonOffsetUnits: offset,
   });
   m.userData.wet = true;
-  if (racingLine) m.defines = { WET_LINE: '' };
+  m.defines = {
+    ...(racingLine ? { WET_LINE: '' } : {}),
+    ...(detail ? { SURFACE_DETAIL: '' } : {}),
+    ...(detail?.gravel ? { SURFACE_GRAVEL: '' } : {}),
+    ...(detail?.patches ? { SURFACE_PATCHES: '' } : {}),
+  };
   m.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, wet, { uGloss: { value: gloss } });
+    Object.assign(shader.uniforms, wet, { uGloss: { value: gloss } }, detail?.uniforms ?? {});
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
 #ifdef WET_LINE
 attribute vec2 wetLine;
 varying vec2 vWetLine;
 #endif
-varying vec2 vWetXZ;`)
+varying vec2 vWetXZ;
+varying vec3 vWetPos;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
 #ifdef WET_LINE
 vWetLine = wetLine;
 #endif
-vWetXZ = position.xz;`);
+vWetXZ = position.xz;
+vWetPos = position;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
 uniform float uWet;
@@ -336,8 +346,57 @@ float wetNoise(vec2 p) {
   return mix(mix(wetHash(i), wetHash(i + vec2(1.0, 0.0)), u.x), mix(wetHash(i + vec2(0.0, 1.0)), wetHash(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 float wetSurface;
-float puddle;`)
+float puddle;
+#ifdef SURFACE_DETAIL
+uniform float uSurfaces;
+uniform sampler2D tA;
+uniform sampler2D tAN;
+uniform vec3 uAMean;
+uniform vec2 uSurfSize;
+uniform vec3 uSurfDetail;
+#ifdef SURFACE_GRAVEL
+uniform sampler2D tB;
+uniform sampler2D tBN;
+uniform vec3 uBMean;
+#endif
+${SURFACE_GLSL}
+varying vec3 vWetPos;
+Tiling surfA;
+Tiling surfB;
+float surfGravel = 0.0;
+// 1 on level faces, 0 on steep ones (a verge's skirt into the ground), where a texture laid from above would streak.
+float surfFlat = 1.0;
+#endif`)
       .replace('#include <color_fragment>', `#include <color_fragment>
+#ifdef SURFACE_DETAIL
+surfFlat = smoothstep(0.3, 0.6, abs(normalize(cross(dFdx(vWetPos), dFdy(vWetPos))).y));
+if (uSurfaces > 0.5) {
+  surfA = tiling(vWetXZ / uSurfSize.x);
+  vec3 grain = detail(tiled(tA, surfA), uAMean, uSurfDetail.x * surfFlat, uSurfDetail.y);
+  #ifdef SURFACE_GRAVEL
+  // Gravel where the colour is gravel's (warm), the main surface where it is asphalt's (grey).
+  surfGravel = smoothstep(0.08, 0.25, vColor.r - vColor.b);
+  surfB = tiling(vWetXZ / uSurfSize.y);
+  grain = mix(grain, detail(tiled(tB, surfB), uBMean, surfFlat, 0.3), surfGravel);
+  #endif
+  diffuseColor.rgb *= grain;
+}
+#endif
+#ifdef SURFACE_PATCHES
+// Asphalt laid and patched at different times: broad, faint differences of tone.
+float patches = 0.55 * surfNoise(vWetXZ / 9.0) + 0.3 * surfNoise(vWetXZ / 31.0) + 0.15 * surfNoise(vWetXZ / 2.7);
+float tone = mix(0.86, 1.14, patches);
+#ifdef SURFACE_GRAVEL
+// Gravel lies in drifts, a little darker and lighter.
+float drifts = 0.6 * surfNoise(vWetXZ / 3.3) + 0.4 * surfNoise(vWetXZ / 1.1);
+tone = mix(tone, mix(0.82, 1.15, drifts), surfGravel);
+#endif
+diffuseColor.rgb *= tone;
+#endif
+#if defined( WET_LINE ) && defined( SURFACE_DETAIL )
+// Rubber laid down by the tyres: a darker band along the racing line, dustier and lighter off it.
+diffuseColor.rgb *= mix(1.12, 0.68, 1.0 - smoothstep(0.6, 2.2, vWetLine.x));
+#endif
 float edgeBias = 0.0;
 wetSurface = uWet;
 #ifdef WET_LINE
@@ -350,6 +409,18 @@ puddle = uPuddles * smoothstep(0.62, 0.72, n + edgeBias) * step(0.3, uGloss);
 // Even a damp surface darkens and shines; it is much the same from wet on.
 wetSurface = smoothstep(0.02, 0.5, wetSurface);
 diffuseColor.rgb *= mix(1.0, 0.45, wetSurface * min(1.0, uGloss + 0.4)) * (1.0 - 0.5 * puddle);`)
+      // The texture's relief, smoothed where water fills it.
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+#ifdef SURFACE_DETAIL
+if (uSurfaces > 0.5) {
+  float strength = uSurfDetail.z * surfFlat * (1.0 - puddle) * mix(1.0, 0.45, wetSurface * uGloss);
+  vec3 sn = tangentNormal(tiled(tAN, surfA), strength);
+  #ifdef SURFACE_GRAVEL
+  sn = normalize(mix(sn, tangentNormal(tiled(tBN, surfB), surfFlat * (1.0 - puddle)), surfGravel));
+  #endif
+  normal = normalize(surfaceFrame(-vViewPosition, normal, vWetXZ) * sn);
+}
+#endif`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
 roughnessFactor = mix(roughnessFactor, 0.14, wetSurface * uGloss);
 roughnessFactor = mix(roughnessFactor, 0.03, puddle);`)
@@ -359,10 +430,10 @@ roughnessFactor = mix(roughnessFactor, 0.03, puddle);`)
 iblIrradiance *= uIbl;
 #endif
 #if defined( RE_IndirectSpecular )
-radiance *= mix(0.35, 1.25, max(wetSurface * uGloss, puddle)) * (1.0 + 1.2 * puddle);
+radiance *= mix(0.35, 0.7, max(wetSurface * uGloss, puddle)) * (1.0 + 0.5 * puddle);
 #endif`);
   };
-  m.customProgramCacheKey = () => `wet-surface${racingLine ? '-line' : ''}`;
+  m.customProgramCacheKey = () => `wet-surface${racingLine ? '-line' : ''}${detail ? (detail.gravel ? '-gravel' : '-detail') : ''}${detail?.patches ? '-patches' : ''}`;
   return m;
 }
 
