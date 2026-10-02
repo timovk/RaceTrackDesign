@@ -119,6 +119,8 @@ export class TvBroadcast {
   /** The grid walk before the start: seconds into it, and the car (or the wide shot, -2) last captioned. */
   private walk: { time: number; shown: number } | null = null;
   private captionUntil = 0;
+  /** The two cars of the battle on screen ('' for none), to caption a new pair within a shot. */
+  private pair = '';
   private lastTarget: THREE.Vector3 | null = null;
   private time = 0;
   private seenEvents = -1;
@@ -210,6 +212,13 @@ export class TvBroadcast {
       const cut = shot !== this.shot;
       if (cut) this.onReplayCut(this.shot, shot);
       if (cut && shot) this.onCut(shot, sim);
+      // The battle on screen went on with a car that came between: a caption for the new pair (not for a pass between the two).
+      const pair = shot?.subject.kind === 'battle' && !shot.replay ? [shot.subject.ahead, shot.subject.behind].sort((a, b) => a - b).join('-') : '';
+      if (!cut && shot && pair && this.pair && pair !== this.pair) {
+        const caption = this.caption(shot, sim);
+        if (caption) this.showCaption(caption, CAPTION);
+      }
+      this.pair = pair;
       this.shot = shot;
       if (shot) {
         this.point(shot, dt, cut);

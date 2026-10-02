@@ -73,6 +73,54 @@ describe('the director', () => {
     expect(d.update(0.5, 1, cars)).toBe(shot);
   });
 
+  it('stays with a battle it picked for twenty seconds, from camera to camera and through a pass', () => {
+    const d = new Director(cams, track, rng(13));
+    const cars = [car(0, 2600), car(1, 2000, { interval: 5 }), car(2, 1995, { interval: 0.5 }), car(3, 1000, { interval: 8 }), car(4, 997, { interval: 3 })];
+    const pair = (s: TvShot) => s.subject.kind === 'battle' && [s.subject.ahead, s.subject.behind].sort().join() === '1,2';
+    const shots: TvShot[] = [];
+    let now = 0;
+    const step = () => {
+      now += 0.1;
+      for (const c of cars) c.u += (c.speed * 0.1) / t.ds;
+      const s = d.update(0.1, 1, cars)!;
+      if (s !== shots[shots.length - 1]) shots.push(s);
+      return s;
+    };
+    expect(pair(step())).toBe(true);
+    // A closer battle further back does not take the screen.
+    cars[4].interval = 0.05;
+    for (let i = 0; i < 90; i++) expect(pair(step())).toBe(true);
+    // Car 2 passes car 1: the shot on screen goes on, with the cars in their new order.
+    Object.assign(cars[2], { u: cars[1].u + 1, position: 2, classPosition: 2, interval: 5 });
+    Object.assign(cars[1], { position: 3, classPosition: 3, interval: 0.2 });
+    const onScreen = shots[shots.length - 1];
+    expect(step()).toBe(onScreen);
+    expect(onScreen.subject).toEqual({ kind: 'battle', ahead: 2, behind: 1 });
+    while (now < 19.9) expect(pair(step())).toBe(true);
+    expect(new Set(shots.map((s) => s.camera)).size).toBeGreaterThan(1);
+    // Then on to something else.
+    let moved = false;
+    for (let i = 0; i < 200 && !moved; i++) moved = !pair(step());
+    expect(moved).toBe(true);
+    // A third car comes between them: on with the battle they are in now.
+    const train = new Director(cams, track, rng(13));
+    const three = [car(0, 2600), car(1, 2000, { interval: 5 }), car(2, 1995, { interval: 0.5 }), car(3, 1990, { interval: 1.5 })];
+    const first = train.update(0.1, 1, three)!;
+    expect(first.subject).toEqual({ kind: 'battle', ahead: 1, behind: 2 });
+    Object.assign(three[3], { u: 1996, position: 3, classPosition: 3, interval: 0.1 });
+    Object.assign(three[2], { position: 4, classPosition: 4, interval: 0.05 });
+    expect(train.update(0.1, 1, three)).toBe(first);
+    expect(first.subject).toEqual({ kind: 'battle', ahead: 3, behind: 2 });
+    for (let i = 0; i < 150; i++) expect(subjectIds(train.update(0.1, 1, three)!.subject).every((id) => id > 0)).toBe(true);
+    // A battle that splits up is left at once.
+    const split = new Director(cams, track, rng(13));
+    const two = [car(0, 2600), car(1, 2000, { interval: 5 }), car(2, 1995, { interval: 0.5 })];
+    split.update(0.1, 1, two);
+    split.update(3, 1, two);
+    two[2].interval = 2;
+    expect(split.update(0.1, 1, two)!.subject.kind).not.toBe('battle');
+  });
+
   it('uses trackside cameras at real speed, and the helicopter and onboard cameras when the race runs fast', () => {
     const kind = (camera: string) => (camera === 'heli' ? 'heli' : isOnboard(camera) ? 'onboard' : 'trackside');
     const d = new Director(cams, track, rng(7));
@@ -186,17 +234,29 @@ describe('the director', () => {
 
   it('cuts to an incident, and keeps on the car the viewer picked', () => {
     const d = new Director(cams, track, rng(5));
-    const cars = [car(0, 1500), car(1, 1000, { interval: 0.4 }), car(2, 300)];
-    d.update(0.1, 1, cars);
-    d.update(3, 1, cars);
+    const spread = [car(0, 1500), car(1, 1000), car(2, 300)];
+    d.update(0.1, 1, spread);
+    d.update(3, 1, spread);
     d.note('incident', 2);
     // Within a few seconds (a shot holds at least two and a half).
     let shown = false;
     for (let i = 0; i < 30 && !shown; i++) {
-      const s = d.update(0.1, 1, cars)!;
+      const s = d.update(0.1, 1, spread)!;
       shown = s.subject.kind === 'car' && s.subject.id === 2 && s.reason === 'incident';
     }
     expect(shown).toBe(true);
+    // Into a battle it follows, only an incident ahead of it (or to its cars).
+    const following = new Director(cams, track, rng(5));
+    const field = [car(0, 2000), car(1, 1500, { interval: 5 }), car(2, 1495, { interval: 0.4 }), car(3, 300, { interval: 9 })];
+    expect(following.update(0.1, 1, field)!.subject).toEqual({ kind: 'battle', ahead: 1, behind: 2 });
+    following.update(3, 1, field);
+    following.note('incident', 3);
+    for (let i = 0; i < 50; i++) expect(subjectIds(following.update(0.1, 1, field)!.subject)).toEqual([1, 2]);
+    following.note('incident', 0);
+    let ahead = false;
+    for (let i = 0; i < 30 && !ahead; i++) ahead = following.update(0.1, 1, field)!.reason === 'incident';
+    expect(ahead).toBe(true);
+    const cars = [car(0, 1500), car(1, 1000, { interval: 0.4 }), car(2, 300)];
     const picked = new Director(cams, track, rng(5));
     cars[0].selected = true;
     for (let i = 0; i < 300; i++) {
