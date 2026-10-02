@@ -116,8 +116,8 @@ describe('endurance crews', () => {
 
   it('takes a rolling start', () => {
     const c = sim.order[0];
-    // No standing start: the first lap is close to the next ones.
-    expect(c.history[0].time - c.history[1].time).toBeLessThan(3);
+    // No standing start: the first lap is close to the next ones. Accelerating from 100 km/h costs about 3 s here, a standing start about 5.5 s.
+    expect(c.history[0].time - c.history[1].time).toBeLessThan(4);
   });
 });
 

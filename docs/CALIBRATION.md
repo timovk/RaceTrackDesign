@@ -19,38 +19,38 @@ real qualifying laps from `data/reference-laps.json`.
 The circuits are flat (the data has no elevation), the racing line keeps 1.2 m from each edge, and the
 circuit geometry comes from OpenStreetMap, so some corners are sharper or softer than the real ones. Errors per
 circuit therefore mix model error with data error, and classes with one or two reference laps are only loosely
-pinned down. The largest single miss is Formula 1 at Sakhir, -4.6%.
+pinned down. The largest single miss is Formula 1 at Sakhir, -4.9%.
 
 ## Results
 
 | Class | RMS error | Circuit | Real | Model | Error |
 |---|---|---|---|---|---|
-| Formula 1 | 2.1% | Monza | 1:18.792 | 1:18.975 | +0.2% |
-|  |  | Silverstone | 1:24.892 | 1:25.196 | +0.4% |
-|  |  | Budapest | 1:15.372 | 1:15.796 | +0.6% |
-|  |  | Montreal | 1:10.899 | 1:12.361 | +2.1% |
-|  |  | Shanghai | 1:30.641 | 1:31.695 | +1.2% |
-|  |  | Sakhir | 1:29.841 | 1:25.698 | -4.6% |
-| Formula 2 | 1.8% | Monza | 1:32.390 | 1:32.147 | -0.3% |
-|  |  | Silverstone | 1:39.731 | 1:40.565 | +0.8% |
-|  |  | Budapest | 1:28.779 | 1:30.041 | +1.4% |
-|  |  | Sakhir | 1:44.008 | 1:40.718 | -3.2% |
+| Formula 1 | 2.6% | Monza | 1:18.792 | 1:19.692 | +1.1% |
+|  |  | Silverstone | 1:24.892 | 1:24.581 | -0.4% |
+|  |  | Budapest | 1:15.372 | 1:17.057 | +2.2% |
+|  |  | Montreal | 1:10.899 | 1:12.849 | +2.8% |
+|  |  | Shanghai | 1:30.641 | 1:29.779 | -1.0% |
+|  |  | Sakhir | 1:29.841 | 1:25.402 | -4.9% |
+| Formula 2 | 2.3% | Monza | 1:32.390 | 1:33.169 | +0.8% |
+|  |  | Silverstone | 1:39.731 | 1:39.693 | -0.0% |
+|  |  | Budapest | 1:28.779 | 1:31.136 | +2.7% |
+|  |  | Sakhir | 1:44.008 | 1:40.311 | -3.6% |
 | IndyCar | 0.0% | Austin | 1:46.018 | 1:46.018 | -0.0% |
-| Hypercar | 0.6% | Sakhir | 1:46.826 | 1:46.254 | -0.5% |
-|  |  | Monza | 1:35.358 | 1:35.969 | +0.6% |
-| LMP2 | 0.8% | Monza | 1:39.354 | 1:40.283 | +0.9% |
-|  |  | Sakhir | 1:52.290 | 1:51.506 | -0.7% |
-| GT3 | 2.0% | Monza | 1:45.000 | 1:43.223 | -1.7% |
-|  |  | Norisring | 48.467 | 49.445 | +2.0% |
-|  |  | Oschersleben | 1:21.072 | 1:22.460 | +1.7% |
-|  |  | Hockenheim | 1:36.259 | 1:33.991 | -2.4% |
-| GT4 | 1.4% | Monza | 1:53.708 | 1:51.896 | -1.6% |
-|  |  | Oschersleben | 1:28.820 | 1:29.806 | +1.1% |
-| TCR | 2.2% | Monza | 1:53.613 | 1:56.492 | +2.5% |
-|  |  | Budapest | 1:51.954 | 1:50.018 | -1.7% |
-| MotoGP | 0.3% | Sepang | 1:57.001 | 1:57.380 | +0.3% |
-|  |  | Silverstone | 1:57.233 | 1:56.873 | -0.3% |
-| Superbike | 0.3% | Sepang | 1:59.511 | 1:59.861 | +0.3% |
-|  |  | Silverstone | 1:59.748 | 1:59.414 | -0.3% |
+| Hypercar | 1.6% | Sakhir | 1:46.826 | 1:45.373 | -1.4% |
+|  |  | Monza | 1:35.358 | 1:37.032 | +1.8% |
+| LMP2 | 1.9% | Monza | 1:39.354 | 1:41.434 | +2.1% |
+|  |  | Sakhir | 1:52.290 | 1:50.511 | -1.6% |
+| GT3 | 1.5% | Monza | 1:45.000 | 1:45.204 | +0.2% |
+|  |  | Norisring | 48.467 | 49.313 | +1.7% |
+|  |  | Oschersleben | 1:21.072 | 1:21.740 | +0.8% |
+|  |  | Hockenheim | 1:36.259 | 1:34.078 | -2.3% |
+| GT4 | 0.1% | Monza | 1:53.708 | 1:53.815 | +0.1% |
+|  |  | Oschersleben | 1:28.820 | 1:28.767 | -0.1% |
+| TCR | 2.5% | Monza | 1:53.613 | 1:56.985 | +3.0% |
+|  |  | Budapest | 1:51.954 | 1:49.907 | -1.8% |
+| MotoGP | 0.7% | Sepang | 1:57.001 | 1:57.837 | +0.7% |
+|  |  | Silverstone | 1:57.233 | 1:56.452 | -0.7% |
+| Superbike | 0.6% | Sepang | 1:59.511 | 2:00.277 | +0.6% |
+|  |  | Silverstone | 1:59.748 | 1:59.026 | -0.6% |
 
 Sources for every reference lap are listed in `data/reference-laps.json`.

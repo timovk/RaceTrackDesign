@@ -4,26 +4,26 @@
   "classes": [
     {
       "id": "f1", "name": "Formula 1", "spec": "2025", "kind": "car", "color": "#ff3b30",
-      "mass": 805, "powerKw": 700, "cdA": [1.05, 1.45], "clA": [3.587, 5.282],
-      "grip": 2.007, "loadSensitivity": 0.03, "driveShare": 0.6, "rollingResistance": 0.015,
+      "mass": 805, "powerKw": 700, "cdA": [1.05, 1.45], "clA": [3.593, 5.29],
+      "grip": 1.848, "loadSensitivity": 0.031, "driveShare": 0.6, "rollingResistance": 0.015,
       "drs": 0.22,
       "topSpeedKmh": 355, "gears": 8, "firstGearKmh": 110,
       "licence": "FIA 1", "pitSpeedKmh": 80,
-      "calibration": {"laps": 6, "rmsError": 0.0214}
+      "calibration": {"laps": 6, "rmsError": 0.0256}
     },
     {
       "id": "f2", "name": "Formula 2", "spec": "2025", "kind": "car", "color": "#3fb6ff",
-      "mass": 800, "powerKw": 430, "cdA": [0.9, 1.2], "clA": [4.491, 5.987],
-      "grip": 1.509, "loadSensitivity": 0.03, "driveShare": 0.6, "rollingResistance": 0.015,
+      "mass": 800, "powerKw": 430, "cdA": [0.9, 1.2], "clA": [4.52, 6.026],
+      "grip": 1.404, "loadSensitivity": 0.042, "driveShare": 0.6, "rollingResistance": 0.015,
       "drs": 0.18,
       "topSpeedKmh": 335, "gears": 6, "firstGearKmh": 120,
       "licence": "FIA 2", "pitSpeedKmh": 60,
-      "calibration": {"laps": 4, "rmsError": 0.0179}
+      "calibration": {"laps": 4, "rmsError": 0.0226}
     },
     {
       "id": "indycar", "name": "IndyCar", "spec": "road course", "kind": "car", "color": "#a78bfa",
       "mass": 840, "powerKw": 490, "cdA": [1.15, 1.35], "clA": [3.2, 4],
-      "grip": 1.931, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
+      "grip": 1.667, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
       "topSpeedKmh": 345, "gears": 6, "firstGearKmh": 130,
       "licence": "FIA 2", "pitSpeedKmh": 60,
       "calibration": {"laps": 1, "rmsError": 0}
@@ -31,60 +31,60 @@
     {
       "id": "hypercar", "name": "Hypercar", "spec": "WEC", "kind": "car", "color": "#ffb020",
       "mass": 1110, "powerKw": 470, "cdA": [0.9, 1], "clA": [3, 3.4],
-      "grip": 1.721, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
+      "grip": 1.606, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
       "topSpeedKmh": 345, "gears": 7, "firstGearKmh": 120,
       "licence": "FIA 2", "pitSpeedKmh": 60,
-      "calibration": {"laps": 2, "rmsError": 0.0059}
+      "calibration": {"laps": 2, "rmsError": 0.0157}
     },
     {
       "id": "lmp2", "name": "LMP2", "spec": "Oreca 07", "kind": "car", "color": "#2dd4bf",
       "mass": 1010, "powerKw": 400, "cdA": [0.85, 0.95], "clA": [3, 3.6],
-      "grip": 1.519, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
+      "grip": 1.421, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
       "topSpeedKmh": 335, "gears": 6, "firstGearKmh": 120,
       "licence": "FIA 2", "pitSpeedKmh": 60,
-      "calibration": {"laps": 2, "rmsError": 0.0082}
+      "calibration": {"laps": 2, "rmsError": 0.0186}
     },
     {
       "id": "gt3", "name": "GT3", "spec": "2025", "kind": "car", "color": "#4ade80",
       "mass": 1370, "powerKw": 330, "cdA": [1, 1], "clA": [0.459, 0.459],
-      "grip": 2.277, "loadSensitivity": 0.15, "driveShare": 0.62, "rollingResistance": 0.015,
+      "grip": 1.998, "loadSensitivity": 0.15, "driveShare": 0.62, "rollingResistance": 0.015,
       "topSpeedKmh": 295, "gears": 6, "firstGearKmh": 110,
       "licence": "FIA 3", "pitSpeedKmh": 60,
-      "calibration": {"laps": 4, "rmsError": 0.0196}
+      "calibration": {"laps": 4, "rmsError": 0.0149}
     },
     {
       "id": "gt4", "name": "GT4", "spec": "2025", "kind": "car", "color": "#a3e635",
       "mass": 1480, "powerKw": 280, "cdA": [1, 1], "clA": [0.4, 0.4],
-      "grip": 1.917, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
+      "grip": 1.698, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
       "topSpeedKmh": 275, "gears": 6, "firstGearKmh": 100,
       "licence": "FIA 4", "pitSpeedKmh": 60,
-      "calibration": {"laps": 2, "rmsError": 0.0137}
+      "calibration": {"laps": 2, "rmsError": 0.0008}
     },
     {
       "id": "tcr", "name": "TCR", "spec": "2025", "kind": "car", "color": "#f472b6",
       "mass": 1270, "powerKw": 220, "cdA": [0.9, 0.9], "clA": [0.25, 0.25],
-      "grip": 1.762, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
+      "grip": 1.651, "loadSensitivity": 0.08, "driveShare": 0.6, "rollingResistance": 0.015,
       "topSpeedKmh": 260, "gears": 6, "firstGearKmh": 95,
       "licence": "FIA 4", "pitSpeedKmh": 60,
-      "calibration": {"laps": 2, "rmsError": 0.0217}
+      "calibration": {"laps": 2, "rmsError": 0.0247}
     },
     {
       "id": "motogp", "name": "MotoGP", "spec": "2025", "kind": "bike", "color": "#fb923c",
       "mass": 237, "powerKw": 215, "cdA": [0.32, 0.32], "clA": [0.06, 0.06],
-      "grip": 1.682, "loadSensitivity": 0.05, "driveShare": 1, "rollingResistance": 0.015,
+      "grip": 1.476, "loadSensitivity": 0.05, "driveShare": 1, "rollingResistance": 0.015,
       "maxAccelG": 1.05, "maxBrakeG": 1.45,
       "topSpeedKmh": 365, "gears": 6, "firstGearKmh": 140,
       "licence": "FIM A", "pitSpeedKmh": 60,
-      "calibration": {"laps": 2, "rmsError": 0.0032}
+      "calibration": {"laps": 2, "rmsError": 0.0069}
     },
     {
       "id": "superbike", "name": "Superbike", "spec": "WorldSBK", "kind": "bike", "color": "#e5e7eb",
       "mass": 248, "powerKw": 165, "cdA": [0.33, 0.33], "clA": [0, 0],
-      "grip": 1.66, "loadSensitivity": 0.05, "driveShare": 1, "rollingResistance": 0.015,
+      "grip": 1.455, "loadSensitivity": 0.05, "driveShare": 1, "rollingResistance": 0.015,
       "maxAccelG": 1, "maxBrakeG": 1.35,
       "topSpeedKmh": 335, "gears": 6, "firstGearKmh": 130,
       "licence": "FIM B", "pitSpeedKmh": 60,
-      "calibration": {"laps": 2, "rmsError": 0.0029}
+      "calibration": {"laps": 2, "rmsError": 0.0062}
     }
   ]
 }

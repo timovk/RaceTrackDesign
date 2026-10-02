@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { placeFacilities } from '../src/core/facilities.ts';
+import { simulateLap } from '../src/core/lapSim.ts';
 import { type LayoutDesign, type LinkDesign, buildLayout, layoutPitLane, layoutStation } from '../src/core/layouts.ts';
 import { analysePerformance } from '../src/core/performance.ts';
 import { newProject, parseProject, serializeProject } from '../src/core/project.ts';
+import { computeRacingLine } from '../src/core/racingLine.ts';
 import { placeStartFinish, rotateTrack } from '../src/core/startFinish.ts';
 import { DEFAULT_GRADING, buildTrack } from '../src/core/track.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
@@ -64,6 +66,19 @@ describe('layouts', () => {
       expect(Math.abs(t.z[k1] - t.z[k])).toBeLessThan(0.3);
       expect(Math.abs(t.z[k] - t.terrain[k])).toBeLessThanOrEqual(DEFAULT_GRADING.maxCutFill + 1e-9);
     }
+  });
+
+  it('gives the same lap when its link moves by a millimetre or so', () => {
+    const f1 = VEHICLES.find((v) => v.id === 'f1')!;
+    const s = shortcut();
+    const laps = [0, 0.001, -0.002, 0.003, 0.01].map((d) => {
+      // Each point moves its own way.
+      const nudge = <P extends { x: number; y: number }>(p: P, i: number): P => ({ ...p, x: p.x + d * Math.cos(i), y: p.y + d * Math.sin(i) });
+      const link: LinkDesign = { from: nudge(s.from, 0), to: nudge(s.to, 1), points: s.points.map((p, i) => nudge(p, i + 2)) };
+      const track = buildLayout(full, layout(link), ground, DEFAULT_GRADING).track!;
+      return simulateLap(track, computeRacingLine(track), f1).time;
+    });
+    expect(Math.max(...laps) - Math.min(...laps)).toBeLessThan(0.01);
   });
 
   it('is the same whichever way round the link was drawn', () => {

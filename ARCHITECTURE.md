@@ -133,13 +133,14 @@ The base image uses a colour ramp by height above the lowest land (stretched ove
 
 ## Racing line
 
-Each station may move sideways by an offset *n* along the track normal, staying 1.2 m inside each edge. Around a reference line with curvature κ, the curvature of the moved line is to first order κ − n″ − κ²n: the last term says that the outside of a corner is gentler. The line minimises ∫κ² ds, which is quadratic in the offsets with a pentadiagonal matrix, and is solved exactly:
+Each station may move sideways by an offset *n* along the track normal, staying 1.2 m inside each edge. The line minimises its bending energy Σ θ²/h, where θ is the angle between the chords to the neighbouring stations and h the mean of their lengths: ∫κ² ds measured on the line itself, so moving to the outside of a corner makes it both gentler and longer. Each term depends on three neighbouring offsets, so the exact gradient and Hessian are cheap and the Hessian is a cyclic band five wide. Newton's method solves the problem to convergence:
 
-- the loop is cut by pinning two stations on a straight, which leaves a banded system solved by LDLᵀ;
-- the edge limits are held by an active-set method;
-- the problem is re-linearised around the new line eight times, alternating the cut between two straights and limiting each step to 4 m.
+- the edge limits are kept by a primal-dual interior-point method: a log barrier, weakened from 10⁻³ to 10⁻⁹, until the line touches the edges. With no yes-or-no choice per station, the line moves smoothly with the track: moving every control point of a real circuit by up to a centimetre changes an F1 lap by at most 0.03 s;
+- the whole loop is solved at once: numbering the stations 0, 1, n−1, 2, n−2, … turns the cyclic matrix into an ordinary band four wide on each side, factorised as LDLᵀ;
+- where the Hessian is not positive definite (far from the solution) a multiple of the identity is added, and each step is halved until it lowers the energy plus the barrier;
+- on the inside of a sharp bend the line keeps within 90% of the distance at which neighbouring normals cross, where stations would bunch up. It only binds at kinks in the circuit data, such as one at Sochi.
 
-It takes 30–90 ms for a 5 km track. Minimum curvature is the standard stand-in for a real line. A direct lap-time optimisation was about 2.4% faster on a synthetic circuit of 90° corners, but too slow to run live; calibration absorbs the difference.
+An earlier version linearised the curvature with fixed spacing and took eight steps, cutting the loop on a straight; that model's gradient was not the energy's, so it never converged, and a millimetre's change to a circuit moved an F1 lap by up to 4.6 s. The Newton method takes about 40 steps, 10–20 ms for a 5 km track. Minimum curvature is the standard stand-in for a real line. A direct lap-time optimisation was about 2.4% faster on a synthetic circuit of 90° corners, but too slow to run live; calibration absorbs the difference.
 
 ## Lap simulation
 

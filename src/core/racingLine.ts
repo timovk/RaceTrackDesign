@@ -4,25 +4,32 @@
  * is the standard stand-in for the real line in quasi-steady-state lap
  * simulation (fast drivers use the whole width, which opens up every corner).
  *
- * Each station may move sideways by an offset n along the track's left
- * normal. Around a reference line with curvature k and station spacing h,
- * the curvature of the moved line is, to first order,
+ * Each station may move sideways by an offset along the track's left
+ * normal. The line minimises its bending energy, the sum over stations of
  *
- *     k(n) = k - n'' - k^2 n
+ *     turn^2 / spacing
  *
- * where n'' is the second derivative of the offset along the line and the
- * last term says that moving to the outside of a corner lowers its
- * curvature. The line minimises the integral of k(n)^2, a quadratic in the
- * offsets with a pentadiagonal matrix, solved exactly and re-linearised
- * around the new line a few times:
+ * where `turn` is the angle between the chords to the previous and the next
+ * station and `spacing` the mean length of those chords: the integral of
+ * curvature squared, measured on the line itself, so moving to the outside
+ * of a corner makes it both gentler and longer. Each term depends on three
+ * neighbouring offsets, so the exact Hessian is a cyclic band five wide,
+ * and Newton's method solves the problem to convergence:
  *
- * - The loop is cut by pinning two neighbouring stations on a straight, which
- *   leaves an open chain whose matrix is banded; alternate solves put the cut
- *   on two different straights so every station gets to move.
- * - The edge limits are handled by an active-set method: offsets that would
- *   leave the track are held at the edge until the gradient says to release them.
+ * - The edge limits are kept by a primal-dual interior-point method: a log
+ *   barrier pushes the line off the edges and is weakened step by step until
+ *   the line touches them. It makes no yes-or-no choice per station (unlike
+ *   an active-set method), so the line moves smoothly with the track and a
+ *   track moved a millimetre gives the same lap.
+ * - The whole loop is solved at once: numbering the stations alternately
+ *   from both ends of the loop turns its cyclic matrix into an ordinary band.
+ * - Far from the solution the Hessian may not be positive definite; a
+ *   multiple of the identity is then added. Each step is halved until it
+ *   lowers the bending energy plus the barrier.
+ * - On the inside of a sharp bend the line keeps short of where the normals
+ *   of neighbouring stations cross, where the stations would bunch up.
  */
-import { headingAndCurvature } from './geometry.ts';
+import { headingAndCurvature, wrapAngle } from './geometry.ts';
 import type { Track } from './track.ts';
 
 export interface RacingLine {
@@ -43,10 +50,17 @@ export interface RacingLine {
 
 /** Space kept between the line and each track edge: half a car's width plus a little. */
 export const LINE_MARGIN = 1.2;
-const LINEARISATIONS = 8;
-/** Largest sideways move per linearisation, so each step stays where the first-order model holds. */
-const STEP_LIMIT = 4;
-const MAX_ACTIVE_SET_ITERATIONS = 80;
+/** Newton steps at most; a 5 km circuit takes about 40. */
+const MAX_ITERATIONS = 200;
+/** Barrier weight at the start and at the end, where the line is within about a centimetre of the edges it touches. */
+const BARRIER_START = 1e-3;
+const BARRIER_END = 1e-9;
+/** A barrier problem counts as solved when its optimality error is below this many times the barrier weight. */
+const BARRIER_TOLERANCE = 10;
+/** Share of the gap to a limit (or of a multiplier) a step may use up. */
+const TO_BOUNDARY = 0.995;
+/** Share of the distance to where neighbouring normals cross that the line may use on the inside of a bend. */
+const CROSSING = 0.9;
 /** Smoothing of the line's curvature in metres. */
 const CURVATURE_SMOOTHING = 3;
 
@@ -54,200 +68,373 @@ export function computeRacingLine(t: Track, margin = LINE_MARGIN): RacingLine {
   const n = t.n;
   const nx = new Float64Array(n);
   const ny = new Float64Array(n);
-  const limit = new Float64Array(n);
+  const lo = new Float64Array(n);
+  const hi = new Float64Array(n);
   for (let k = 0; k < n; k++) {
     nx[k] = Math.sin(t.heading[k]);
     ny[k] = -Math.cos(t.heading[k]);
-    limit[k] = Math.max(0, t.width[k] / 2 - margin);
+    const limit = Math.max(0, t.width[k] / 2 - margin);
+    lo[k] = -limit;
+    hi[k] = limit;
   }
-
-  // Two cuts on the straightest stations, at least a third of a lap apart.
-  const cutA = straightest(t, -1);
-  const cutB = straightest(t, cutA);
+  // Neighbouring normals cross at chord / turn on the inside of a bend (the right for a right-hander).
+  for (let k = 0; k < n; k++) {
+    const k1 = (k + 1) % n;
+    const turn = wrapAngle(t.heading[k1] - t.heading[k]);
+    if (Math.abs(turn) < 1e-9) continue;
+    const reach = (CROSSING * Math.hypot(t.x[k1] - t.x[k], t.y[k1] - t.y[k])) / Math.abs(turn);
+    if (turn > 0) {
+      lo[k] = Math.max(lo[k], -reach);
+      lo[k1] = Math.max(lo[k1], -reach);
+    } else {
+      hi[k] = Math.min(hi[k], reach);
+      hi[k1] = Math.min(hi[k1], reach);
+    }
+  }
+  // Stations with no room to move stay on the centreline.
+  const held = new Uint8Array(n);
+  for (let k = 0; k < n; k++) held[k] = Math.min(-lo[k], hi[k]) < 1e-6 ? 1 : 0;
 
   const offset = new Float64Array(n);
-  for (let it = 0; it < LINEARISATIONS; it++) {
-    const ref = lineGeometry(t, nx, ny, offset);
-    solveStep(ref.curvature, ref.spacing, limit, offset, it % 2 === 0 ? cutA : cutB);
+  const trial = new Float64Array(n);
+  const px = new Float64Array(n);
+  const py = new Float64Array(n);
+  const g = new Float64Array(n);
+  const h0 = new Float64Array(n);
+  const h1 = new Float64Array(n);
+  const h2 = new Float64Array(n);
+  const diag = new Float64Array(n);
+  const rhs = new Float64Array(n);
+  const step = new Float64Array(n);
+  // Multipliers of the lower and upper limits.
+  const zl = new Float64Array(n);
+  const zu = new Float64Array(n);
+  const solver = new CyclicSolver(n);
+
+  const place = (o: Float64Array) => {
+    for (let k = 0; k < n; k++) {
+      px[k] = t.x[k] + o[k] * nx[k];
+      py[k] = t.y[k] + o[k] * ny[k];
+    }
+  };
+  const barrier = (o: Float64Array, mu: number) => {
+    let sum = 0;
+    for (let k = 0; k < n; k++) if (!held[k]) sum += Math.log(o[k] - lo[k]) + Math.log(hi[k] - o[k]);
+    return -mu * sum;
+  };
+
+  let mu = BARRIER_START;
+  for (let k = 0; k < n; k++) {
+    if (held[k]) continue;
+    zl[k] = mu / -lo[k];
+    zu[k] = mu / hi[k];
+  }
+  place(offset);
+  let energy = bending(px, py);
+  let shift = 0;
+  for (let it = 0; it < MAX_ITERATIONS; it++) {
+    place(offset);
+    bendingDerivatives(px, py, nx, ny, g, h0, h1, h2);
+    let error = 0;
+    for (let k = 0; k < n; k++) {
+      if (held[k]) continue;
+      const sl = offset[k] - lo[k];
+      const su = hi[k] - offset[k];
+      error = Math.max(error, Math.abs(g[k] - zl[k] + zu[k]), Math.abs(sl * zl[k] - mu), Math.abs(su * zu[k] - mu));
+    }
+    if (error < BARRIER_TOLERANCE * mu) {
+      if (mu <= BARRIER_END) break;
+      mu = Math.max(BARRIER_END, Math.min(0.2 * mu, mu * Math.sqrt(mu)));
+      continue;
+    }
+
+    // Newton step for the barrier problem: (H + Zl/Sl + Zu/Su) step = -(g - mu/Sl + mu/Su).
+    for (let k = 0; k < n; k++) {
+      if (held[k]) {
+        diag[k] = h0[k];
+        rhs[k] = 0;
+        continue;
+      }
+      const sl = offset[k] - lo[k];
+      const su = hi[k] - offset[k];
+      diag[k] = h0[k] + zl[k] / sl + zu[k] / su;
+      rhs[k] = g[k] - mu / sl + mu / su;
+    }
+    while (!solver.solve(diag, h1, h2, shift, rhs, held, step)) shift = shift > 0 ? 4 * shift : 1e-6 * meanAbs(h0);
+
+    // Largest steps that keep the offsets inside their limits and the multipliers positive.
+    let primal = 1;
+    let dual = 1;
+    let slope = 0;
+    for (let k = 0; k < n; k++) {
+      if (held[k]) continue;
+      const sl = offset[k] - lo[k];
+      const su = hi[k] - offset[k];
+      if (step[k] < 0) primal = Math.min(primal, (-TO_BOUNDARY * sl) / step[k]);
+      else if (step[k] > 0) primal = Math.min(primal, (TO_BOUNDARY * su) / step[k]);
+      const dzl = mu / sl - zl[k] - (zl[k] / sl) * step[k];
+      const dzu = mu / su - zu[k] + (zu[k] / su) * step[k];
+      if (dzl < 0) dual = Math.min(dual, (-TO_BOUNDARY * zl[k]) / dzl);
+      if (dzu < 0) dual = Math.min(dual, (-TO_BOUNDARY * zu[k]) / dzu);
+      slope += rhs[k] * step[k];
+    }
+
+    // Backtrack until the step lowers the bending energy plus the barrier.
+    const merit = energy + barrier(offset, mu);
+    let alpha = primal;
+    let improved = false;
+    for (let tries = 0; tries < 40 && !improved; tries++) {
+      for (let k = 0; k < n; k++) trial[k] = offset[k] + alpha * step[k];
+      place(trial);
+      const e = bending(px, py);
+      if (e + barrier(trial, mu) <= merit + 1e-4 * alpha * slope) {
+        energy = e;
+        improved = true;
+      } else alpha /= 2;
+    }
+    if (!improved) break;
+    if (alpha === primal) shift /= 4;
+
+    for (let k = 0; k < n; k++) {
+      if (held[k]) continue;
+      const sl = offset[k] - lo[k];
+      const su = hi[k] - offset[k];
+      zl[k] += dual * (mu / sl - zl[k] - (zl[k] / sl) * step[k]);
+      zu[k] += dual * (mu / su - zu[k] + (zu[k] / su) * step[k]);
+      offset[k] = trial[k];
+      // Keep each multiplier within a wide band of mu / gap, so the barrier Hessian stays sound.
+      const nl = offset[k] - lo[k];
+      const nu = hi[k] - offset[k];
+      zl[k] = Math.max(mu / (1e10 * nl), Math.min(zl[k], (1e10 * mu) / nl));
+      zu[k] = Math.max(mu / (1e10 * nu), Math.min(zu[k], (1e10 * mu) / nu));
+    }
   }
 
-  const g = lineGeometry(t, nx, ny, offset);
+  place(offset);
+  const x = Float64Array.from(px);
+  const y = Float64Array.from(py);
+  const { heading, curvature } = headingAndCurvature(x, y, CURVATURE_SMOOTHING / t.ds);
   const ds = new Float64Array(n);
   const s = new Float64Array(n);
   let length = 0;
   for (let k = 0; k < n; k++) {
     const k1 = (k + 1) % n;
     s[k] = length;
-    ds[k] = Math.max(1e-6, Math.hypot(g.x[k1] - g.x[k], g.y[k1] - g.y[k]));
+    ds[k] = Math.max(1e-6, Math.hypot(x[k1] - x[k], y[k1] - y[k]));
     length += ds[k];
   }
-  return { n, offset, x: g.x, y: g.y, heading: g.heading, curvature: g.curvature, ds, s, length };
+  return { n, offset, x, y, heading, curvature, ds, s, length };
 }
 
-/** Points, heading, curvature and local spacing of the line at the given offsets. */
-function lineGeometry(t: Track, nx: Float64Array, ny: Float64Array, offset: Float64Array) {
-  const n = t.n;
-  const x = new Float64Array(n);
-  const y = new Float64Array(n);
-  for (let k = 0; k < n; k++) {
-    x[k] = t.x[k] + offset[k] * nx[k];
-    y[k] = t.y[k] + offset[k] * ny[k];
-  }
-  const seg = new Float64Array(n);
-  for (let k = 0; k < n; k++) {
-    const j = (k + 1) % n;
-    seg[k] = Math.hypot(x[j] - x[k], y[j] - y[k]);
-  }
-  const spacing = new Float64Array(n);
-  for (let k = 0; k < n; k++) spacing[k] = Math.max(1e-3, (seg[(k - 1 + n) % n] + seg[k]) / 2);
-  const { heading, curvature } = headingAndCurvature(x, y, CURVATURE_SMOOTHING / t.ds);
-  return { x, y, heading, curvature, spacing };
+function meanAbs(a: Float64Array): number {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += Math.abs(a[i]);
+  return sum / a.length;
 }
 
-/** The station with the smallest curvature, at least a third of a lap from `avoid` (if given). */
-function straightest(t: Track, avoid: number): number {
-  let best = -1;
-  for (let k = 0; k < t.n; k++) {
-    if (avoid >= 0) {
-      const d = Math.abs(k - avoid);
-      if (Math.min(d, t.n - d) < t.n / 3) continue;
-    }
-    if (best < 0 || Math.abs(t.curvature[k]) < Math.abs(t.curvature[best])) best = k;
+/** Bending energy of a closed polyline: the sum of turn^2 / spacing over its points. */
+function bending(x: Float64Array, y: Float64Array): number {
+  const n = x.length;
+  let e = 0;
+  for (let k = 0; k < n; k++) {
+    const p = k === 0 ? n - 1 : k - 1;
+    const q = k === n - 1 ? 0 : k + 1;
+    const ax = x[k] - x[p];
+    const ay = y[k] - y[p];
+    const bx = x[q] - x[k];
+    const by = y[q] - y[k];
+    const turn = Math.atan2(ax * by - ay * bx, ax * bx + ay * by);
+    e += (turn * turn) / ((Math.sqrt(ax * ax + ay * ay) + Math.sqrt(bx * bx + by * by)) / 2);
   }
-  return best < 0 ? 0 : best;
+  return e;
 }
 
 /**
- * One linearised step: finds the change d in offsets minimising
- * sum_k h_k (kappa_k - d''_k - kappa_k^2 d_k)^2 with stations `cut` and
- * `cut + 1` held still and every offset kept within its limit (and within
- * STEP_LIMIT of where it was). Updates `offset` in place.
+ * Gradient `g` and Hessian of the bending energy with respect to the offsets
+ * along the normals (nx, ny). The Hessian comes as cyclic bands:
+ * h0[i] = H[i][i], h1[i] = H[i][i+1], h2[i] = H[i][i+2].
  */
-function solveStep(kappa: Float64Array, h: Float64Array, limit: Float64Array, offset: Float64Array, cut: number): void {
-  const n = kappa.length;
-  const m = n - 2;
-  const station = (i: number) => (cut + 2 + i) % n;
-  const indexOf = new Int32Array(n).fill(-1);
-  for (let i = 0; i < m; i++) indexOf[station(i)] = i;
-
-  // Normal equations H d = r of the chain (pinned stations have d = 0 and drop out).
-  const d0 = new Float64Array(m);
-  const d1 = new Float64Array(m); // H[i][i-1]
-  const d2 = new Float64Array(m); // H[i][i-2]
-  const rhs = new Float64Array(m);
-  const st = [0, 0, 0];
-  const cf = [0, 0, 0];
-  for (let k = 0; k < n; k++) {
-    const inv = 1 / (h[k] * h[k]);
-    // Row k of the linear map d -> change in curvature at k.
-    st[0] = (k - 1 + n) % n;
-    st[1] = k;
-    st[2] = (k + 1) % n;
-    cf[0] = -inv;
-    cf[1] = 2 * inv - kappa[k] * kappa[k];
-    cf[2] = -inv;
-    const w = h[k];
-    for (let p = 0; p < 3; p++) {
-      const ii = indexOf[st[p]];
-      if (ii < 0) continue;
-      rhs[ii] -= w * cf[p] * kappa[k];
-      for (let q = 0; q < 3; q++) {
-        const jj = indexOf[st[q]];
-        if (jj < 0) continue;
-        const v = w * cf[p] * cf[q];
-        if (p === q) d0[ii] += v;
-        else if (p > q) {
-          // Each unordered pair once, stored in the lower band of the later chain index.
-          const hi = Math.max(ii, jj);
-          if (Math.abs(ii - jj) === 1) d1[hi] += v;
-          else d2[hi] += v;
-        }
-      }
-    }
-  }
-  for (let i = 0; i < m; i++) d0[i] += 1e-9;
-
-  // Bounds on the change: stay on the track and within the step limit.
-  const lo = new Float64Array(m);
-  const hi = new Float64Array(m);
-  for (let i = 0; i < m; i++) {
-    const k = station(i);
-    lo[i] = Math.max(-limit[k] - offset[k], -STEP_LIMIT);
-    hi[i] = Math.min(limit[k] - offset[k], STEP_LIMIT);
-    if (lo[i] > hi[i]) lo[i] = hi[i] = Math.max(-limit[k], Math.min(limit[k], offset[k])) - offset[k];
-  }
-
-  // Active-set iterations: -1 held at the lower bound, +1 at the upper bound, 0 free.
-  const state = new Int8Array(m);
-  for (let i = 0; i < m; i++) if (hi[i] - lo[i] < 1e-9) state[i] = 1;
-  const x = new Float64Array(m);
-  for (let iter = 0; iter < MAX_ACTIVE_SET_ITERATIONS; iter++) {
-    solveBanded(d0, d1, d2, rhs, state, (i) => (state[i] > 0 ? hi[i] : lo[i]), x);
-    let changed = false;
-    for (let i = 0; i < m; i++) {
-      if (state[i] !== 0) continue;
-      if (x[i] > hi[i]) { state[i] = 1; changed = true; }
-      else if (x[i] < lo[i]) { state[i] = -1; changed = true; }
-    }
-    if (!changed) {
-      // Release held changes whose gradient points back inside the bounds.
-      for (let i = 0; i < m; i++) {
-        if (state[i] === 0 || hi[i] - lo[i] < 1e-9) continue;
-        let g = d0[i] * x[i] - rhs[i];
-        if (i >= 1) g += d1[i] * x[i - 1];
-        if (i >= 2) g += d2[i] * x[i - 2];
-        if (i + 1 < m) g += d1[i + 1] * x[i + 1];
-        if (i + 2 < m) g += d2[i + 2] * x[i + 2];
-        if ((state[i] === 1 && g > 1e-12) || (state[i] === -1 && g < -1e-12)) {
-          state[i] = 0;
-          changed = true;
-        }
-      }
-    }
-    if (!changed) break;
-  }
-  for (let i = 0; i < m; i++) {
-    const k = station(i);
-    offset[k] = Math.max(-limit[k], Math.min(limit[k], offset[k] + Math.max(lo[i], Math.min(hi[i], x[i]))));
-  }
-}
-
-/**
- * Solves the symmetric pentadiagonal system (diagonal d0, sub-diagonals d1
- * and d2) with held variables fixed at `held(i)`, by LDL^T factorisation.
- */
-function solveBanded(
-  d0: Float64Array, d1: Float64Array, d2: Float64Array, rhs: Float64Array,
-  state: Int8Array, held: (i: number) => number, out: Float64Array,
+function bendingDerivatives(
+  x: Float64Array, y: Float64Array, nx: Float64Array, ny: Float64Array,
+  g: Float64Array, h0: Float64Array, h1: Float64Array, h2: Float64Array,
 ): void {
-  const m = d0.length;
-  const a0 = Float64Array.from(d0);
-  const a1 = Float64Array.from(d1);
-  const a2 = Float64Array.from(d2);
-  const b = Float64Array.from(rhs);
-  // Replace held rows and columns by identity, moving their known values to the right-hand side.
-  for (let i = 0; i < m; i++) {
-    if (state[i] === 0) continue;
-    const v = held(i);
-    if (i + 1 < m) { b[i + 1] -= a1[i + 1] * v; a1[i + 1] = 0; }
-    if (i + 2 < m) { b[i + 2] -= a2[i + 2] * v; a2[i + 2] = 0; }
-    if (i >= 1) { b[i - 1] -= a1[i] * v; a1[i] = 0; }
-    if (i >= 2) { b[i - 2] -= a2[i] * v; a2[i] = 0; }
-    a0[i] = 1;
-    b[i] = v;
+  const n = x.length;
+  g.fill(0);
+  h0.fill(0);
+  h1.fill(0);
+  h2.fill(0);
+  // Each term is a function of the chords a = P[k] - P[k-1] and b = P[k+1] - P[k], as (ax, ay, bx, by).
+  const dTurn = new Float64Array(4);
+  const dSpacing = new Float64Array(4);
+  const grad = new Float64Array(4);
+  const hess = new Float64Array(16);
+  // How (ax, ay, bx, by) change with the offsets of stations k-1, k and k+1, a row each.
+  const chain = new Float64Array(12);
+  const local = new Float64Array(9);
+  for (let k = 0; k < n; k++) {
+    const p = k === 0 ? n - 1 : k - 1;
+    const q = k === n - 1 ? 0 : k + 1;
+    const ax = x[k] - x[p];
+    const ay = y[k] - y[p];
+    const bx = x[q] - x[k];
+    const by = y[q] - y[k];
+    const a2 = ax * ax + ay * ay;
+    const b2 = bx * bx + by * by;
+    const a1 = Math.sqrt(a2);
+    const b1 = Math.sqrt(b2);
+    const turn = Math.atan2(ax * by - ay * bx, ax * bx + ay * by);
+    const spacing = (a1 + b1) / 2;
+
+    dTurn[0] = ay / a2;
+    dTurn[1] = -ax / a2;
+    dTurn[2] = -by / b2;
+    dTurn[3] = bx / b2;
+    dSpacing[0] = ax / (2 * a1);
+    dSpacing[1] = ay / (2 * a1);
+    dSpacing[2] = bx / (2 * b1);
+    dSpacing[3] = by / (2 * b1);
+    // Partial derivatives of turn^2 / spacing.
+    const fT = (2 * turn) / spacing;
+    const fS = -(turn * turn) / (spacing * spacing);
+    const fTT = 2 / spacing;
+    const fTS = (-2 * turn) / (spacing * spacing);
+    const fSS = (2 * turn * turn) / (spacing * spacing * spacing);
+    for (let i = 0; i < 4; i++) {
+      grad[i] = fT * dTurn[i] + fS * dSpacing[i];
+      for (let j = 0; j < 4; j++) {
+        hess[i * 4 + j] = fTT * dTurn[i] * dTurn[j] + fTS * (dTurn[i] * dSpacing[j] + dSpacing[i] * dTurn[j]) + fSS * dSpacing[i] * dSpacing[j];
+      }
+    }
+    // Second derivatives of the turn (the chord angles) and of the spacing (the chord lengths), within a and within b.
+    const a4 = a2 * a2;
+    const b4 = b2 * b2;
+    const a3 = 2 * a2 * a1;
+    const b3 = 2 * b2 * b1;
+    addBlock(hess, 0, fT * (-2 * ax * ay) / a4 + fS * (ay * ay) / a3, fT * (ax * ax - ay * ay) / a4 - fS * (ax * ay) / a3, fT * (2 * ax * ay) / a4 + fS * (ax * ax) / a3);
+    addBlock(hess, 2, fT * (2 * bx * by) / b4 + fS * (by * by) / b3, fT * (by * by - bx * bx) / b4 - fS * (bx * by) / b3, fT * (-2 * bx * by) / b4 + fS * (bx * bx) / b3);
+
+    chain.fill(0);
+    chain[0] = -nx[p];
+    chain[1] = -ny[p];
+    chain[4] = nx[k];
+    chain[5] = ny[k];
+    chain[6] = -nx[k];
+    chain[7] = -ny[k];
+    chain[10] = nx[q];
+    chain[11] = ny[q];
+    for (let r = 0; r < 3; r++) {
+      for (let c = r; c < 3; c++) {
+        let v = 0;
+        for (let i = 0; i < 4; i++) {
+          let row = 0;
+          for (let j = 0; j < 4; j++) row += hess[i * 4 + j] * chain[c * 4 + j];
+          v += chain[r * 4 + i] * row;
+        }
+        local[r * 3 + c] = v;
+      }
+    }
+    for (let i = 0; i < 4; i++) {
+      g[p] += grad[i] * chain[i];
+      g[k] += grad[i] * chain[4 + i];
+      g[q] += grad[i] * chain[8 + i];
+    }
+    h0[p] += local[0];
+    h0[k] += local[4];
+    h0[q] += local[8];
+    h1[p] += local[1];
+    h1[k] += local[5];
+    h2[p] += local[2];
   }
-  // Factorise A = L D L^T with unit lower L (bands l1, l2).
-  const D = new Float64Array(m);
-  const l1 = new Float64Array(m);
-  const l2 = new Float64Array(m);
-  for (let i = 0; i < m; i++) {
-    if (i >= 2) l2[i] = a2[i] / D[i - 2];
-    if (i >= 1) l1[i] = (a1[i] - (i >= 2 ? l2[i] * l1[i - 1] * D[i - 2] : 0)) / D[i - 1];
-    D[i] = a0[i] - (i >= 1 ? l1[i] * l1[i] * D[i - 1] : 0) - (i >= 2 ? l2[i] * l2[i] * D[i - 2] : 0);
-    if (Math.abs(D[i]) < 1e-15) D[i] = 1e-15;
+}
+
+/** Adds a symmetric 2x2 block (v00, v01, v11) to a 4x4 matrix at row and column `at`. */
+function addBlock(m: Float64Array, at: number, v00: number, v01: number, v11: number): void {
+  m[at * 4 + at] += v00;
+  m[at * 4 + at + 1] += v01;
+  m[(at + 1) * 4 + at] += v01;
+  m[(at + 1) * 4 + at + 1] += v11;
+}
+
+/**
+ * Solves a symmetric cyclic pentadiagonal system. Numbering the stations
+ * alternately from both ends of the loop (0, 1, m-1, 2, m-2, ...) puts every
+ * pair of stations up to two apart at most four places apart, so the matrix
+ * becomes an ordinary band and is factorised as L D L^T.
+ */
+class CyclicSolver {
+  private readonly m: number;
+  private readonly order: Int32Array;
+  private readonly pos: Int32Array;
+  /** Row i holds the diagonal and the four entries left of it, then L. */
+  private readonly band: Float64Array;
+  private readonly b: Float64Array;
+  private readonly d: Float64Array;
+
+  constructor(m: number) {
+    this.m = m;
+    this.order = new Int32Array(m);
+    this.pos = new Int32Array(m);
+    for (let i = 1, lo = 1, hi = m - 1; lo <= hi; ) {
+      this.order[i++] = lo++;
+      if (lo <= hi) this.order[i++] = hi--;
+    }
+    for (let i = 0; i < m; i++) this.pos[this.order[i]] = i;
+    this.band = new Float64Array(m * 5);
+    this.b = new Float64Array(m);
+    this.d = new Float64Array(m);
   }
-  // Forward, diagonal and backward substitution.
-  for (let i = 0; i < m; i++) out[i] = b[i] - (i >= 1 ? l1[i] * out[i - 1] : 0) - (i >= 2 ? l2[i] * out[i - 2] : 0);
-  for (let i = 0; i < m; i++) out[i] /= D[i];
-  for (let i = m - 1; i >= 0; i--) out[i] -= (i + 1 < m ? l1[i + 1] * out[i + 1] : 0) + (i + 2 < m ? l2[i + 2] * out[i + 2] : 0);
+
+  /**
+   * Solves (H + shift I) x = -g, where H has diagonal h0 and h1[i] = H[i][i+1],
+   * h2[i] = H[i][i+2] (indices round the loop), with `held` unknowns at 0.
+   * False when the matrix is not positive definite.
+   */
+  solve(
+    h0: Float64Array, h1: Float64Array, h2: Float64Array, shift: number, g: Float64Array,
+    held: Uint8Array, out: Float64Array,
+  ): boolean {
+    const { m, pos, order, band: A, b, d } = this;
+    A.fill(0);
+    for (let s = 0; s < m; s++) {
+      const I = pos[s];
+      A[I * 5] = h0[s] + shift;
+      b[I] = -g[s];
+      const J1 = pos[(s + 1) % m];
+      const J2 = pos[(s + 2) % m];
+      A[Math.max(I, J1) * 5 + Math.abs(I - J1)] = h1[s];
+      A[Math.max(I, J2) * 5 + Math.abs(I - J2)] = h2[s];
+    }
+    for (let s = 0; s < m; s++) {
+      if (!held[s]) continue;
+      const I = pos[s];
+      for (let j = 1; j <= 4; j++) {
+        if (I - j >= 0) A[I * 5 + j] = 0;
+        if (I + j < m) A[(I + j) * 5 + j] = 0;
+      }
+      A[I * 5] = 1;
+      b[I] = 0;
+    }
+    // In place: A[i * 5 + j] becomes L[i][i - j].
+    for (let i = 0; i < m; i++) {
+      const j0 = Math.max(0, i - 4);
+      for (let j = j0; j < i; j++) {
+        let v = A[i * 5 + (i - j)];
+        for (let k = Math.max(j0, j - 4); k < j; k++) v -= A[i * 5 + (i - k)] * A[j * 5 + (j - k)] * d[k];
+        A[i * 5 + (i - j)] = v / d[j];
+      }
+      let v = A[i * 5];
+      for (let k = j0; k < i; k++) v -= A[i * 5 + (i - k)] * A[i * 5 + (i - k)] * d[k];
+      if (!(v > 0)) return false;
+      d[i] = v;
+    }
+    for (let i = 0; i < m; i++) {
+      for (let k = Math.max(0, i - 4); k < i; k++) b[i] -= A[i * 5 + (i - k)] * b[k];
+    }
+    for (let i = 0; i < m; i++) b[i] /= d[i];
+    for (let i = m - 1; i >= 0; i--) {
+      for (let k = i + 1; k <= Math.min(m - 1, i + 4); k++) b[i] -= A[k * 5 + (k - i)] * b[k];
+    }
+    for (let i = 0; i < m; i++) out[order[i]] = b[i];
+    return true;
+  }
 }

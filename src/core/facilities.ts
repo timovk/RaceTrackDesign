@@ -66,6 +66,8 @@ export interface FacilityInput {
 }
 
 const MAX_OVERTAKING_ZONES = 4;
+/** Metres just before a braking zone where the driver lifts, passed over when measuring the full-throttle run. */
+const LIFT = 10;
 
 export function placeFacilities(input: FacilityInput): Facilities {
   const { track: t, performance: perf } = input;
@@ -171,9 +173,14 @@ export function overtakingZones(lap: LapResult, ds: Float64Array): OvertakingZon
         j++;
       }
       let run = 0;
+      let lift = 0;
       for (let b = 1; b < n; b++) {
         const q = (k - b + n) % n;
-        if (lap.throttle[q] < 0.98) break;
+        if (lap.throttle[q] < 0.98) {
+          if (run > 0 || lift >= LIFT) break;
+          lift += ds[q];
+          continue;
+        }
         run += ds[q];
       }
       const drop = lap.v[k] - vMin;
