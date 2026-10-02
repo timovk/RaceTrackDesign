@@ -48,7 +48,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { COLORS, Earthworks, type MeshData, type Road, VERGE, anchoredHeight, buildRoads, buildSides, buildTerrain, pitRoad, startLine, trackRoad } from '../core/scene3d.ts';
 import {
   type Footprint, type PostSite, type RunoffArea, TrackIndex, type Trees, buildGrandstands, buildGridMarks, buildKerbs, buildMarshalPosts, buildPitBuilding, buildRunoff,
-  forest, inside, kerbRuns, lineFlagSite, marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffTest, treesInSight,
+  forest, inside, kerbRuns, lineFlagSite, marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffPoints, runoffTest, treesInSight,
 } from '../core/scenery.ts';
 import { type Pose, type Shot, type ShotInput, type Vec3, flyoverDuration, flyoverPose, hotLapPose, trackShots } from '../core/shots.ts';
 import { RAMP_MIN_RANGE, ROCK, contourInterval } from '../core/terrainImage.ts';
@@ -685,7 +685,19 @@ export class View3D {
     const earth = new Earthworks(hm, roads);
     this.earth = earth;
 
-    const terrain = buildTerrain(hm, roads, earth);
+    // Run-off outside the corners, once the analysis belongs to this track. The ground under it gets full
+    // detail, so it does not show through between coarse cells.
+    let areas: RunoffArea[] = [];
+    let index: TrackIndex | null = null;
+    if (t && ready) {
+      index = new TrackIndex(t);
+      // Run-off stops at the other roads: a gravel trap ends where the rest of the circuit carries on.
+      const others = this.otherRoads.length ? new Earthworks(hm, this.otherRoads) : null;
+      const blocked = others ? (x: number, y: number) => others.clearance(x, y) < VERGE + 2 : undefined;
+      areas = s.licence ? runoffAreas(t, s.metrics!.corners, s.licence.runoff, earth, index, blocked) : [];
+    }
+
+    const terrain = buildTerrain(hm, roads, earth, t && areas.length ? runoffPoints(t, areas) : undefined);
     const geo = geometry(terrain);
     geo.setAttribute('bank', new THREE.BufferAttribute(terrain.bank, 1));
     this.add('terrain', new THREE.Mesh(geo, this.terrainMaterial));
@@ -712,16 +724,9 @@ export class View3D {
 
     // Scenery, once the analysis belongs to this track.
     const footprints: Footprint[] = [];
-    let areas: RunoffArea[] = [];
-    let index: TrackIndex | null = null;
-    if (t && ready) {
+    if (t && ready && index) {
       const metrics = s.metrics!;
-      index = new TrackIndex(t);
       this.add('kerbs', new THREE.Mesh(geometry(buildKerbs(t, kerbRuns(t, s.performance!.line, metrics.corners))), this.surfaceMaterial(-2, this.asphalt(0.35))));
-      // Run-off stops at the other roads: a gravel trap ends where the rest of the circuit carries on.
-      const others = this.otherRoads.length ? new Earthworks(hm, this.otherRoads) : null;
-      const blocked = others ? (x: number, y: number) => others.clearance(x, y) < VERGE + 2 : undefined;
-      areas = s.licence ? runoffAreas(t, metrics.corners, s.licence.runoff, earth, index, blocked) : [];
       // Run-off lies beyond the verges and never overlaps a road, so it can win over the ground by a wide margin.
       if (areas.length) this.add('runoff', new THREE.Mesh(geometry(buildRunoff(t, areas, earth)), this.surfaceMaterial(-4, surfaceDetail(this.surfaces, 'asphalt', { amount: 1.2, normal: 1.2, gravel: true, patches: true }), 0.5)));
       if (pitLane && pit) {

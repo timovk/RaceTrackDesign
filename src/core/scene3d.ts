@@ -91,13 +91,23 @@ function roadSamples(roads: readonly Road[]): { x: number[]; y: number[] } {
   return { x, y };
 }
 
-/** The quadtree leaves: patches of LEAF cells, down to MIN_CELL near the roads. */
-export function terrainLeaves(hm: Heightmap, roads: readonly Road[]): Leaf[] {
+/** Places other than the roads where the ground needs full detail (under the run-off). */
+export interface DetailPoints {
+  x: readonly number[];
+  y: readonly number[];
+}
+
+/** The quadtree leaves: patches of LEAF cells, down to MIN_CELL near the roads and the `detail` points. */
+export function terrainLeaves(hm: Heightmap, roads: readonly Road[], detail?: DetailPoints): Leaf[] {
   const extent = hm.extent;
   const rootCell = Math.max(hm.cellSize, extent / 256);
   const rootSize = rootCell * LEAF;
   const roots = Math.max(1, Math.round(extent / rootSize));
   const pts = roadSamples(roads);
+  if (detail) {
+    pts.x.push(...detail.x);
+    pts.y.push(...detail.y);
+  }
   const distance = (x0: number, y0: number, size: number) => {
     let best = Infinity;
     for (let i = 0; i < pts.x.length; i++) {
@@ -129,9 +139,9 @@ export function terrainLeaves(hm: Heightmap, roads: readonly Road[]): Leaf[] {
   return out;
 }
 
-/** The terrain surface with earthworks, as one mesh of patches with skirts. */
-export function buildTerrain(hm: Heightmap, roads: readonly Road[], earth: Earthworks = new Earthworks(hm, roads)): TerrainMesh {
-  const leaves = terrainLeaves(hm, roads);
+/** The terrain surface with earthworks, as one mesh of patches with skirts; full detail near the roads and the `detail` points. */
+export function buildTerrain(hm: Heightmap, roads: readonly Road[], earth: Earthworks = new Earthworks(hm, roads), detail?: DetailPoints): TerrainMesh {
+  const leaves = terrainLeaves(hm, roads, detail);
   let vertexCount = 0;
   let indexCount = 0;
   for (const leaf of leaves) {

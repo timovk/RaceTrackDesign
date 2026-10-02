@@ -42,6 +42,21 @@ const RUNOFF_ASPHALT = [0.4, 0.42, 0.45];
 /** Corners that need at least this much run-off (m) get a band of asphalt this deep before the gravel. */
 const ASPHALT_RUNOFF = 80;
 const ASPHALT_BAND = 25;
+/**
+ * Run-off ends where the natural ground beyond the verge climbs or falls
+ * more steeply than this over RUNOFF_RUN metres (FIA Appendix O 7.6 allows
+ * run-off up to 25% up): a hillside. Within the first RUNOFF_RUN metres it
+ * may differ from the verge's edge by RUNOFF_RISE metres more. It follows
+ * the track's own earthworks, down an embankment and up the bank of a
+ * cutting, but not up a cutting more than RUNOFF_BANK metres deep. A real
+ * circuit would grade it; the licence check says where.
+ */
+export const RUNOFF_GRADE = 0.25;
+const RUNOFF_RUN = 8;
+const RUNOFF_RISE = 1;
+const RUNOFF_BANK = 3;
+/** Run-off lies this far (m) above the ground, so the ground does not show through it. */
+const RUNOFF_LIFT = 0.3;
 
 /** A point in the ground plane with a direction, and the model's heights. */
 interface Frame {
@@ -217,8 +232,10 @@ export interface RunoffArea {
  * Run-off outside each corner, from 30 m before the turn-in to 30 m after
  * the exit, as deep as the corner's escape paths are free (up to what they
  * need), tapering at the ends, and stopping short of water, the map edge,
- * other parts of the track and anywhere `blocked` says (another road: the
- * rest of the circuit round a layout).
+ * other parts of the track, anywhere `blocked` says (another road: the rest
+ * of the circuit round a layout) and ground too steep for it (`RUNOFF_GRADE`).
+ * Along the track the depth changes by at most a metre a metre, so where
+ * one stretch stops short the area's edge tapers to it.
  */
 export function runoffAreas(
   t: Track, corners: readonly Corner[], rays: readonly RunoffRay[], earth: Earthworks, index: TrackIndex, blocked?: (x: number, y: number) => boolean,
@@ -249,28 +266,71 @@ export function runoffAreas(
       const want = depth * (0.15 + 0.85 * w * w * (3 - 2 * w));
       const f = frame(t, k);
       const e = t.width[k] / 2 + VERGE;
+      const ex = f.x + f.lx * side * e;
+      const ey = f.y + f.ly * side * e;
+      const edge = earth.height(ex, ey);
+      // The natural ground every 2 m out, for its steepness over the last RUNOFF_RUN metres.
+      const natural: number[] = [earth.natural(ex, ey)];
+      const back = RUNOFF_RUN / 2;
       let d = 0;
       for (; d < want; d += 2) {
         const x = f.x + f.lx * side * (e + d);
         const y = f.y + f.ly * side * (e + d);
         if (x < 5 || y < 5 || x > hm.extent - 5 || y > hm.extent - 5) break;
-        if (earth.natural(x, y) < hm.waterLevel) break;
+        const ground = earth.natural(x, y);
+        if (ground < hm.waterLevel) break;
         const other = index.nearest(x, y, 40, (j) => index.near(j, k, local));
         if (other && other.d < t.width[other.k] / 2 + VERGE + 3) break;
         if (blocked?.(x, y)) break;
+        // Not up or down a hillside, nor up a deep cutting's bank.
+        const step = d / 2;
+        natural[step] = ground;
+        if (step < back ? Math.abs(ground - natural[0]) > RUNOFF_RISE + RUNOFF_GRADE * d : Math.abs(ground - natural[step - back]) > RUNOFF_GRADE * RUNOFF_RUN) break;
+        if (earth.height(x, y) - edge > RUNOFF_BANK + RUNOFF_GRADE * d) break;
       }
       return Math.max(0, Math.min(d, want));
     });
+    // A metre deeper or shallower at most for each metre along, both ways round.
+    for (let i = 1; i < depths.length; i++) depths[i] = Math.min(depths[i], depths[i - 1] + t.ds);
+    for (let i = depths.length - 2; i >= 0; i--) depths[i] = Math.min(depths[i], depths[i + 1] + t.ds);
+    if (Math.max(...depths) < 5) continue;
     out.push({ corner: c.number, side, stations, depth: depths, asphalt: required >= ASPHALT_RUNOFF });
   }
   return out;
 }
 
-/** The run-off surfaces, laid over the shaped ground with a point about every 3 m across, a little above it. */
+/** Points over the run-off areas about every `spacing` metres, out to their far edge: where the ground needs full detail under them. */
+export function runoffPoints(t: Track, areas: readonly RunoffArea[], spacing = 8): { x: number[]; y: number[] } {
+  const x: number[] = [];
+  const y: number[] = [];
+  const every = Math.max(1, Math.round(spacing / t.ds));
+  for (const a of areas) {
+    a.stations.forEach((k, i) => {
+      if (i % every !== 0 && i !== a.stations.length - 1) return;
+      const f = frame(t, k);
+      const e = t.width[k] / 2 + VERGE;
+      const depth = a.depth[i];
+      const steps = Math.ceil(depth / spacing);
+      for (let s = 0; s <= steps; s++) {
+        const d = Math.min(depth, s * spacing);
+        x.push(f.x + f.lx * a.side * (e + d));
+        y.push(f.y + f.ly * a.side * (e + d));
+      }
+    });
+  }
+  return { x, y };
+}
+
+/**
+ * The run-off surfaces, laid over the shaped ground with a point about every
+ * 2 m across (as fine as the ground under them), 0.3 m above it and easing
+ * down to it over the last 2 m, so the ground does not show through and the
+ * far edge does not stand proud.
+ */
 export function buildRunoff(t: Track, areas: readonly RunoffArea[], earth: Earthworks): MeshData {
   const mb = new MeshBuilder();
   for (const a of areas) {
-    const J = Math.max(2, Math.ceil(Math.max(...a.depth) / 3));
+    const J = Math.max(2, Math.ceil(Math.max(...a.depth) / 2));
     // Fast corners: asphalt for the first 25 m, gravel beyond.
     const colorAt = (d: number) => (a.asphalt && d <= ASPHALT_BAND ? RUNOFF_ASPHALT : GRAVEL);
     const rowStart: number[] = [];
@@ -289,8 +349,9 @@ export function buildRunoff(t: Track, areas: readonly RunoffArea[], earth: Earth
         // The ground eases up from under the road over the first 2 m beyond the verge: start level with
         // the verge's edge and rise to just above the ground there.
         const ease = Math.max(0, 1 - d / 2);
+        const far = Math.min(1, (a.depth[i] - d) / 2);
         const floor = earth.height(x, y) + SINK * ease;
-        mb.vertex(x, floor + 0.2 * (1 - ease), y, nx, ny, nz, colorAt(d), floor);
+        mb.vertex(x, floor + RUNOFF_LIFT * (1 - ease) * Math.max(0, far), y, nx, ny, nz, colorAt(d), floor);
       }
     });
     for (let i = 0; i + 1 < a.stations.length; i++) {

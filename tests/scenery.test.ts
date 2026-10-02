@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { assessLicence } from '../src/core/licence.ts';
-import { Earthworks, type MeshData, VERGE, anchoredHeight, pitRoad, trackRoad } from '../src/core/scene3d.ts';
+import { Earthworks, MIN_CELL, type MeshData, VERGE, anchoredHeight, pitRoad, terrainLeaves, trackRoad } from '../src/core/scene3d.ts';
 import {
   KERB_WIDTH, PAD_HALF, TrackIndex, buildGrandstands, buildGridMarks, buildKerbs, buildMarshalPosts, buildPitBuilding, buildRunoff, forest, inside, kerbRuns, lineFlagSite,
-  marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffTest, treesInSight,
+  marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffPoints, runoffTest, treesInSight,
 } from '../src/core/scenery.ts';
 import { clearView, flyoverPose, hotLapPose, trackShots } from '../src/core/shots.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
-import { flatMap } from './helpers.ts';
+import { flatMap, makeHeightmap } from './helpers.ts';
 import { facilities, metrics, performance, track as t } from './raceFixture.ts';
 
 // The fixture is a big rectangle of right-hand corners on flat ground at 100 m.
@@ -89,16 +89,17 @@ describe('run-off', () => {
       expect(Math.max(...a.depth)).toBeLessThanOrEqual(room + 1e-9);
     }
     // Nearly flat on flat ground: from the verge's edge (which falls away from the track) a few
-    // centimetres up onto the ground, then just above it.
+    // centimetres up onto the ground (the 9 cm bank there, at the cutting's slope, makes the
+    // steepest sliver), then just above it.
     const mesh = buildRunoff(t, areas, earth);
-    for (const f of normals(mesh)) expect(f.ny).toBeGreaterThan(0.95);
+    for (const f of normals(mesh)) expect(f.ny).toBeGreaterThan(0.9);
     for (let v = 0; v < mesh.positions.length / 3; v++) {
       expect(mesh.positions[v * 3 + 1]).toBeGreaterThan(100 - VERGE * 0.03 - 1e-9);
-      expect(mesh.positions[v * 3 + 1]).toBeLessThan(100.2 + 1e-9);
-      // However tall the relief is drawn, it stays at most 0.2 m over the ground.
+      expect(mesh.positions[v * 3 + 1]).toBeLessThan(100.3 + 1e-4);
+      // However tall the relief is drawn, it stays at most 0.3 m over the ground.
       const lift = mesh.positions[v * 3 + 1] - mesh.anchors![v];
       expect(lift).toBeGreaterThanOrEqual(-1e-4);
-      expect(lift).toBeLessThan(0.2 + 1e-4);
+      expect(lift).toBeLessThan(0.3 + 1e-4);
     }
   });
 
@@ -110,6 +111,75 @@ describe('run-off', () => {
     expect(test(...at(t.width[c.apex] / 2 + VERGE + 5), 0)).toBe(true);
     // Inside the corner there is none.
     expect(test(...at(-(t.width[c.apex] / 2 + VERGE + 5)), 0)).toBe(false);
+  });
+
+  // The same corners on other ground: the track stays at 100 m, the ground round it is `fn` (x, metres outside the
+  // rectangle the track's centreline spans).
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let k = 0; k < t.n; k++) {
+    minX = Math.min(minX, t.x[k]);
+    maxX = Math.max(maxX, t.x[k]);
+    minY = Math.min(minY, t.y[k]);
+    maxY = Math.max(maxY, t.y[k]);
+  }
+  const outside = (x: number, y: number) => Math.hypot(Math.max(minX - x, 0, x - maxX), Math.max(minY - y, 0, y - maxY));
+  const on = (fn: (out: number) => number) => {
+    const ground = new Earthworks(makeHeightmap((x, y) => fn(outside(x, y))), roads);
+    const found = runoffAreas(t, metrics.corners, licence.runoff, ground, index);
+    for (const a of found) for (let i = 1; i < a.depth.length; i++) expect(Math.abs(a.depth[i] - a.depth[i - 1])).toBeLessThanOrEqual(t.ds + 1e-9);
+    return { ground, found };
+  };
+  const deepest = (fn: (out: number) => number) => Math.max(0, ...on(fn).found.flatMap((a) => a.depth));
+  /** How far the run-off reaches up or down the natural ground from the verge's edge. */
+  const climb = (fn: (out: number) => number) => {
+    const { ground, found } = on(fn);
+    let most = 0;
+    for (const a of found) {
+      a.stations.forEach((k, i) => {
+        const h = t.heading[k];
+        const at = (d: number) => ground.natural(t.x[k] + Math.sin(h) * d, t.y[k] - Math.cos(h) * d);
+        const e = t.width[k] / 2 + VERGE;
+        most = Math.max(most, Math.abs(at(e + a.depth[i]) - at(e)));
+      });
+    }
+    return most;
+  };
+  const flat = Math.max(...areas.flatMap((a) => a.depth));
+
+  it('stays off a hillside, up or down', () => {
+    // Rising and falling 40% from 14 m outside the rectangle: without the rule it would reach some 25 m up or down;
+    // with it a few metres, as the heightmap's 32 m cells soften the foot of the hill into a gradual rise.
+    expect(climb((o) => 100 + 0.4 * Math.max(0, o - 14))).toBeLessThan(8);
+    expect(climb((o) => 100 - 0.4 * Math.max(0, o - 14))).toBeLessThan(8);
+    expect(deepest((o) => 100 + 0.4 * Math.max(0, o - 14))).toBeLessThan(flat);
+    // A gentle slope is no reason to stop.
+    expect(deepest((o) => 100 + 0.1 * Math.max(0, o - 14))).toBeCloseTo(flat, 0);
+  });
+
+  it("follows the track's own embankment and a shallow cutting, but not a deep cutting", () => {
+    expect(deepest(() => 96)).toBeCloseTo(flat, 0);
+    expect(deepest(() => 102)).toBeCloseTo(flat, 0);
+    expect(deepest(() => 108)).toBeLessThan(12);
+  });
+
+  it('gives the ground under it full detail', () => {
+    const pts = runoffPoints(t, areas);
+    expect(pts.x.length).toBeGreaterThan(100);
+    const on = runoffTest(t, areas, index);
+    for (let i = 0; i < pts.x.length; i++) expect(on(pts.x[i], pts.y[i], 0.5)).toBe(true);
+    // Under the run-off the ground is as fine as beside the track; for the roads alone, some of it would be coarser.
+    const cell = (leaves: ReturnType<typeof terrainLeaves>, i: number) => {
+      const l = leaves.find((l) => pts.x[i] >= l.x0 && pts.x[i] < l.x0 + l.size && pts.y[i] >= l.y0 && pts.y[i] < l.y0 + l.size)!;
+      return l.size / l.cells;
+    };
+    const detailed = terrainLeaves(hm, roads, pts);
+    const coarse = terrainLeaves(hm, roads);
+    let finer = 0;
+    for (let i = 0; i < pts.x.length; i += 3) {
+      expect(cell(detailed, i)).toBe(MIN_CELL);
+      if (cell(coarse, i) > MIN_CELL) finer++;
+    }
+    expect(finer).toBeGreaterThan(0);
   });
 });
 
