@@ -125,10 +125,11 @@ describe('statistics', () => {
       if (c.lapsDone > 0) {
         expect(s[0].from).toBe(1);
         expect(s[s.length - 1].to).toBe(c.lapsDone);
-        // One stint more than stops that changed tyres, give or take a stop on the last lap.
+        // One stint more than stops that changed tyres, give or take a stop on the last lap, and a free change under each red flag.
         const changes = f1.stops.filter((x) => x.car === c.id && x.to !== null && Number.isFinite(x.exit)).length;
+        const reds = f1.neutral.filter((p) => p.kind === 'red').length;
         expect(s.length).toBeGreaterThanOrEqual(Math.min(changes, 1));
-        expect(s.length).toBeLessThanOrEqual(changes + 1);
+        expect(s.length).toBeLessThanOrEqual(changes + 1 + reds);
       }
     }
     expect(pitStops(f1).every((s, i, a) => i === 0 || s.stationary >= a[i - 1].stationary)).toBe(true);

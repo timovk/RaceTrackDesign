@@ -98,6 +98,8 @@ export interface RaceModel {
   grid: GridStart[];
   /** Number of the corner each station is in, or the next one within 400 m; 0 for none. */
   cornerAt: Int16Array;
+  /** Station where the first corner after the start line begins, or -1 when the analysis gave no corners. */
+  firstCorner: number;
   /** Aero trim the class runs here (from its qualifying lap), for telemetry. */
   trim: number;
   /** Telemetry: stations between samples and samples per lap. */
@@ -224,6 +226,7 @@ export function buildRaceModel(input: RaceModelInput): RaceModel {
     pit: pitModel(f, car, n),
     grid: gridStarts(track, line, input.gridSize),
     cornerAt: cornerLookup(n, track.ds, input.corners ?? []),
+    firstCorner: input.corners?.length ? Math.min(...input.corners.map((c) => c.start)) : -1,
     trim,
     teleEvery,
     samples: Math.ceil(n / teleEvery),

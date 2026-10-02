@@ -362,6 +362,15 @@ const RED_STOPPED = 0.02;
 const RED_RAIN = 0.85;
 const RED_RAIN_EASED = 0.5;
 const RED_LONGEST = 3600;
+/**
+ * A car closer than the following gap to the one ahead drops back at this
+ * share of that car's speed, so the gap opens over a second or two, and
+ * never comes closer to it than CLOSEST metres along the lap.
+ */
+const CLOSE_UP = 0.92;
+const CLOSEST = 0.5;
+/** On the run from the grid to the first corner, cars run at most this many abreast. */
+const ABREAST = 3;
 /** Cars queue at the pit exit this far apart (metres) behind the first, which stops this far short of the end of the speed limit. */
 const QUEUE_GAP = 8;
 const QUEUE_FRONT = 10;
@@ -468,7 +477,7 @@ export class RaceSim {
   protected sharedBoxes = true;
   protected trackOrder: RaceCar[] = [];
   private finishCount = 0;
-  /** Race progress of the first braking zone on lap 1; until then nobody is held up. */
+  /** Race progress of the first corner (or braking zone) on lap 1; until then cars run up to ABREAST wide. */
   private readonly firstZoneU: number;
   /** The side of the track the pit lane is on, as a left-normal sign. */
   readonly pitSide: number;
@@ -525,7 +534,8 @@ export class RaceSim {
     const pitToLine = m.pit ? mod(n - m.pit.entry, n) * this.ds : Infinity;
     this.scExit = pitToLine < 1500 ? m.pit!.entry : mod(n - Math.round(400 / this.ds), n);
 
-    this.firstZoneU = m.zones.length ? m.zones[0].station : Math.round(n / 4);
+    // Cars sort themselves into line at the first corner, or the first heavy braking before it.
+    this.firstZoneU = Math.min(m.zones.length ? m.zones[0].station : Math.round(n / 4), m.firstCorner >= 0 ? m.firstCorner : Infinity);
     this.pitSide = pitSide(m);
     this.cars = setup.entrants.map((e) => new RaceCar(e, this.classes[e.classIndex], m.samples, setup.settings.seed));
     for (const car of this.cars) car.cls.cars.push(car);
@@ -873,19 +883,28 @@ export class RaceSim {
     const N = order.length;
     // The gap grows with the speed of the car ahead (not the follower's own, which would feed back and make it surge and brake by turns).
     const gap = (v: number) => (this.phase === 'sc' ? 10 + 0.25 * v : 6 + 0.12 * v) / this.ds;
+    // A car already closer than that (as cars are when they reach the first corner side by side) drops back at a
+    // little under the speed of the one ahead rather than stopping dead behind it, never closer than CLOSEST.
+    // Cars move front to back, so `d` is to where the car ahead has already got to this step.
+    const behind = (d: number, v: number) => car.u + Math.max(d - gap(v), Math.min((CLOSE_UP * v * DT) / this.ds, d - CLOSEST / this.ds));
     let limit = Infinity;
+    let alongside = 0;
     for (let s = 1; s < Math.min(N, 6); s++) {
       const a = order[(car.trackIndex - s + N) % N];
-      if (a.status !== 'running' || !this.blocks(a, car)) continue;
+      if (a.status !== 'running') continue;
+      // On the run to the first corner a car may run beside (or pass) the next cars ahead, but no more than
+      // ABREAST wide: the car beyond those holds it up.
+      const full = this.beforeFirstZone(a, car) && ++alongside >= ABREAST;
+      if (!full && !this.blocks(a, car)) continue;
       const d = mod(a.u - car.u, this.n);
-      if (d * this.ds <= 250) limit = car.u + d - gap(a.v);
+      if (d * this.ds <= 250) limit = behind(d, a.v);
       break;
     }
     const sc = this.safetyCar;
     if (sc) {
       const d = mod(sc.u - car.u, this.n);
       const k = mod(Math.floor(sc.u), this.n);
-      if (d * this.ds <= 250) limit = Math.min(limit, car.u + d - gap(this.lineDs[k] / this.scSeg[k]));
+      if (d * this.ds <= 250) limit = Math.min(limit, behind(d, this.lineDs[k] / this.scSeg[k]));
     }
     // Forming up for a standing restart, or stopped on track under a red flag: no further than the car's slot.
     const slot = this.regrid?.slots.get(car.id);
@@ -896,15 +915,20 @@ export class RaceSim {
   /**
    * Whether `ahead` holds up `car`: not when it is off the track, on the pit
    * entry or exit road, or being passed, and not on the run from the grid to
-   * the first braking zone, where the field spreads across the track.
+   * the first corner, where the field runs up to ABREAST wide (see limitFor).
    */
   private blocks(ahead: RaceCar, car: RaceCar): boolean {
     if (ahead.offTrack || car.passing?.target === ahead) return false;
-    if (car.u < this.firstZoneU && ahead.u < this.firstZoneU) return false;
+    if (this.beforeFirstZone(ahead, car)) return false;
     if (ahead.exitUntilU > ahead.u) return false;
     const pit = ahead.model.pit;
     if (ahead.pitRequest && pit && mod(pit.entry - ahead.u, this.n) * this.ds < ENTRY_ROAD) return false;
     return true;
+  }
+
+  /** Both cars on the run from the grid to the first corner, free to run side by side. */
+  private beforeFirstZone(ahead: RaceCar, car: RaceCar): boolean {
+    return car.u < this.firstZoneU && ahead.u < this.firstZoneU;
   }
 
   protected movePit(car: RaceCar, budget: number, t: number): void {
@@ -2229,6 +2253,11 @@ export class RaceSim {
         continue;
       }
       let d = mod(car.u - def.u, this.n);
+      if (d > this.n / 2 && this.phase !== 'green') {
+        // The race is neutralised before the attacker got ahead: no passing now, it lines up behind again.
+        car.passing = null;
+        continue;
+      }
       if (d > this.n / 2) {
         if (car.u < pass.untilU) continue;
         // Out of road: put the attacker just ahead.

@@ -7,7 +7,7 @@ import { RaceSim } from '../src/core/race/sim.ts';
 import { planStrategy, popcount, tyreLoss } from '../src/core/race/strategy.ts';
 import { seededRandom } from '../src/core/rng.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
-import { calm, car, model, race } from './raceFixture.ts';
+import { calm, car, model, multiClass, race, track } from './raceFixture.ts';
 
 /** Finished, or out after contact in a failed pass (which calm rules do not switch off). */
 const finishedOrContact = (c: { status: string; retired: { reason: string } | null }) =>
@@ -231,6 +231,29 @@ describe('race', () => {
       expect(c.stops).toBeGreaterThanOrEqual(1);
       expect(c.fuel).toBeGreaterThan(0);
     }
+  });
+
+  it('files the field through the first corner without anyone stopping on the track', () => {
+    // A full WEC-style field: through the first corner side by side, then into line, slowing but never stopping.
+    const sim = multiClass([
+      { vehicle: car('hypercar'), cars: 20, rules: calm(car('hypercar')) },
+      { vehicle: car('lmp2'), cars: 12, rules: calm(car('lmp2')) },
+      { vehicle: car('gt3'), cars: 20, rules: calm(car('gt3')) },
+    ], { kind: 'time', minutes: 30 });
+    const metres = model(car('hypercar')).line.length / track.n;
+    let widest = 0;
+    while (sim.t < 60) {
+      sim.step();
+      const running = sim.cars.filter((c) => c.status === 'running' && c.startDelay <= sim.t);
+      for (const c of running) if (sim.t > 3) expect(c.v, `car ${c.id} at ${sim.t.toFixed(1)} s, ${(c.u * metres).toFixed(0)} m`).toBeGreaterThan(1);
+      const at = running.map((c) => c.u * metres).sort((a, b) => a - b);
+      for (let i = 0, j = 0; i < at.length; i++) {
+        while (at[i] - at[j] > 5) j++;
+        widest = Math.max(widest, i - j + 1);
+      }
+    }
+    // Never more than three abreast within a car's length.
+    expect(widest).toBeLessThanOrEqual(3);
   });
 
   it('times the gaps: the leader first, then growing gaps down the order', () => {
