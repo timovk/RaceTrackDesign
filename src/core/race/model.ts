@@ -52,6 +52,9 @@ export interface PitModel {
   boxTo: number;
   /** Time lost driving through without stopping, from the facilities analysis. */
   driveThroughLoss: number;
+  /** Width of the lane, and the side the garages are on (+1 left of the direction of travel). */
+  width: number;
+  side: 1 | -1;
 }
 
 export interface GridStart {
@@ -370,6 +373,8 @@ function pitModel(f: Facilities, car: VehicleClass, n: number): PitModel | null 
     boxFrom: cum[Math.min(m - 1, pit.boxStart)],
     boxTo: cum[Math.min(m - 1, pit.boxEnd)],
     driveThroughLoss: f.pitLoss.find((p) => p.vehicleId === car.id)?.loss ?? 20,
+    width: pit.width,
+    side: pit.side,
   };
 }
 

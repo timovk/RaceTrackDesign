@@ -34,6 +34,25 @@ export interface QualifyingEntry {
   time: number;
 }
 
+/** A practice or qualifying session run on track (see session.ts); the race has none. */
+export interface SessionSpec {
+  kind: 'practice' | 'qualifying';
+  /** "FP1", "Q2", "Hyperpole". */
+  name: string;
+  /** Length in seconds of session time. */
+  duration: number;
+  /** Entrant indices taking part; the others stay out of it. */
+  cars: number[];
+  /** For a crew: the driver who drives each car (index into its drivers), by entrant index; the fastest when missing. */
+  drivers?: Record<number, number>;
+  /** Whether the clock stops while the session is red-flagged. */
+  clockStops: boolean;
+  /** Practice: whether teams run their race simulations (long runs) in this session. */
+  longRuns?: boolean;
+  /** Qualifying: how many cars go through to the next stage (the rest are out), when there is one. */
+  advance?: number;
+}
+
 export interface RaceSetup {
   /** One model per class, fastest class first; an entrant's classIndex points here. */
   models: RaceModel[];
@@ -51,6 +70,16 @@ export interface RaceSetup {
   /** Seconds after which the leader's next crossing ends a race by laps. */
   timeLimit: number | null;
   weather: Weather;
+  /** A practice or qualifying session instead of the race. */
+  session?: SessionSpec;
+  /** Rubber on the racing line at the start, 0 (green) to 1 (fully rubbered in, the default). */
+  rubber?: number;
+  /**
+   * What each team believes about tyre wear, per entrant and compound: the
+   * believed wear as a share of the real one (1 when missing). Practice long
+   * runs bring it close to 1.
+   */
+  wearGuess?: number[][];
 }
 
 export const MAX_CARS = 60;
@@ -111,30 +140,61 @@ export function parseRaceSettings(raw: unknown, vehicleIds: readonly string[]): 
   };
 }
 
+/** The entry list of a race weekend: the classes fastest first, and every car. */
+export interface RaceField {
+  /** One model per class, fastest class first, with its entry from the settings. */
+  classes: { entry: RaceClassEntry; model: RaceModel }[];
+  entrants: Entrant[];
+  /** Entrant indices per class. */
+  byClass: number[][];
+}
+
 /**
- * Builds the field, qualifying, grid and weather. `models` holds one model
- * per entry of `settings.classes`, in the same order; classes are then
- * ordered fastest first.
+ * The classes ordered fastest first and the cars drawn from the seed.
+ * `models` holds one model per entry of `settings.classes`, in the same order.
  */
-export function createRaceSetup(models: RaceModel | readonly RaceModel[], settings: RaceSettings): RaceSetup {
+export function createField(models: RaceModel | readonly RaceModel[], settings: RaceSettings): RaceField {
   const given = Array.isArray(models) ? models : [models as RaceModel];
-  const order = settings.classes
+  const classes = settings.classes
     .map((c, i) => ({ entry: c, model: given[i] }))
     .filter((c) => c.model && c.entry.cars > 0)
     .sort((a, b) => a.model.qualifyingTime - b.model.qualifyingTime);
-  if (!order.length) throw new Error('A race needs at least one class with cars.');
-
+  if (!classes.length) throw new Error('A race needs at least one class with cars.');
   const ctx: FieldContext = { classIndex: 0, firstIndex: 0, firstTeam: 0, numbers: new Set(), codes: new Set(), teamWords: new Set() };
   const entrants: Entrant[] = [];
-  const qualifying: QualifyingEntry[][] = [];
-  const grid: number[] = [];
-  order.forEach(({ entry, model }, ci) => {
+  const byClass: number[][] = [];
+  classes.forEach(({ entry, model }, ci) => {
     ctx.classIndex = ci;
     ctx.firstIndex = entrants.length;
     ctx.firstTeam = entrants.length ? Math.max(...entrants.map((e) => e.teamIndex)) + 1 : 0;
     const field = generateField(model.rules, entry.cars, seededRandom(`${settings.seed}:field:${entry.vehicleId}`), ctx);
     entrants.push(...field);
-    const q = runQualifying(model, field, seededRandom(`${settings.seed}:qualifying${ci ? `:${entry.vehicleId}` : ''}`));
+    byClass.push(field.map((e) => e.index));
+  });
+  return { classes, entrants, byClass };
+}
+
+/** What a race weekend brings to the race: the qualifying result per class in grid order, the rubber laid down, what teams learnt of their tyres. */
+export interface WeekendOutcome {
+  qualifying?: (QualifyingEntry[] | undefined)[];
+  rubber?: number;
+  wearGuess?: number[][];
+}
+
+/**
+ * Builds the field, qualifying, grid and weather. `models` holds one model
+ * per entry of `settings.classes`, in the same order; classes are then
+ * ordered fastest first. Without a weekend (or one that skipped
+ * qualifying), qualifying is worked out from the lap-time model.
+ */
+export function createRaceSetup(models: RaceModel | readonly RaceModel[], settings: RaceSettings, weekend: WeekendOutcome = {}, field = createField(models, settings)): RaceSetup {
+  const order = field.classes;
+  const entrants = field.entrants;
+  const qualifying: QualifyingEntry[][] = [];
+  const grid: number[] = [];
+  order.forEach(({ entry, model }, ci) => {
+    const cars = field.byClass[ci].map((i) => entrants[i]);
+    const q = weekend.qualifying?.[ci] ?? runQualifying(model, cars, seededRandom(`${settings.seed}:qualifying${ci ? `:${entry.vehicleId}` : ''}`));
     qualifying.push(q);
     let slots = q.map((x) => x.car);
     if (settings.grid === 'reversed') slots = slots.reverse();
@@ -157,6 +217,8 @@ export function createRaceSetup(models: RaceModel | readonly RaceModel[], settin
     duration,
     timeLimit: settings.kind === 'laps' ? lead.rules.race.timeLimit : null,
     weather: buildWeather(settings.weather, settings.seed, expected),
+    rubber: weekend.rubber,
+    wearGuess: weekend.wearGuess,
   };
 }
 

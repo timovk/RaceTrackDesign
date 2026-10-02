@@ -141,7 +141,8 @@ describe('race control', () => {
     let queues = 0;
     const sim = watch(start(car('f1'), { laps: 25, cars: 16, seed: '5' }, risky('f1')), (s) => {
       const sc = s.safetyCar;
-      if (!sc?.in) return;
+      // (After a red flag it leads the field out of the pit lane, which takes a while to close up.)
+      if (!sc?.in || s.neutral[s.neutral.length - 1]?.reason.startsWith('restart')) return;
       // When the safety car is about to come in, the cars behind it form a queue a few car lengths apart.
       const n = s.model.n;
       const ds = s.model.track.ds;

@@ -33,7 +33,7 @@ const TABS: { tab: DockTab; label: string }[] = [
   { tab: 'conditions', label: 'Conditions' },
   { tab: 'stats', label: 'Statistics' },
 ];
-const NEUTRAL_FILL: Record<'sc' | 'vsc' | 'fcy', string> = { sc: 'rgba(255,176,32,0.16)', vsc: 'rgba(255,214,10,0.1)', fcy: 'rgba(255,214,10,0.1)' };
+const NEUTRAL_FILL: Record<'sc' | 'vsc' | 'fcy' | 'red', string> = { sc: 'rgba(255,176,32,0.16)', vsc: 'rgba(255,214,10,0.1)', fcy: 'rgba(255,214,10,0.1)', red: 'rgba(255,69,58,0.18)' };
 const TYRE_FILL = ['rgba(208,212,218,0.55)', 'rgba(57,181,74,0.65)', 'rgba(10,132,255,0.7)'];
 const HEIGHT_KEY = 'racetrackdesign.dock';
 const DEFAULT_HEIGHT = 380;

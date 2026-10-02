@@ -152,7 +152,7 @@ export function lapAtTime(sim: RaceSim, t: number): number {
   return times.length + (t - times[times.length - 1]) / Math.max(1e-9, last);
 }
 
-/** Periods under a safety car, VSC or full course yellow, as leader laps (fractional). */
-export function neutralLaps(sim: RaceSim): { kind: 'sc' | 'vsc' | 'fcy'; from: number; to: number }[] {
+/** Periods under a safety car, VSC or full course yellow, or stopped by a red flag, as leader laps (fractional). */
+export function neutralLaps(sim: RaceSim): { kind: 'sc' | 'vsc' | 'fcy' | 'red'; from: number; to: number }[] {
   return sim.neutral.map((p) => ({ kind: p.kind, from: lapAtTime(sim, p.from), to: lapAtTime(sim, Number.isNaN(p.to) ? sim.t : p.to) }));
 }

@@ -50,6 +50,81 @@ export interface RaceRules {
   flags: { safetyCar: boolean; virtual: 'vsc' | 'fcy' | null; vscSlower: number; fcySpeed: number };
   /** Average wheel energy (J/m) and tyre work per metre on the reference circuits; 0 when unknown. */
   reference: { energy: number; tyreWork: number };
+  /** The race weekend: practice, qualifying, red flags, and how much quicker the track gets as it rubbers in. */
+  weekend: WeekendRules;
+}
+
+export interface PracticeSession {
+  name: string;
+  minutes: number;
+  /** Day of the weekend (1 = the first); the track loses some rubber overnight. */
+  day: number;
+  /** Teams run their race simulations (long runs on race fuel) in this session. */
+  longRuns: boolean;
+}
+
+/**
+ * Where the cars of a qualifying stage come from: a result so far (a stage
+ * by name, or "practice": the best laps over the practice sessions listed,
+ * 1-based, or all of them), and which of its cars: the best `count`, the
+ * rest after them, or every other car (odd or even places, for groups).
+ */
+export interface StageSource {
+  from: string;
+  take: 'top' | 'rest' | 'odd' | 'even';
+  count: number;
+  practice?: number[];
+}
+
+/** One stage of qualifying: a session and who takes part (everyone when `entry` is empty). */
+export interface QualifyingStage {
+  name: string;
+  minutes: number;
+  entry: StageSource[];
+  /** For crews: the driver who drives (0 = the fastest); missing for the team's choice (the fastest). */
+  driver?: number;
+}
+
+export interface WeekendRules {
+  practice: PracticeSession[];
+  qualifyingDay: number;
+  /**
+   * Qualifying stages in the order they run. A car's grid place comes from
+   * the last stage it took part in (later stages in front; stages run side
+   * by side as groups share their places in turn), or, with `average`, from
+   * the mean of its best laps over the stages.
+   */
+  qualifying: QualifyingStage[];
+  /** Knockout counts are for this many cars; with more or fewer, as many go out at each step, the last stage keeping its size. */
+  knockout: boolean;
+  average: boolean;
+  /** Lap-time fraction a green track gives away against one fully rubbered in. */
+  evolution: number;
+  redFlag: RedFlagRules;
+}
+
+export interface RedFlagRules {
+  /** Where the cars wait: queued at the pit exit, or stopped in single file on track before the line. */
+  stopAt: 'pitlane' | 'track';
+  /** Whether the time a race is stopped is added to its time limit (or duration). */
+  raceClockStops: boolean;
+  /** How the race resumes: a standing start from the grid, or behind the safety car (rolling, also always on a wet track with `rollingWhenWet`). */
+  restart: 'standing' | 'rolling';
+  rollingWhenWet: boolean;
+  /** Whether the tyres may be changed while the race is stopped. */
+  work: boolean;
+  /** A race not resumed is classified this many laps before the lap the red flag came out on. */
+  resultLapsBack: number;
+  /** Share of the distance after which a stopped race is over rather than restarted (bikes), or null. */
+  completeAt: number | null;
+  /** Whether rain alone can stop the race (bikes race on, changing bikes). */
+  rain: boolean;
+  /** Shortest and longest a race stays stopped while the track is cleared, seconds. */
+  clear: [number, number];
+  /** Whether a session's clock stops while it is red-flagged. */
+  sessionClockStops: { practice: boolean; qualifying: boolean };
+  /** What a car that brings out a red flag in qualifying loses: nothing, its best lap, its two best, or every time. */
+  qualifyingPenalty: 'none' | 'best' | 'best2' | 'all';
 }
 
 const TYRE_TYPES: readonly TyreType[] = ['slick', 'inter', 'wet'];
@@ -164,7 +239,83 @@ export function parseRaceRules(raw: unknown, vehicle: Pick<VehicleClass, 'id' | 
       energy: num(ref, 'energyMJPerKm', 0, 0, 1000) * 1000,
       tyreWork: num(ref, 'tyreWork', 0, 0, 1000),
     },
+    weekend: parseWeekend(group('weekend'), where, num, bool),
   };
+}
+
+type Num = (g: Json, key: string, fallback: number, min: number, max: number) => number;
+type Bool = (g: Json, key: string, fallback: boolean) => boolean;
+
+/**
+ * The weekend group: practice sessions, the qualifying stages, track
+ * evolution and the red-flag rules. Defaults: two hours of practice on the
+ * first day, one qualifying session on the second, the race resuming behind
+ * the safety car.
+ */
+function parseWeekend(w: Json, where: string, num: Num, bool: Bool): WeekendRules {
+  const practiceRaw = Array.isArray(w.practice) ? w.practice : [{ name: 'Practice 1', minutes: 60 }, { name: 'Practice 2', minutes: 60, longRuns: true }];
+  const practice = practiceRaw.map((p, i): PracticeSession => {
+    const g = isObject(p) ? p : {};
+    return {
+      name: typeof g.name === 'string' && g.name.trim() ? g.name.trim() : `Practice ${i + 1}`,
+      minutes: num(g, 'minutes', 60, 5, 600),
+      day: Math.round(num(g, 'day', 1, 1, 7)),
+      longRuns: bool(g, 'longRuns', practiceRaw.length === 1),
+    };
+  });
+  const stagesRaw = Array.isArray(w.qualifying) && w.qualifying.length ? w.qualifying : [{ name: 'Qualifying', minutes: 30 }];
+  const names = new Set<string>(['practice']);
+  const stages = stagesRaw.map((s, i): QualifyingStage => {
+    const g = isObject(s) ? s : {};
+    const name = typeof g.name === 'string' && g.name.trim() ? g.name.trim() : `Q${i + 1}`;
+    if (names.has(name)) throw new Error(`${where}: qualifying stage "${name}" is named twice.`);
+    const entry = (Array.isArray(g.entry) ? g.entry : []).map((e): StageSource => {
+      const x = isObject(e) ? e : {};
+      if (typeof x.from !== 'string' || !names.has(x.from)) throw new Error(`${where}: qualifying stage "${name}" takes cars from a result that does not come before it.`);
+      const take = x.take === 'rest' || x.take === 'odd' || x.take === 'even' ? x.take : 'top';
+      const practiceList = Array.isArray(x.practice) ? x.practice.filter((v): v is number => typeof v === 'number' && v >= 1 && v <= practice.length) : undefined;
+      return { from: x.from, take, count: Math.round(num(x, 'count', 10, 0, 80)), practice: practiceList };
+    });
+    names.add(name);
+    return { name, minutes: num(g, 'minutes', 15, 3, 240), entry, driver: g.driver === undefined ? undefined : Math.round(num(g, 'driver', 0, 0, 3)) };
+  });
+  const red = isObject(w.redFlag) ? w.redFlag : {};
+  const penalty = red.qualifyingPenalty;
+  const lastDay = Math.max(1, ...practice.map((p) => p.day));
+  return {
+    practice,
+    qualifyingDay: Math.round(num(w, 'qualifyingDay', lastDay + (practice.length > 1 ? 0 : 1), 1, 7)),
+    qualifying: stages,
+    knockout: bool(w, 'knockout', false),
+    average: bool(w, 'averageTimes', false),
+    evolution: num(w, 'evolutionPct', 1, 0, 10) / 100,
+    redFlag: {
+      stopAt: red.stopAt === 'track' ? 'track' : 'pitlane',
+      raceClockStops: bool(red, 'raceClockStops', false),
+      restart: red.restart === 'standing' ? 'standing' : 'rolling',
+      rollingWhenWet: bool(red, 'rollingWhenWet', false),
+      work: bool(red, 'work', true),
+      resultLapsBack: Math.round(num(red, 'resultLapsBack', 2, 0, 5)),
+      completeAt: red.completeAtPct === undefined ? null : num(red, 'completeAtPct', 75, 1, 100) / 100,
+      rain: bool(red, 'rain', true),
+      clear: clearTimes(red, where),
+      sessionClockStops: {
+        practice: bool(red, 'practiceClockStops', false),
+        qualifying: bool(red, 'qualifyingClockStops', true),
+      },
+      qualifyingPenalty: penalty === 'best' || penalty === 'best2' || penalty === 'all' ? penalty : 'none',
+    },
+  };
+}
+
+/** The clearing-up time of a stopped race: [shortest, longest] minutes in the file, 15 to 40 by default. */
+function clearTimes(red: Json, where: string): [number, number] {
+  const v = red.clearMinutes;
+  if (v === undefined) return [900, 2400];
+  if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === 'number' && x >= 1 && x <= 180) || v[0] > v[1]) {
+    throw new Error(`${where}: "clearMinutes" must be [shortest, longest], 1 to 180 minutes.`);
+  }
+  return [v[0] * 60, v[1] * 60];
 }
 
 const FILE = isObject(data) && isObject((data as Json).classes) ? ((data as Json).classes as Json) : {};

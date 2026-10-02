@@ -38,6 +38,8 @@ export interface StrategyInput {
   used: number;
   stopsDone: number;
   canStop: boolean;
+  /** The wear the team believes in, per compound, as a share of the real wear (1 when missing): see practice long runs. */
+  wearGuess?: readonly number[];
 }
 
 /** Lap-time fraction lost on a set with this much wear (1 = the end of its life). */
@@ -87,7 +89,7 @@ export function planStrategy(input: StrategyInput, rng?: () => number, margin = 
   // Cost of a stint of L laps (index L) on compound c from wear w0.
   const stintCosts = (c: number, w0: number): Float64Array => {
     const out = new Float64Array(N + 1);
-    const wpl = wearPerLap(model, c, input.tyreFactor);
+    const wpl = wearPerLap(model, c, input.tyreFactor) * (input.wearGuess?.[c] ?? 1);
     for (let L = 1; L <= N; L++) out[L] = out[L - 1] + (compounds[c].offset + tyreLoss(compounds[c], w0 + (L - 0.5) * wpl)) * lap;
     return out;
   };
@@ -95,7 +97,7 @@ export function planStrategy(input: StrategyInput, rng?: () => number, margin = 
   const pitsAllowed = input.canStop && !!model.pit && model.rules.pit.stops;
   // Stints far past the end of a tyre's life are never worth it; skipping them keeps the programme small.
   const maxLen = (c: number, w0: number) =>
-    pitsAllowed ? Math.max(1, Math.min(N, Math.floor((MAX_WEAR - w0) / Math.max(1e-6, wearPerLap(model, c, input.tyreFactor))))) : N;
+    pitsAllowed ? Math.max(1, Math.min(N, Math.floor((MAX_WEAR - w0) / Math.max(1e-6, wearPerLap(model, c, input.tyreFactor) * (input.wearGuess?.[c] ?? 1))))) : N;
   const freshMax = compounds.map((_, c) => maxLen(c, 0));
   const needTwo = pitsAllowed && needsSecondCompound(model.rules, input.used, true);
   const minStops = pitsAllowed ? Math.max(0, model.rules.pit.minStops - input.stopsDone) : 0;
@@ -192,19 +194,19 @@ export function planStrategy(input: StrategyInput, rng?: () => number, margin = 
  * over that stint that does not go far past the end of its life, or an
  * unused one when the two-compound rule still needs it.
  */
-export function pickCompound(model: RaceModel, laps: number, tyreFactor: number, used: number, lastSet: boolean): number {
+export function pickCompound(model: RaceModel, laps: number, tyreFactor: number, used: number, lastSet: boolean, guess?: readonly number[]): number {
   const compounds = model.rules.tyres.compounds;
   const dry = compounds.map((_, c) => c).filter((c) => compounds[c].type === 'slick');
   if (needsSecondCompound(model.rules, used) && lastSet) {
     let best = -1;
     for (const c of dry) {
       if (used & (1 << c)) continue;
-      if (best < 0 || stintAverage(model, c, laps, tyreFactor) < stintAverage(model, best, laps, tyreFactor)) best = c;
+      if (best < 0 || stintAverage(model, c, laps, tyreFactor, guess) < stintAverage(model, best, laps, tyreFactor, guess)) best = c;
     }
     if (best >= 0) return best;
   }
   let best = dry[0];
-  for (const c of dry) if (stintAverage(model, c, laps, tyreFactor) < stintAverage(model, best, laps, tyreFactor)) best = c;
+  for (const c of dry) if (stintAverage(model, c, laps, tyreFactor, guess) < stintAverage(model, best, laps, tyreFactor, guess)) best = c;
   return best;
 }
 
@@ -236,9 +238,9 @@ export function tyreTypes(rules: RaceRules): TyreType[] {
   return [...new Set(rules.tyres.compounds.map((c) => c.type))];
 }
 
-function stintAverage(model: RaceModel, c: number, laps: number, tyreFactor: number): number {
+function stintAverage(model: RaceModel, c: number, laps: number, tyreFactor: number, guess?: readonly number[]): number {
   const comp = model.rules.tyres.compounds[c];
-  const wpl = wearPerLap(model, c, tyreFactor);
+  const wpl = wearPerLap(model, c, tyreFactor) * (guess?.[c] ?? 1);
   const L = Math.max(1, Math.round(laps));
   let sum = 0;
   for (let i = 0; i < L; i++) sum += comp.offset + tyreLoss(comp, (i + 0.5) * wpl);
