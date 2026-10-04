@@ -90,6 +90,7 @@ public/
   surveys/           each surveyed terrain's packed heights and woods
   sky/, textures/    the photographed sky and surface textures
 docs/CALIBRATION.md  generated calibration report
+docs/ROADMAP.md      what is decided and waiting, and what was proposed
 tests/             Vitest suites for core, including calibration against real laps
 scripts/           benchmarks and the calibration script (Node)
 ```

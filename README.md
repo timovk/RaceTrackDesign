@@ -28,6 +28,8 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | G3 | Graphics, phase 3: card trees with leaves and needles in two levels of detail, guardrail, tyre walls and catch fencing round the track | **done** |
 | T1 | Templates: real circuits to open and change, on surveyed ground with its real woods; the first is Bremgarten 1954 | **done** |
 
+What comes next, and what was proposed and never decided, is in [docs/ROADMAP.md](docs/ROADMAP.md).
+
 ## Running it
 
 Requires Node 22.18 or newer (the benchmark script runs TypeScript directly).
