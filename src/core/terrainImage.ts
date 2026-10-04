@@ -1,9 +1,10 @@
 /**
  * Turns a heightmap into two RGBA images of the same size: a base layer
- * (elevation colours, hillshade, water) and a transparent contour layer that
- * the map view can switch on and off without re-rendering the base.
+ * (elevation colours, hillshade, water, and the woods of a surveyed map) and
+ * a transparent contour layer that the map view can switch on and off
+ * without re-rendering the base.
  */
-import type { Heightmap } from './heightmap.ts';
+import { type Heightmap, inWoods } from './heightmap.ts';
 
 export interface TerrainImages {
   base: Uint8ClampedArray;
@@ -26,6 +27,9 @@ export const RAMP_MIN_RANGE = 120;
 export const ROCK = [138, 128, 116];
 const WATER_SHALLOW = [86, 140, 186];
 const WATER_DEEP = [29, 79, 128];
+/** Woods of a surveyed map: this colour, mixed into the ground by this share. */
+const WOODS = [52, 96, 58];
+const WOODS_SHARE = 0.6;
 const CONTOUR_STEPS = [0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200];
 
 export function contourInterval(range: number): number {
@@ -108,6 +112,11 @@ export function renderTerrain(hm: Heightmap): TerrainImages {
       r += (ROCK[0] - r) * rock;
       g += (ROCK[1] - g) * rock;
       b += (ROCK[2] - b) * rock;
+      if (hm.woods && inWoods(hm, (i + 0.5) * hm.cellSize, (j + 0.5) * hm.cellSize)) {
+        r += (WOODS[0] - r) * WOODS_SHARE;
+        g += (WOODS[1] - g) * WOODS_SHARE;
+        b += (WOODS[2] - b) * WOODS_SHARE;
+      }
       base[o] = r * light;
       base[o + 1] = g * light;
       base[o + 2] = b * light;

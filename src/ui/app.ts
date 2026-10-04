@@ -1,6 +1,7 @@
 /** Assembles the sidebar (header, mode tabs, panels), the map and the profile, and wires keyboard shortcuts. */
 import { newProject, parseProject } from '../core/project.ts';
 import { randomSeedString } from '../core/rng.ts';
+import { TEMPLATES, type Template, templateProject } from '../core/templates.ts';
 import { h, isTyping } from './dom.ts';
 import { download, slug } from './download.ts';
 import { MapView } from './mapView.ts';
@@ -66,6 +67,31 @@ export function mountApp(root: HTMLElement, store: Store): void {
     store.setMode('terrain');
   }
 
+  // Circuits shipped with the app: a list under the header, closed by a pick, Escape or a click elsewhere.
+  const templates = h('div', { class: 'template-menu', hidden: true },
+    ...TEMPLATES.map((t) => h('button', { class: 'template', onclick: () => openTemplate(t) },
+      h('strong', null, t.name), h('span', null, t.summary))));
+  const templatesButton = h('button', {
+    class: 'btn small', title: 'Circuits that come with the app', 'aria-haspopup': 'true',
+    onclick: () => showTemplates(templates.hidden !== false),
+  }, 'Templates');
+
+  function showTemplates(on: boolean): void {
+    templates.hidden = !on;
+    templatesButton.classList.toggle('on', on);
+  }
+
+  function openTemplate(t: Template): void {
+    showTemplates(false);
+    if (store.design.points.length && !confirm(`Open "${t.name}"? Save first if you want to keep the current project.`)) return;
+    try {
+      store.loadProject(templateProject(t));
+      store.setMode('design');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   const tabs = MODES.map(({ mode, label }, i) =>
     h('button', { class: 'tab', onclick: () => store.setMode(mode) }, h('span', { class: 'tab-num' }, String(i + 1)), label));
 
@@ -74,13 +100,14 @@ export function mountApp(root: HTMLElement, store: Store): void {
       h('div', { class: 'brand-row' },
         h('div', { class: 'logo', 'aria-hidden': 'true' }),
         h('span', { class: 'brand-name' }, 'RaceTrackDesign'),
-        h('div', { class: 'brand-actions' }, undo, redo)),
+        h('div', { class: 'brand-actions' }, templatesButton, undo, redo)),
       h('div', { class: 'brand-row' },
         name,
         h('button', { class: 'btn small', onclick: newFile }, 'New'),
         h('button', { class: 'btn small', onclick: () => fileInput.click() }, 'Open'),
         h('button', { class: 'btn small', onclick: saveFile }, 'Save'),
-        fileInput)),
+        fileInput),
+      templates),
     h('nav', { class: 'tabs' }, ...tabs),
     h('div', { class: 'panel-scroll' }, ...Object.values(panels)),
   );
@@ -104,7 +131,15 @@ export function mountApp(root: HTMLElement, store: Store): void {
   store.subscribe(update);
   update(new Set<Topic>(['mode', 'project', 'history']));
 
+  window.addEventListener('pointerdown', (e) => {
+    if (!templates.hidden && !templates.contains(e.target as Node) && e.target !== templatesButton) showTemplates(false);
+  });
+
   window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !templates.hidden) {
+      showTemplates(false);
+      return;
+    }
     if (isTyping(e)) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();

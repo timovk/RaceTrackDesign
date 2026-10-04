@@ -47,7 +47,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { COLORS, Earthworks, type MeshData, type Road, VERGE, anchoredHeight, buildRoads, buildSides, buildTerrain, pitRoad, startLine, trackRoad } from '../core/scene3d.ts';
 import {
   type Footprint, type PostSite, type RunoffArea, TrackIndex, type Trees, buildGrandstands, buildGridMarks, buildKerbs, buildMarshalPosts, buildPitBuilding, buildRunoff,
-  forest, inside, kerbRuns, lineFlagSite, marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffPoints, runoffTest, treesInSight,
+  forest, inside, kerbRuns, lineFlagSite, marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffPoints, runoffTest, TREES_NEAR, treesInSight,
 } from '../core/scenery.ts';
 import { type Pose, type Shot, type ShotInput, type Vec3, flyoverDuration, flyoverPose, hotLapPose, trackShots } from '../core/shots.ts';
 import { type BarrierRun, barrierRuns, buildBarriers, buildFences, insideBarriers } from '../core/barriers.ts';
@@ -772,7 +772,10 @@ export class View3D {
       this.add('posts', new THREE.Mesh(geometry(buildMarshalPosts(sites)), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 })));
     }
     this.placeMarshals();
-    this.trees = placeTrees(earth, this.forestFor(hm), (x, y) => (onRunoff?.(x, y, 10) ?? false) || footprints.some((f) => inside(f, x, y, 8)));
+    this.trees = placeTrees(
+      earth, this.forestFor(hm), (x, y) => (onRunoff?.(x, y, 10) ?? false) || footprints.some((f) => inside(f, x, y, 8)),
+      index ? (x, y) => index.nearest(x, y, TREES_NEAR) !== null : undefined,
+    );
     this.buildTrees();
     this.buildLabels(t);
 

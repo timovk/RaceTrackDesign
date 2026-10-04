@@ -41,6 +41,8 @@ export interface TerrainSettings extends TerrainShape {
   mapSize: number;
   /** Samples per side. */
   resolution: number;
+  /** A surveyed terrain (core/survey.ts) used in place of the generated one; the seed and the shape then play no part. */
+  survey?: string;
 }
 
 export const PRESET_SHAPES: Record<TerrainPreset, TerrainShape> = {

@@ -1,6 +1,7 @@
 /**
- * Runs terrain generation in a Web Worker. A new request while one is still
- * running terminates the old worker, so the latest settings always win.
+ * Runs terrain generation (or the reading of a surveyed terrain) in a Web
+ * Worker. A new request while one is still running terminates the old worker,
+ * so the latest settings always win.
  */
 import type { Heightmap } from '../core/heightmap.ts';
 import type { TerrainSettings } from '../core/terrain.ts';
@@ -49,7 +50,8 @@ export class TerrainClient {
         this.inFlight = null;
         reject(new Error(event.message || 'Terrain worker failed.'));
       };
-      worker.postMessage({ id, settings });
+      // Surveyed terrain is read from files beside the page; a worker's own address is elsewhere.
+      worker.postMessage({ id, settings, base: document.baseURI });
     });
   }
 }

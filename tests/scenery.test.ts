@@ -3,7 +3,7 @@ import { assessLicence } from '../src/core/licence.ts';
 import { Earthworks, MIN_CELL, type MeshData, VERGE, anchoredHeight, pitRoad, terrainLeaves, trackRoad } from '../src/core/scene3d.ts';
 import {
   KERB_WIDTH, PAD_HALF, TrackIndex, buildGrandstands, buildGridMarks, buildKerbs, buildMarshalPosts, buildPitBuilding, buildRunoff, forest, inside, kerbRuns, lineFlagSite,
-  marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffPoints, runoffTest, treesInSight,
+  MAX_TREES, marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffPoints, runoffTest, treesInSight,
 } from '../src/core/scenery.ts';
 import { clearView, flyoverPose, hotLapPose, trackShots } from '../src/core/shots.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
@@ -295,6 +295,22 @@ describe('trees', () => {
     expect(trees.count).toBeGreaterThan(1000);
     expect([...forest(hm, 'seed').slice(0, 50)]).toEqual([...woods.slice(0, 50)]);
     expect([...forest(hm, 'other').slice(0, 50)]).not.toEqual([...woods.slice(0, 50)]);
+  });
+
+  it('are thinned out far from the track before near it', () => {
+    // Twice as many trees as can be drawn, in two fields well clear of the track: one called near, one far.
+    const sites = new Float32Array(2 * MAX_TREES * 5);
+    for (let i = 0; i < 2 * MAX_TREES; i++) sites.set([i < MAX_TREES / 2 ? 7000 + (i % 100) : 7500 + (i % 100), 100, 7000 + i / 200, 10, 1], i * 5);
+    const thinned = placeTrees(earth, sites, () => false, (x) => x < 7400);
+    expect(thinned.count).toBe(MAX_TREES);
+    let close = 0;
+    for (let i = 0; i < thinned.count; i++) if (thinned.data[i * 5] < 7400) close++;
+    expect(close).toBe(MAX_TREES / 2);
+    // Without the hint every tree stands the same chance.
+    const even = placeTrees(earth, sites, () => false);
+    let evenClose = 0;
+    for (let i = 0; i < even.count; i++) if (even.data[i * 5] < 7400) evenClose++;
+    expect(evenClose).toBe(MAX_TREES / 4);
   });
 
   it('keep off the track, its verges and the run-off', () => {

@@ -1,6 +1,6 @@
 # RaceTrackDesign
 
-Draw a race track on a seeded heightmap, analyse it, and race on it.
+Draw a race track on a seeded heightmap, analyse it, and race on it. Or open a real circuit from the templates, on its real ground.
 
 A browser app in TypeScript with no backend. The same seed and settings always produce the same landscape and the same race, and a project file reproduces both exactly.
 
@@ -26,6 +26,7 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | G1 | Graphics, phase 1: a photographed sky lighting the scene, shadows across the whole view, physically based materials, ambient occlusion, depth of field, bloom and a grade | **done** |
 | G2 | Graphics, phase 2: photographed textures on the ground, track, verges and run-off, a rubbered racing line, rippled water, reflections of the sky on every surface | **done** |
 | G3 | Graphics, phase 3: card trees with leaves and needles in two levels of detail, guardrail, tyre walls and catch fencing round the track | **done** |
+| T1 | Templates: real circuits to open and change, on surveyed ground with its real woods; the first is Bremgarten 1954 | **done** |
 
 ## Running it
 
@@ -55,7 +56,9 @@ If PowerShell refuses to run `npm` scripts, call Vite directly: `node node_modul
 
 The app works in four modes, in order. Everything downstream recalculates live when something upstream changes.
 
-**1 Terrain.** Enter a seed (or press Random) and pick a landscape: flat, rolling, hilly or mountains. Fine-tune relief, hill size, roughness, warp, ridges, valley floors, erosion, water and base elevation. Maps are 4, 8 or 16 km square; generation runs in a background worker and takes about two seconds.
+**Templates** (in the header) lists the circuits that come with the app. Picking one opens it as a project like any other: move its points, add a layout, race on it, save it under another name. The first is [Bremgarten 1954](#bremgarten-1954).
+
+**1 Terrain.** Enter a seed (or press Random) and pick a landscape: flat, rolling, hilly or mountains. Fine-tune relief, hill size, roughness, warp, ridges, valley floors, erosion, water and base elevation. Maps are 4, 8 or 16 km square; generation runs in a background worker and takes about two seconds. A template of a real circuit stands on *surveyed ground* instead: real elevations and woods, with no seed and nothing to tune. The panel then says where the ground comes from, and **Use a generated landscape instead** puts the same track on a generated one.
 
 **2 Design.** Draw a closed loop.
 - *Points*: click empty ground to add a point after the selected one; click the track to insert a point there; drag to move; right-click or Delete to remove.
@@ -175,7 +178,7 @@ The current project autosaves in the browser. **Save** downloads a `.rtd.json` p
 }
 ```
 
-Coordinates are metres from the map's top-left corner, x east and y south. The heightmap is never stored; it is regenerated from the terrain settings. `overrides` holds hand-placed facilities as world positions (`startFinish`, `speedTrap`, and `pitLane` with entry, exit and side); anything absent is placed automatically. `race` is the race setup with its own seed: the classes and their cars, `kind` (`laps` or `time`, and `laps` or `minutes` applies accordingly), the grid order, the `weather` (`dry`, `changeable` or `wet`) and the weekend sessions left out (`skip`: `p1`, `p2`, ... for practice, `qualifying` for all of it; a file without it runs the whole weekend). It is saved when a weekend is first started, so the file reproduces the weekend and the race, weather included. Files from earlier versions, with a single `vehicleId` and `cars`, still open. `layouts` lists the circuit's other layouts: each link's ends (`from` and `to`, snapped to the track) and the points between, and the layout's own `race`. Files without it have only the full circuit.
+Coordinates are metres from the map's top-left corner, x east and y south. The heightmap is never stored; it is regenerated from the terrain settings, or, when `terrain.survey` names a surveyed terrain shipped with the app (`"survey": "bremgarten"`), read from that: the seed and the shape settings then play no part, and the map takes the survey's size. `overrides` holds hand-placed facilities as world positions (`startFinish`, `speedTrap`, and `pitLane` with entry, exit and side); anything absent is placed automatically. `race` is the race setup with its own seed: the classes and their cars, `kind` (`laps` or `time`, and `laps` or `minutes` applies accordingly), the grid order, the `weather` (`dry`, `changeable` or `wet`) and the weekend sessions left out (`skip`: `p1`, `p2`, ... for practice, `qualifying` for all of it; a file without it runs the whole weekend). It is saved when a weekend is first started, so the file reproduces the weekend and the race, weather included. Files from earlier versions, with a single `vehicleId` and `cars`, still open. `layouts` lists the circuit's other layouts: each link's ends (`from` and `to`, snapped to the track) and the points between, and the layout's own `race`. Files without it have only the full circuit.
 
 ## Lap times
 
@@ -245,8 +248,23 @@ The same seed and the same sessions always give the same weekend.
 
 Limits: no drying line, one weather for the whole circuit, and no rule on each endurance driver's minimum time at the wheel. Teams have no tyre allocation: every qualifying run is on new tyres. The IndyCar groups are split by practice (since 2026 the series splits them by the previous race's qualifying), GT World Challenge's qualifying runs unsplit (the 2025 format), and GT4 runs the session that sets its first race's grid. A bike race stopped in its first three laps restarts for the laps left rather than over the full distance less one. Sprint races, reversed grids for a second race and championship points are not modelled. Lapped cars are not waved past the safety car. The class paces come from the lap-time calibration, so on some circuits the gaps between classes are smaller than in reality (LMP2 and GT3 run close at Spa, for example). Overtaking is only roughly tuned: in trials on the real circuits, Formula 1 races saw from under ten passes after lap 1 (Suzuka, Budapest) to about a hundred (Monza, Bahrain), with Spa and Silverstone lower and Zandvoort (whose banking is not modelled) higher than in reality.
 
+## Bremgarten 1954
+
+The Circuit Bremgarten ran over public roads through the Bremgartenwald, the forest north-west of Bern, from 1931 to 1954: 7.28 km of fast bends with no real straight, the Swiss Grand Prix's home until Switzerland banned circuit racing in 1955. Part of it now lies under the A1 motorway. The template rebuilds it as it was raced:
+
+- **The lap** is traced on swisstopo's 1946 aerial photograph and the 1954 national map, and taken from today's surveyed road centrelines (swissTLM3D) where the old road is still there: about three fifths by hand, two fifths surveyed. It comes to 7,294 m against the official 7,280 m, runs clockwise, and is 9 m wide throughout, the width of the road in the photograph.
+- **The ground** is swisstopo's swissALTI3D elevation model at 2 m, 4.1 km square. Today's motorway, its junctions at the Forsthaus and Eichholz and their banks are taken out: the ground there is filled in from the ground on both sides. The lap falls and climbs 66 m, from 555 m at the Forsthaus to 489 m above the Wohlensee at Eymatt.
+- **The forest** is the green of the 1954 map, with today's forest outline beyond the part of the map that was used. The Aare and the Wohlensee lie where they do.
+- **The start line** is on the Murtenstrasse, with the grid in front of what the 1946 photograph shows there (terraces on the forest side, a strip that looks like the pits on the south side), and the pit lane on the south side as then.
+
+What is not of 1954: the app builds the circuit to today's practice, as chosen for this template. It clears the trees 20 m back from the road and lays run-off, gravel, guardrail and tyre walls, and its pit lane, pit building and grandstand are today's and far longer than the pits of the day. Where exactly the line was in 1954 is not established; it is placed so that today's longer grid and pit lane fit on the straight. Beyond the road and the forest the ground is today's: the city's buildings are not there, but their terraces, the railway cuttings and newer roads show in it.
+
+How exact it is: the surveyed stretches are good to about a metre. The hand-traced ones are within about 4 m of the road in the photograph, which itself lies a few metres off today's survey in places. Bends are smooth curves through the traced points, so a corner's radius is right to perhaps a tenth. The widths of single stretches, the camber and the road's surface (part of it was cobbled) are not modelled. With its 9 m road the circuit fails today's licence checks on width, as it would. [data/templates](data/templates/README.md) has the method and the trace.
+
 ## Credits
 
 The sky panoramas are "Kloofendal 48d Partly Cloudy (Pure Sky)" and "Kloofendal Overcast (Pure Sky)" by Greg Zaal and Jarod Guest, from [Poly Haven](https://polyhaven.com), CC0 (see [public/sky](public/sky/README.md)). The surface textures are Poly Haven's too, CC0, by Dimitrios Savva, Charlotte Baglioni, Rob Tuytel, Amal Kumar, Greg Zaal, Dario Barresi and Jenelle van Heerden (see [public/textures](public/textures/README.md)).
+
+The Bremgarten template's elevation, road centrelines, aerial photograph and maps are from the Federal Office of Topography swisstopo (swissALTI3D, swissTLM3D, SWISSIMAGE HIST 1946, the national map of 1954), free to use with the source named (see [public/surveys](public/surveys/README.md)).
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works inside.

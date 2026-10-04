@@ -16,6 +16,23 @@ export interface Heightmap {
   max: number;
   /** Elevation of the water surface; -Infinity when the map has no water. */
   waterLevel: number;
+  /** Where woods stand, on surveyed ground only: generated terrain grows its forests from the seed. */
+  woods?: Woods;
+}
+
+/** A square grid over the whole map, row-major like the heights: 1 where woods stand. */
+export interface Woods {
+  size: number;
+  data: Uint8Array;
+}
+
+/** Whether a world position lies in the woods of a surveyed map. */
+export function inWoods(hm: Heightmap, x: number, y: number): boolean {
+  const w = hm.woods;
+  if (!w) return false;
+  const i = Math.floor((x / hm.extent) * w.size);
+  const j = Math.floor((y / hm.extent) * w.size);
+  return i >= 0 && j >= 0 && i < w.size && j < w.size && w.data[j * w.size + i] === 1;
 }
 
 /** Bilinearly interpolated elevation at a world position; positions off the map clamp to the edge. */

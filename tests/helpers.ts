@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import type { Heightmap } from '../src/core/heightmap.ts';
 import type { ControlPoint, TrackDesign } from '../src/core/track.ts';
 import { DEFAULT_GRADING } from '../src/core/track.ts';
@@ -124,4 +125,10 @@ export function bigRectangle(width = 15) {
   return new Turtle(3000, 3000, 0, 10)
     .straight(1500).arc(50, 90).straight(800).arc(50, 90).straight(1500).arc(50, 90).straight(800).arc(50, 90)
     .close().map((p) => ({ ...p, width }));
+}
+
+/** Reads a file of a surveyed terrain the way the app fetches it, from public/. */
+export async function readPublic(path: string): Promise<ArrayBuffer> {
+  const b = await readFile(`public/${path}`);
+  return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
 }

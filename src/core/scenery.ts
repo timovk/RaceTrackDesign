@@ -20,7 +20,7 @@
 import { CORNER_LABELS, type Corner } from './analysis.ts';
 import type { OvertakingZone } from './facilities.ts';
 import { SpatialGrid } from './geometry.ts';
-import { type Heightmap, sampleHeight } from './heightmap.ts';
+import { type Heightmap, inWoods, sampleHeight } from './heightmap.ts';
 import type { RunoffRay } from './licence.ts';
 import { createNoise2D, fbm } from './noise.ts';
 import type { PitLane } from './pitLane.ts';
@@ -55,6 +55,13 @@ export const RUNOFF_GRADE = 0.25;
 const RUNOFF_RUN = 8;
 const RUNOFF_RISE = 1;
 const RUNOFF_BANK = 3;
+/**
+ * Rough ground stops neighbouring stretches of run-off at different depths.
+ * Where the ground is what stops them, each takes the middle value of those
+ * within this many metres along the track, so the far edge is a line and not
+ * a saw; water, the map's edge and other roads still stop it where they are.
+ */
+const RUNOFF_EVEN = 10;
 /** Run-off lies this far (m) above the ground, so the ground does not show through it. */
 const RUNOFF_LIFT = 0.3;
 
@@ -233,7 +240,8 @@ export interface RunoffArea {
  * the exit, as deep as the corner's escape paths are free (up to what they
  * need), tapering at the ends, and stopping short of water, the map edge,
  * other parts of the track, anywhere `blocked` says (another road: the rest
- * of the circuit round a layout) and ground too steep for it (`RUNOFF_GRADE`).
+ * of the circuit round a layout) and ground too steep for it (`RUNOFF_GRADE`,
+ * evened out along the track over `RUNOFF_EVEN`).
  * Along the track the depth changes by at most a metre a metre, so where
  * one stretch stops short the area's edge tapers to it.
  */
@@ -260,6 +268,8 @@ export function runoffAreas(
     const side: 1 | -1 = c.direction === 'right' ? 1 : -1;
     const stations = span(mod(c.start - ramp, n), mod(c.end + ramp, n), n);
     const inCorner = mod(c.end - c.start, n);
+    // How deep the ground lets each stretch be; what else stops it is in `depths`.
+    const ground: number[] = [];
     const depths = stations.map((k, i) => {
       // Full depth through the corner, tapering over 30 m either side.
       const w = i < ramp ? i / ramp : i > ramp + inCorner ? Math.max(0, 1 - (i - ramp - inCorner) / ramp) : 1;
@@ -273,23 +283,32 @@ export function runoffAreas(
       const natural: number[] = [earth.natural(ex, ey)];
       const back = RUNOFF_RUN / 2;
       let d = 0;
+      let steep = false;
       for (; d < want; d += 2) {
         const x = f.x + f.lx * side * (e + d);
         const y = f.y + f.ly * side * (e + d);
         if (x < 5 || y < 5 || x > hm.extent - 5 || y > hm.extent - 5) break;
-        const ground = earth.natural(x, y);
-        if (ground < hm.waterLevel) break;
+        const z = earth.natural(x, y);
+        if (z < hm.waterLevel) break;
         const other = index.nearest(x, y, 40, (j) => index.near(j, k, local));
         if (other && other.d < t.width[other.k] / 2 + VERGE + 3) break;
         if (blocked?.(x, y)) break;
         // Not up or down a hillside, nor up a deep cutting's bank.
         const step = d / 2;
-        natural[step] = ground;
-        if (step < back ? Math.abs(ground - natural[0]) > RUNOFF_RISE + RUNOFF_GRADE * d : Math.abs(ground - natural[step - back]) > RUNOFF_GRADE * RUNOFF_RUN) break;
-        if (earth.height(x, y) - edge > RUNOFF_BANK + RUNOFF_GRADE * d) break;
+        natural[step] = z;
+        steep = (step < back ? Math.abs(z - natural[0]) > RUNOFF_RISE + RUNOFF_GRADE * d : Math.abs(z - natural[step - back]) > RUNOFF_GRADE * RUNOFF_RUN)
+          || earth.height(x, y) - edge > RUNOFF_BANK + RUNOFF_GRADE * d;
+        if (steep) break;
       }
-      return Math.max(0, Math.min(d, want));
+      const reach = Math.max(0, Math.min(d, want));
+      ground.push(steep ? reach : want);
+      return steep ? want : reach;
     });
+    const even = Math.round(RUNOFF_EVEN / t.ds);
+    for (let i = 0; i < depths.length; i++) {
+      const near = ground.slice(Math.max(0, i - even), i + even + 1).sort((a, b) => a - b);
+      depths[i] = Math.min(depths[i], near[near.length >> 1]);
+    }
     // A metre deeper or shallower at most for each metre along, both ways round.
     for (let i = 1; i < depths.length; i++) depths[i] = Math.min(depths[i], depths[i - 1] + t.ds);
     for (let i = depths.length - 2; i >= 0; i--) depths[i] = Math.min(depths[i], depths[i + 1] + t.ds);
@@ -833,12 +852,20 @@ export interface Trees {
 
 /** Most trees drawn; more are thinned out evenly. */
 export const MAX_TREES = 40_000;
+/** Share of the tree sites outside a survey's woods that carry a tree: gardens, hedges, a lone oak. */
+const SURVEY_STRAY = 0.012;
+/** Metres between tree sites in a survey's woods: real woods are denser than the patches a seed grows. */
+const SURVEY_SPACING = 8;
+/** Trees within this distance of the track are the last to be thinned out. */
+export const TREES_NEAR = 100;
 
 /**
  * Where trees could grow on a terrain, from its seed: forests where a slow
  * noise says so and single trees elsewhere, thinning out on steep ground and
  * towards the high ground, none in water. Conifers take over higher up. The
  * same for a terrain whatever the track; placeTrees then clears the track.
+ * On surveyed ground the woods stand where the survey has them, whatever the
+ * slope or the height, with the odd tree outside.
  * Per tree: x, natural ground height, z (south), height in metres, kind.
  */
 export function forest(hm: Heightmap, seed: string): Float32Array {
@@ -846,7 +873,7 @@ export function forest(hm: Heightmap, seed: string): Float32Array {
   const rng = seededRandom(`${seed}:trees`);
   const forest = createNoise2D(seededRandom(`${seed}:forest`));
   const patch = createNoise2D(seededRandom(`${seed}:patch`));
-  const spacing = Math.max(10, hm.extent / 600);
+  const spacing = hm.woods ? SURVEY_SPACING : Math.max(10, hm.extent / 600);
   const cells = Math.floor(hm.extent / spacing);
   const hasWater = Number.isFinite(hm.waterLevel);
   const landMin = hasWater ? Math.max(hm.min, hm.waterLevel) : hm.min;
@@ -861,19 +888,28 @@ export function forest(hm: Heightmap, seed: string): Float32Array {
       const x = (i + rng()) * spacing;
       const y = (j + rng()) * spacing;
       const r = rng();
-      const woods = smooth(-0.05, 0.4, fbm(forest, x / 650, y / 650, 3, 0.5));
       const patchy = 0.55 + 0.45 * (0.5 + 0.5 * fbm(patch, x / 150, y / 150, 2, 0.5));
-      let chance = woods * patchy + 0.02;
-      if (r >= chance) continue;
-      const g = natural(x, y);
-      if (g < hm.waterLevel + 0.8) continue;
-      const height = (g - landMin) / range;
-      chance *= 1 - smooth(0.7, 0.9, height);
-      const sx = (natural(x + 4, y) - natural(x - 4, y)) / 8;
-      const sy = (natural(x, y + 4) - natural(x, y - 4)) / 8;
-      chance *= 1 - smooth(0.3, 0.55, Math.hypot(sx, sy));
-      if (r >= chance) continue;
-      const conifer = height > 0.45 || fbm(patch, x / 400 + 17, y / 400 - 5, 2, 0.5) > 0.25;
+      let conifer: boolean;
+      let g: number;
+      if (hm.woods) {
+        if (r >= (inWoods(hm, x, y) ? 0.8 + 0.2 * patchy : SURVEY_STRAY)) continue;
+        g = natural(x, y);
+        if (g < hm.waterLevel + 0.8) continue;
+        conifer = fbm(patch, x / 400 + 17, y / 400 - 5, 2, 0.5) > 0.05;
+      } else {
+        const woods = smooth(-0.05, 0.4, fbm(forest, x / 650, y / 650, 3, 0.5));
+        let chance = woods * patchy + 0.02;
+        if (r >= chance) continue;
+        g = natural(x, y);
+        if (g < hm.waterLevel + 0.8) continue;
+        const height = (g - landMin) / range;
+        chance *= 1 - smooth(0.7, 0.9, height);
+        const sx = (natural(x + 4, y) - natural(x - 4, y)) / 8;
+        const sy = (natural(x, y + 4) - natural(x, y - 4)) / 8;
+        chance *= 1 - smooth(0.3, 0.55, Math.hypot(sx, sy));
+        if (r >= chance) continue;
+        conifer = height > 0.45 || fbm(patch, x / 400 + 17, y / 400 - 5, 2, 0.5) > 0.25;
+      }
       found.push(x, g, y, (conifer ? 11 : 9) * (0.75 + 0.6 * rng()), conifer ? 0 : 1);
     }
   }
@@ -883,21 +919,30 @@ export function forest(hm: Heightmap, seed: string): Float32Array {
 /**
  * The trees of a forest that are clear of the roads and their banks (20 m
  * from the edge) and of whatever `avoid` says, standing on the shaped
- * ground; thinned out evenly beyond MAX_TREES.
+ * ground; thinned out evenly beyond MAX_TREES, those `near` the track last,
+ * since that is where they are looked at.
  */
-export function placeTrees(earth: Earthworks, candidates: Float32Array, avoid: (x: number, y: number) => boolean): Trees {
-  const kept: number[] = [];
+export function placeTrees(
+  earth: Earthworks, candidates: Float32Array, avoid: (x: number, y: number) => boolean, near?: (x: number, y: number) => boolean,
+): Trees {
+  const close: number[] = [];
+  const far: number[] = [];
   for (let i = 0; i < candidates.length; i += 5) {
     const x = candidates[i];
     const y = candidates[i + 2];
     if (earth.clearance(x, y) < 20 || avoid(x, y)) continue;
-    kept.push(i);
+    (near?.(x, y) ? close : far).push(i);
   }
-  const count = Math.min(MAX_TREES, kept.length);
+  // An even share of each when there are too many: all of the near ones first, if they fit.
+  const kept: number[] = [];
+  const closeCount = Math.min(MAX_TREES, close.length);
+  for (let j = 0; j < closeCount; j++) kept.push(close[Math.floor((j * close.length) / closeCount)]);
+  const farCount = Math.min(MAX_TREES - closeCount, far.length);
+  for (let j = 0; j < farCount; j++) kept.push(far[Math.floor((j * far.length) / farCount)]);
+  const count = kept.length;
   const data = new Float32Array(count * 5);
   for (let j = 0; j < count; j++) {
-    // An even share everywhere when there are too many.
-    const i = kept[Math.floor((j * kept.length) / count)];
+    const i = kept[j];
     const x = candidates[i];
     const y = candidates[i + 2];
     data[j * 5] = x;

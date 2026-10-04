@@ -1,6 +1,7 @@
 /**
  * The project file: everything needed to reproduce a design exactly. The
- * heightmap itself is never stored; it is regenerated from the seed.
+ * heightmap itself is never stored; it is regenerated from the seed, or read
+ * from the surveyed terrain the project names.
  */
 import {
   MAP_SIZES, PRESET_SHAPES, TERRAIN_PRESETS, defaultTerrainSettings,
@@ -9,6 +10,7 @@ import {
 import { type ControlPoint, type TrackDesign, DEFAULT_GRADING, DEFAULT_WIDTH, emptyDesign } from './track.ts';
 import type { Overrides } from './facilities.ts';
 import type { LayoutDesign, LinkDesign } from './layouts.ts';
+import { findSurvey } from './survey.ts';
 import { type RaceSettings, parseRaceSettings } from './race/setup.ts';
 import { VEHICLES } from './vehicles.ts';
 
@@ -62,6 +64,11 @@ export function parseProject(text: string): Project {
   } catch {
     throw new Error('Not a valid project file (JSON could not be read).');
   }
+  return readProject(raw);
+}
+
+/** Checks a project as read from JSON (a file, or a template shipped with the app). */
+export function readProject(raw: unknown): Project {
   if (!isObject(raw)) throw new Error('Not a valid project file.');
   const version = typeof raw.version === 'number' ? raw.version : 0;
   if (version > PROJECT_VERSION) throw new Error(`This project was saved by a newer version (file version ${version}).`);
@@ -79,6 +86,13 @@ export function parseProject(text: string): Project {
   for (const key of Object.keys(shape) as (keyof typeof shape)[]) {
     const v = t[key];
     if (typeof v === 'number' && Number.isFinite(v)) terrain[key] = v;
+  }
+  // A surveyed terrain has its own size; one this version does not know falls back to the seed.
+  const survey = findSurvey(t.survey);
+  if (survey) {
+    terrain.survey = survey.id;
+    terrain.mapSize = survey.mapSize;
+    terrain.resolution = survey.resolution;
   }
 
   const tr = isObject(raw.track) ? raw.track : {};

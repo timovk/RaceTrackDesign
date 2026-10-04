@@ -61,6 +61,7 @@ select {
 }
 
 .brand {
+  position: relative;
   padding: 12px 14px 10px;
   display: flex;
   flex-direction: column;
@@ -92,7 +93,54 @@ select {
 .brand-actions {
   margin-left: auto;
   display: flex;
+  align-items: center;
   gap: 2px;
+}
+
+.brand-actions .btn {
+  margin-right: 6px;
+}
+
+.btn.on {
+  border-color: var(--accent);
+}
+
+/* Circuits shipped with the app, listed under the header. */
+.template-menu {
+  position: absolute;
+  top: 100%;
+  left: 8px;
+  right: 8px;
+  z-index: 20;
+  margin-top: -2px;
+  padding: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+
+.template {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.template:hover {
+  background: var(--panel-3);
+}
+
+.template span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .project-name {

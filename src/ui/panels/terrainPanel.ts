@@ -1,4 +1,8 @@
-/** Terrain mode: seed, landscape preset, map size and fine-tuning of the generator. */
+/**
+ * Terrain mode: seed, landscape preset, map size and fine-tuning of the
+ * generator; or, for a project on surveyed ground, what that ground is.
+ */
+import { findSurvey } from '../../core/survey.ts';
 import { MAP_SIZES, PRESET_SHAPES, TERRAIN_PRESETS, type TerrainPreset, type TerrainShape } from '../../core/terrain.ts';
 import { randomSeedString } from '../../core/rng.ts';
 import { type Control, section, segmented, slider } from '../controls.ts';
@@ -31,6 +35,10 @@ export class TerrainPanel {
   private readonly controls: Control[] = [];
   private readonly stats: HTMLElement;
   private readonly modified: HTMLElement;
+  private readonly generator: HTMLElement;
+  private readonly surveyed: HTMLElement;
+  private readonly surveyName: HTMLElement;
+  private readonly surveySource: HTMLElement;
 
   constructor(store: Store) {
     this.store = store;
@@ -71,7 +79,7 @@ export class TerrainPanel {
     this.modified = h('span', { class: 'muted small' });
     this.stats = h('dl', { class: 'stats' });
 
-    this.el = h('div', { class: 'panel' },
+    this.generator = h('div', null,
       section('Seed', h('div', { class: 'row' }, this.seed, dice),
         h('p', { class: 'hint' }, 'The same seed and settings always give the same landscape.')),
       section('Landscape', presets.el,
@@ -81,7 +89,22 @@ export class TerrainPanel {
       h('details', { class: 'panel-section', open: true },
         h('summary', null, h('h3', null, 'Fine-tune'), this.modified),
         ...sliders.map((s) => s.el),
-        h('button', { class: 'btn subtle', onclick: () => store.applyPreset(t().preset) }, 'Reset to preset')),
+        h('button', { class: 'btn subtle', onclick: () => store.applyPreset(t().preset) }, 'Reset to preset')));
+
+    this.surveyName = h('strong');
+    this.surveySource = h('p', { class: 'hint' });
+    this.surveyed = section('Surveyed ground', this.surveyName, this.surveySource,
+      h('p', { class: 'hint' }, 'Real elevations and woods, so there is no seed and nothing to tune.'),
+      h('button', {
+        class: 'btn subtle', title: 'Keeps the track and puts it on a generated landscape',
+        onclick: () => {
+          if (confirm('Replace the surveyed ground with a generated landscape? The track stays where it is.')) store.setTerrain({ survey: undefined });
+        },
+      }, 'Use a generated landscape instead'));
+
+    this.el = h('div', { class: 'panel' },
+      this.surveyed,
+      this.generator,
       section('This map', this.stats),
       h('button', { class: 'btn primary block', onclick: () => store.setMode('design') }, 'Next: draw the track'),
     );
@@ -94,6 +117,11 @@ export class TerrainPanel {
     const s = this.store;
     const t = s.project.terrain;
     if (topics.has('project')) {
+      const survey = findSurvey(t.survey);
+      this.surveyed.hidden = !survey;
+      this.generator.hidden = !!survey;
+      this.surveyName.textContent = survey?.name ?? '';
+      this.surveySource.textContent = survey?.source ?? '';
       if (!isEditing(this.seed)) this.seed.value = t.seed;
       this.size.value = String(t.mapSize);
       this.detail.value = String(t.resolution);
@@ -116,7 +144,7 @@ export class TerrainPanel {
         ...row('Water level', hasWater ? fmt.elevation(hm.waterLevel) : 'none'),
         ...row('Contours', `every ${layer.contourInterval} m`),
         ...row('Grid', `${hm.size}² at ${hm.cellSize} m`),
-        ...(s.design.points.length ? row('Track', 'stays put; heights follow the new terrain') : []),
+        ...(s.design.points.length && !t.survey ? row('Track', 'stays put; heights follow the new terrain') : []),
       );
     }
   }

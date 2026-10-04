@@ -1,0 +1,15 @@
+{
+  "surveys": [
+    {
+      "id": "bremgarten",
+      "name": "Bremgartenwald, Bern",
+      "mapSize": 4096,
+      "resolution": 2048,
+      "base": 470,
+      "step": 0.02,
+      "waterLevel": 481.5,
+      "woodsSize": 1024,
+      "source": "Elevation: swisstopo swissALTI3D (2 m), with today's motorway taken out. Woods: the 1954 national map."
+    }
+  ]
+}
