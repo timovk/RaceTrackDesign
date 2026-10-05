@@ -139,7 +139,8 @@ describe('race control', () => {
 
   it('bunches the field behind the safety car, with no passing until racing resumes', () => {
     let queues = 0;
-    const sim = watch(start(car('f1'), { laps: 25, cars: 16, seed: '5' }, risky('f1')), (s) => {
+    // (A seed whose race has a safety car period that runs its course, not one cut short by a red flag.)
+    const sim = watch(start(car('f1'), { laps: 25, cars: 16, seed: '7' }, risky('f1')), (s) => {
       const sc = s.safetyCar;
       // (After a red flag it leads the field out of the pit lane, which takes a while to close up.)
       if (!sc?.in || s.neutral[s.neutral.length - 1]?.reason.startsWith('restart')) return;

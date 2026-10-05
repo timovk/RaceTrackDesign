@@ -4,6 +4,7 @@ import { LEFT, RIGHT, SIDE_GAP, bodySize, laneLines } from '../src/core/race/lan
 import { DT, type RaceCar, type RaceSim, mod } from '../src/core/race/sim.ts';
 import { LINE_MARGIN } from '../src/core/racingLine.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
+import { circuitRace, trialRace } from '../scripts/raceTrial.ts';
 import { calm, car, model, multiClass, start, track } from './raceFixture.ts';
 
 /** Calm rules without pit stops, so a short race is about the cars on the road alone. */
@@ -87,6 +88,27 @@ describe('lanes', () => {
       expect(least).toBeLessThan(0.95);
       // The four straights are most of the lap.
       expect(free / m.n).toBeGreaterThan(0.6);
+    }
+  });
+
+  it('charges a lane one figure for each corner', () => {
+    const m = model(car('f1'));
+    for (const lane of [LEFT, RIGHT]) {
+      // Each stretch a corner holds the lane has one value from end to end, and there are only so many corners.
+      const values = new Set<number>();
+      let changes = 0;
+      for (let k = 0; k < m.n; k++) {
+        const here = m.laneCap[lane][k];
+        const next = m.laneCap[lane][(k + 1) % m.n];
+        if (here < 1) values.add(here);
+        if (here !== next) {
+          changes++;
+          expect(here === 1 || next === 1).toBe(true);
+        }
+      }
+      expect(values.size).toBeGreaterThan(0);
+      expect(values.size).toBeLessThanOrEqual(8);
+      expect(changes).toBe(2 * values.size);
     }
   });
 
@@ -200,5 +222,113 @@ describe('lanes', () => {
       return `${sim.order.map((c) => c.id).join(',')} ${sim.events.length} ${sim.t.toFixed(1)}`;
     };
     expect(run()).toBe(run());
+  });
+});
+
+/** The first lap of a race: what the field did from the grid to the line. */
+function firstLap(sim: RaceSim) {
+  const m = sim.model;
+  const zone = m.zones[0];
+  const grid = sim.order.map((c) => c.id);
+  // The slowest the racing line gets on the way into the first corner.
+  let apexSpeed = Infinity;
+  for (let k = zone.station; k !== zone.apex; k = (k + 1) % m.n) apexSpeed = Math.min(apexSpeed, m.v[k]);
+  let first = -1;
+  let last = -1;
+  let slowest = Infinity;
+  let three = 0;
+  let overlap = 0;
+  let abreast = 1;
+  let before: number[] | null = null;
+  const through = new Set<number>();
+  while (sim.order.some((c) => c.status === 'running' && c.lapsDone < 1)) {
+    sim.step();
+    if (!before && sim.order[0].u >= zone.station) before = sim.order.map((c) => c.id);
+    const cars = sim.cars.filter((c) => c.status === 'running' && c.lapsDone === 0);
+    for (const c of cars) {
+      if (!through.has(c.id) && c.u >= zone.apex) {
+        through.add(c.id);
+        if (first < 0) first = sim.t;
+        last = sim.t;
+      }
+      if (c.u >= zone.station && c.u <= zone.apex) {
+        slowest = Math.min(slowest, c.ground / apexSpeed);
+        if (c.flank === 3) three += DT;
+      } else if (c.u > 0 && c.u < zone.station && c.flank) abreast = Math.max(abreast, c.flank === 3 ? 3 : 2);
+    }
+    for (let i = 0; i < cars.length; i++) for (let j = i + 1; j < cars.length; j++) if (overlapping(sim, cars[i], cars[j])) overlap += DT;
+  }
+  const moved = (order: number[]) => order.reduce((sum, id, i) => sum + Math.abs(grid.indexOf(id) - i), 0);
+  const gains = sim.order.map((c, i) => grid.indexOf(c.id) - i);
+  return {
+    /** Seconds from the first car to the last past the slowest point of the first corner. */
+    through: last - first,
+    /** The slowest any car went in the first corner, as a share of the racing line's slowest there. */
+    slowest,
+    /** Car-seconds in the middle of three abreast between the braking point and there. */
+    three,
+    overlap,
+    abreast,
+    /** Places changed (summed over the cars) by the first braking point, and the most one car gained or lost by the end of the lap. */
+    movedBefore: moved(before ?? grid),
+    gained: Math.max(...gains),
+    lost: -Math.min(...gains),
+  };
+}
+
+describe('the start in lanes', () => {
+  it('leaves the grid in files, fans out and goes through the first corner without a jam', () => {
+    for (const seed of ['11', '5']) {
+      const lap = firstLap(start(car('f1'), { kind: 'laps', laps: 3, cars: 20, seed }, calm(car('f1'))));
+      // Side by side on the way down, and places changing as the starts go.
+      expect(lap.abreast).toBeGreaterThanOrEqual(2);
+      expect(lap.movedBefore).toBeGreaterThan(4);
+      // The whole field is through within seconds, nobody near a standstill, no bodies through each other.
+      expect(lap.through).toBeLessThan(6);
+      expect(lap.slowest).toBeGreaterThan(0.25);
+      expect(lap.overlap).toBeLessThan(0.5);
+      // A corner takes two abreast: a third is on its way out of the row, not through the corner in it.
+      expect(lap.three).toBeLessThan(6);
+      expect(lap.gained).toBeLessThanOrEqual(9);
+      expect(lap.lost).toBeLessThanOrEqual(9);
+    }
+  });
+
+  it('gets a full grid round a real hairpin at the end of a short run: Sakhir', () => {
+    // The racing line's stations are under half a metre long at this apex and over two metres just after it: cars
+    // following each other by stations and not by road stood still here.
+    const m = circuitRace('Sakhir', car('f1'));
+    for (const seed of ['lap1-0', 'lap1-1']) {
+      const lap = firstLap(trialRace(m, seed));
+      expect(lap.through).toBeLessThan(8);
+      expect(lap.slowest).toBeGreaterThan(0.2);
+      expect(lap.overlap).toBeLessThan(1);
+      expect(lap.gained).toBeLessThanOrEqual(8);
+      expect(lap.lost).toBeLessThanOrEqual(8);
+    }
+  });
+
+  it('keeps a rolling start in formation to the first corner, more or less', () => {
+    const rolling = firstLap(start(car('gt3'), { kind: 'laps', laps: 3, cars: 30, seed: '11' }, calm(car('gt3'))));
+    const standing = firstLap(start(car('tcr'), { kind: 'laps', laps: 3, cars: 30, seed: '11' }, calm(car('tcr'))));
+    // Thirty cars each: from a standstill the starts shuffle the order far more than from formation.
+    expect(rolling.movedBefore).toBeLessThan(standing.movedBefore);
+    expect(rolling.overlap).toBeLessThan(0.5);
+    expect(rolling.slowest).toBeGreaterThan(0.25);
+  });
+
+  it('settles into one line within the first lap when nobody goes for a pass', () => {
+    const base = calm(car('gt4'));
+    const rules = { ...base, pace: { ...base.pace, overtaking: 0 }, pit: { ...base.pit, stops: false, minStops: 0 } };
+    const sim = start(car('gt4'), { kind: 'laps', laps: 4, cars: 24 }, rules);
+    const offLine: number[] = [];
+    while (!sim.finished) {
+      sim.step();
+      for (const c of sim.cars) if (c.status === 'running' && Math.abs(c.lateral) > 0.3) offLine[c.lapsDone] = (offLine[c.lapsDone] ?? 0) + DT;
+    }
+    // Two files off the grid: a good part of the first lap beside the racing line, then next to none of it.
+    expect(offLine[0]).toBeGreaterThan(30);
+    expect(offLine[2] ?? 0).toBeLessThan(5);
+    expect(offLine[3] ?? 0).toBeLessThan(5);
   });
 });

@@ -12,7 +12,7 @@
  * through each half of the track (a "lane line"): the lap is driven on both,
  * and where a lane's lap is slower because the corner holds it (braking for
  * it and turning, not accelerating away afterwards), the ratio of the two
- * times from one station to the next is the most a car in that lane can do:
+ * times over that corner is the most a car in that lane can do through it:
  * the inside lane is slower but shorter, the outside faster but longer. A
  * car with another beside it is in its lane; a car alone between the racing
  * line and the lane line takes its share of the difference, and one on the
@@ -94,11 +94,34 @@ export function laneCosts(line: RacingLine, lanes: readonly [RacingLine, RacingL
   const n = line.n;
   const time = (lap: LapResult, k: number) => (k < n - 1 ? lap.t[k + 1] : lap.time) - lap.t[k];
   const side = (i: number) => {
-    const cap = new Float32Array(n);
+    const cap = new Float32Array(n).fill(1);
     const shift = new Float32Array(n);
-    for (let k = 0; k < n; k++) {
-      cap[k] = laps[i].throttle[k] >= FLAT_OUT ? 1 : Math.min(1, time(base, k) / Math.max(time(laps[i], k), 1e-9));
-      shift[k] = lanes[i].offset[k] - line.offset[k];
+    for (let k = 0; k < n; k++) shift[k] = lanes[i].offset[k] - line.offset[k];
+    // One figure for each stretch the lane's lap is not flat out (a corner with its braking zone, or several run
+    // together): the racing line's time over it against the lane's. Station by station the two differ far more,
+    // since at the same station the cars are on arcs of different lengths (round a hairpin the outside car has
+    // five times the road to cover), which says who is ahead at each point of the corner but not what the corner costs.
+    const held = (k: number) => laps[i].throttle[k] < FLAT_OUT;
+    let from = 0;
+    while (from < n && held(from)) from++;
+    if (from === n) from = 0;
+    for (let s = 0; s < n;) {
+      const k = (from + s) % n;
+      if (!held(k)) {
+        s++;
+        continue;
+      }
+      let len = 0;
+      let own = 0;
+      let lane = 0;
+      while (len < n - s && held((k + len) % n)) {
+        own += time(base, (k + len) % n);
+        lane += time(laps[i], (k + len) % n);
+        len++;
+      }
+      const ratio = Math.min(1, own / Math.max(lane, 1e-9));
+      for (let j = 0; j < len; j++) cap[(k + j) % n] = ratio;
+      s += len;
     }
     return { cap, shift };
   };
