@@ -9,7 +9,8 @@
  * - fuel burn and tyre wear per lap, scaled from the class's typical figures
  *   by this track's wheel energy and tyre work against the real circuits;
  * - lap-time cost of fuel mass, braking zones where passes happen, the pit
- *   lane as a path with a speed limit, timing loops and grid positions.
+ *   lane as a path with a speed limit, timing loops and grid positions;
+ * - what a car off the racing line can do through the corners (lanes.ts).
  */
 import type { Facilities } from '../facilities.ts';
 import { AIR_DENSITY, GRAVITY, type LapResult, drsZones, simulateLapAtTrim } from '../lapSim.ts';
@@ -17,6 +18,7 @@ import type { Performance } from '../performance.ts';
 import type { RacingLine } from '../racingLine.ts';
 import type { Track } from '../track.ts';
 import type { VehicleClass } from '../vehicles.ts';
+import { type BodySize, bodySize, laneCosts, laneLines } from './lanes.ts';
 import type { RaceRules } from './rules.ts';
 
 export interface PassingZone {
@@ -24,6 +26,10 @@ export interface PassingZone {
   station: number;
   /** 0..1: how good a place to pass it is (speed lost under braking and the straight before it). */
   quality: number;
+  /** Station of the lowest speed, the share of its speed a car loses on the way there, and the inside of the corner (1: the left). */
+  apex: number;
+  drop: number;
+  inside: 1 | -1;
 }
 
 export interface DrsRegion {
@@ -113,6 +119,16 @@ export interface RaceModel {
    */
   gripRatio: [Float64Array, Float64Array];
   gripLap: [number, number];
+  /** The car's length and width, metres. */
+  body: BodySize;
+  /**
+   * Off the racing line (lanes.ts), per lane (0 left of the line, 1 right)
+   * and station: the share of the race lap's speed a car on that lane's line
+   * can do where the corner holds it, and how far that line lies from the
+   * racing line (metres, positive left).
+   */
+  laneCap: [Float32Array, Float32Array];
+  laneShift: [Float32Array, Float32Array];
 }
 
 /** Grip levels of the two wet laps. */
@@ -149,6 +165,14 @@ export interface RaceModelInput {
 const LAUNCH_LENGTH = 3000;
 /** Share of the tyre's grip usable when launching from a standstill (clutch slip, wheelspin). */
 const LAUNCH_GRIP = 0.85;
+/**
+ * In the race the wing opens over at most this many metres at the end of a
+ * DRS zone: the real zones are cut short on long straights, so that an open
+ * wing brings a car that is quicker alongside by the braking point and one
+ * that is not falls just short. Tuned on the real circuits with
+ * scripts/raceTrial.ts.
+ */
+const RACE_DRS_ZONE = 450;
 const LOOP_SPACING = 100;
 const TELEMETRY_SPACING = 5;
 const PIT_RAMP = 120;
@@ -177,17 +201,27 @@ export function buildRaceModel(input: RaceModelInput): RaceModel {
   const wake = loss > 0 ? simulateLapAtTrim(track, line, { ...noDrs, clA: [car.clA[0] * (1 - loss), car.clA[1] * (1 - loss)] }, trim) : base;
   const heavy = simulateLapAtTrim(track, line, { ...noDrs, mass: car.mass + HEAVY }, trim);
   const wet = GRIP_LEVELS.map((g) => simulateLapAtTrim(track, line, { ...noDrs, grip: car.grip * g }, trim));
+  const lanes = laneLines(track);
+  const lane = laneCosts(line, lanes, base, [simulateLapAtTrim(track, lanes[0], noDrs, trim), simulateLapAtTrim(track, lanes[1], noDrs, trim)]);
 
   let drsRatio: Float64Array | null = null;
   const drs: DrsRegion[] = [];
   if (rules.drs && car.drs > 0) {
-    const open = simulateLapAtTrim(track, line, car, trim);
+    // The race's zones: the last RACE_DRS_ZONE metres of each of the lap's.
+    const zones = drsZones(line).map((z) => {
+      const stations = z.end >= z.start ? z.end - z.start + 1 : n - z.start + z.end + 1;
+      let keep = 0;
+      for (let along = 0; keep < stations && along < RACE_DRS_ZONE; keep++) along += line.ds[(z.end - keep + n) % n];
+      return { start: (z.end - keep + 1 + n) % n, stations: keep };
+    });
+    const where = new Uint8Array(n);
+    for (const z of zones) for (let i = 0; i < z.stations; i++) where[(z.start + i) % n] = 1;
+    const open = simulateLapAtTrim(track, line, car, trim, where);
     const full = ratio(open);
     drsRatio = new Float64Array(n).fill(1);
-    for (const z of drsZones(line)) {
+    for (const z of zones) {
       // The wing helps through the zone and into the braking zone after it, until both laps' speeds meet again.
-      const zoneLen = z.end >= z.start ? z.end - z.start + 1 : n - z.start + z.end + 1;
-      let len = zoneLen;
+      let len = z.stations;
       while (len < n / 2 && open.v[(z.start + len) % n] > base.v[(z.start + len) % n] + 0.05) len++;
       for (let i = 0; i < len; i++) drsRatio[(z.start + i) % n] = full[(z.start + i) % n];
       drs.push({ start: z.start, length: len });
@@ -233,6 +267,9 @@ export function buildRaceModel(input: RaceModelInput): RaceModel {
     speedTrap: f.speedTrap.station,
     gripRatio: [ratio(wet[0]), ratio(wet[1])],
     gripLap: [wet[0].time / base.time, wet[1].time / base.time],
+    body: bodySize(car),
+    laneCap: lane.cap,
+    laneShift: lane.shift,
   };
 }
 
@@ -325,12 +362,22 @@ export function passingZones(lap: LapResult, line: RacingLine): PassingZone[] {
     lastStart = along;
     // Lowest speed before the car is back on full throttle.
     let vMin = lap.v[k];
+    let apex = k;
     let d = 0;
     for (let j = 1; j < n && d < 600; j++) {
       const q = (k + j) % n;
-      vMin = Math.min(vMin, lap.v[q]);
+      if (lap.v[q] < vMin) {
+        vMin = lap.v[q];
+        apex = q;
+      }
       d += line.ds[q];
       if (d > 20 && lap.throttle[q] >= 0.95) break;
+    }
+    // Which way the road turns from the braking point to there (positive curvature is a right-hander).
+    let turn = 0;
+    for (let q = k; ; q = (q + 1) % n) {
+      turn += line.curvature[q];
+      if (q === apex) break;
     }
     // Length of the flat-out run before it, past any lift or light braking just before the zone.
     let q = k;
@@ -346,7 +393,9 @@ export function passingZones(lap: LapResult, line: RacingLine): PassingZone[] {
       run += line.ds[r];
     }
     const dropKmh = (lap.v[k] - vMin) * 3.6;
-    if (dropKmh > 25) zones.push({ station: k, quality: clamp((dropKmh - 25) / 100, 0, 1) * clamp(run / 600, 0.15, 1) });
+    if (dropKmh > 25) {
+      zones.push({ station: k, quality: clamp((dropKmh - 25) / 100, 0, 1) * clamp(run / 600, 0.15, 1), apex, drop: 1 - vMin / Math.max(lap.v[k], 1), inside: turn > 0 ? -1 : 1 });
+    }
   }
   return zones.sort((a, b) => a.station - b.station);
 }

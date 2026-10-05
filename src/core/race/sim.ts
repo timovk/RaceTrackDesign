@@ -8,12 +8,20 @@
  *                  x slipstream, wake and DRS for the car ahead
  *                  x grip lost on a wet track on the tyres fitted
  *
- * A car cannot drive through the one ahead: it is held a small gap behind
- * it until a braking zone, where it may try to pass. The chance depends on
- * the speed difference at the braking point, the pace difference, the zone
- * and both drivers' racecraft; lapped cars and slower classes let faster
- * cars by. Cars stop in the actual pit lane at the speed limit, for tyres,
- * fuel, a driver change or a change of weather.
+ * A car cannot drive through the one ahead. In a race of cars every car has
+ * a place across the road as well (metres left of the racing line) and a
+ * width: it is held a small gap behind a car in its way, and goes by one
+ * that is not. A car held up pulls out when it has the pace and the room to
+ * draw level before the road bends, and on the inside of a braking zone it
+ * may brake later to get there; the car ahead may move over once to shut
+ * the inside, which leaves the outside. Side by side, each keeps to its
+ * side until one is clear, and through a corner a car off the racing line
+ * can only do what its own line allows (lanes.ts), so the one with the
+ * better line comes out ahead. A car being lapped moves over. Bikes still race in
+ * one line: a bike is held behind the one ahead until a braking zone, where
+ * it may try to pass, with a chance from the speed and pace difference, the
+ * zone and both riders' racecraft. Cars stop in the actual pit lane at the
+ * speed limit, for tyres, fuel, a driver change or a change of weather.
  *
  * The race brings mistakes, trips off the track, crashes and technical
  * failures. Race control shows yellow flags where something happened and,
@@ -29,6 +37,7 @@ import { formatLapTime } from '../calibration.ts';
 import { hashSeed, mulberry32, seededRandom } from '../rng.ts';
 import type { Driver, Entrant } from './field.ts';
 import { gauss } from './field.ts';
+import { EDGE_GAP, LEFT, RIGHT, SIDE_GAP } from './lanes.ts';
 import { type RaceModel, gripBlend, lapRatioAtGrip, launchSpeed } from './model.ts';
 import type { RaceRules, TyreType } from './rules.ts';
 import type { RaceSetup } from './setup.ts';
@@ -172,9 +181,16 @@ export class RaceClass {
   /** Tyre types the class can fit. */
   readonly types: TyreType[];
   readonly zoneAt: Int16Array;
+  /** The braking zone a car at each station is coming to (from LUNGE_FROM metres before its braking point) or in (up to its slowest point); -1: none. */
+  readonly brakingAt: Int16Array;
+  /** The braking zone whose braking point comes next from each station; -1: the lap has none. */
+  readonly nextZone: Int16Array;
   readonly drsAt: Int16Array;
   /** Fuel carried on the qualifying lap: the race lap's fuel effect counts only above it. */
   readonly qualiFuel: number;
+  /** Half the car's width, and its length, metres. */
+  readonly half: number;
+  readonly length: number;
   finishers = 0;
 
   constructor(index: number, model: RaceModel) {
@@ -184,9 +200,24 @@ export class RaceClass {
     this.types = tyreTypes(model.rules);
     this.zoneAt = new Int16Array(model.n).fill(-1);
     model.zones.forEach((z, i) => { this.zoneAt[z.station] = i; });
+    this.nextZone = new Int16Array(model.n).fill(-1);
+    model.zones.forEach((z, i) => {
+      const from = model.zones[(i - 1 + model.zones.length) % model.zones.length].station;
+      for (let k = (from + 1) % model.n; ; k = (k + 1) % model.n) {
+        this.nextZone[k] = i;
+        if (k === z.station) break;
+      }
+    });
+    this.brakingAt = new Int16Array(model.n).fill(-1);
+    const before = Math.round(LUNGE_FROM / model.track.ds);
+    model.zones.forEach((z, i) => {
+      for (let k = (z.station - before + model.n) % model.n; k !== z.apex; k = (k + 1) % model.n) this.brakingAt[k] = i;
+    });
     this.drsAt = new Int16Array(model.n).fill(-1);
     model.drs.forEach((d, i) => { this.drsAt[d.start] = i; });
     this.qualiFuel = Math.min(model.rules.fuel.capacity, 3 * model.fuelPerLap);
+    this.half = model.body.width / 2;
+    this.length = model.body.length;
   }
 
   get label(): string {
@@ -215,8 +246,13 @@ export class RaceCar {
   prevU = 0;
   /** m/s. */
   v = 0;
-  /** Cosmetic sideways offset from the racing line, metres (positive left). */
+  /**
+   * Sideways offset from the racing line, metres (positive left), now and at
+   * the step before: the car's real place on the road in a race of cars
+   * (lanes), only how it is drawn otherwise.
+   */
   lateral = 0;
+  prevLateral = 0;
   lapsDone = 0;
   lapStart = 0;
   lastLap: number | null = null;
@@ -272,6 +308,30 @@ export class RaceCar {
   wake = 0;
   passing: { target: RaceCar; untilU: number } | null = null;
   cooldownU = -Infinity;
+  // Lanes (a race of cars; see updateLanes):
+  /** The car ahead that holds it up, when it is close enough to think of passing it. */
+  heldBy: RaceCar | null = null;
+  /** The car it has pulled out to pass and on which side (+1 its left), until it is beside it, or gives up at `untilU`. */
+  attack: { target: RaceCar; side: 1 | -1; untilU: number; answered?: boolean } | null = null;
+  /** Defending: it has moved over to shut this side of the road (+1 its left) until this race progress (-Infinity when not). */
+  coverSide: 1 | -1 = 1;
+  coverUntilU = -Infinity;
+  /** Race time before which it does not look for a way past again. */
+  nextTry = 0;
+  /** Braking late to get beside the car it is passing: until this race progress (-Infinity when not). */
+  lungeUntilU = -Infinity;
+  lungePace = 1;
+  /** The car beside it that has the right to the road it is on: it has to drop back. */
+  squeezed: RaceCar | null = null;
+  /** Cars beside it that it came up on from behind, with the place each held: clear ahead of one is a pass. */
+  beside: { car: RaceCar; place: number; classPlace: number }[] = [];
+  /** The side it has moved to for a faster car to come by (+1 its left; 0 when not giving way), and that car. */
+  giveWay: 0 | 1 | -1 = 0;
+  giveWayTo: RaceCar | null = null;
+  /** Held below the racing line's speed by its own line through a corner, in this step. */
+  capped = false;
+  /** The part of the road it has with a car beside it: 1 the left, -1 the right, 2 the middle of three; 0 with nobody beside it. */
+  lane: 0 | 1 | -1 | 2 = 0;
   /** No passing before this race progress (after a restart, until the line). */
   holdUntilU = -Infinity;
   stuckLaps = 0;
@@ -371,6 +431,105 @@ const CLOSE_UP = 0.92;
 const CLOSEST = 0.5;
 /** On the run from the grid to the first corner, cars run at most this many abreast. */
 const ABREAST = 3;
+/**
+ * Lanes. Two cars count as side by side when they overlap nose to tail or
+ * come within ALONG_GAP metres of it; a car has the right to its line over
+ * one beside it once it is LEVEL metres ahead (the other is no longer
+ * "significantly alongside"), and blocks a car behind unless that car has
+ * room to go by (SLACK less than the room side by side takes, so two cars
+ * running together do not block each other by a rounding error).
+ */
+const ALONG_GAP = 1;
+const LEVEL = 2;
+const SLACK = 0.15;
+/** A car within this of the racing line (metres) is on it. */
+const ON_LINE = 0.3;
+/** Sideways speed at most: metres per second, and as a share of the car's own speed (off the grid at least AWAY_SIDEWAYS once it is rolling). */
+const SIDEWAYS = 3.5;
+const SIDEWAYS_SLOPE = 0.1;
+const AWAY_SIDEWAYS = 2;
+/** Slipstream: full within TOW_FULL metres to the side of the car ahead, none beyond TOW_REACH; the speed gained in a tow fades over TOW_HOLD seconds out of it. */
+const TOW_FULL = 1;
+const TOW_REACH = 3;
+const TOW_HOLD = 5;
+/** The middle car of three abreast does this share of the slower lane's pace through a corner. */
+const MIDDLE = 0.96;
+/** A car off the racing line with nobody beside it pays this share of what the lane costs. */
+const ALONE = 0.5;
+/** Cars side by side make for the racing line when a corner is this near (metres); before it each holds its side. */
+const CORNER_LOOK = 60;
+/** A car beside one with the right to the road lifts to this share of that car's speed until it is clear behind. */
+const BACK_OUT = 0.88;
+/**
+ * Pulling out to pass: a car held up weighs its pace over the next
+ * ATTACK_LOOK metres off the line against the car ahead's every TRY_EVERY
+ * seconds, and goes when it is at least ATTACK_MIN quicker and that pace,
+ * kept up for ATTACK_KEEP of the run to where the road bends, would bring
+ * it level with the other car, counting what braking later adds on the
+ * inside (a bolder driver needs less). It gives up ATTACK_RUN metres on if
+ * it is not beside the other car by then, or once that car is ATTACK_LOST
+ * metres up the road, and waits TRY_AGAIN seconds. A car just ahead of the
+ * one it wants to pass, on the side it would take, boxes it in (BOXED_IN metres).
+ */
+const ATTACK_LOOK = 150;
+/** A car counts as held up by one it would catch within this many seconds. */
+const CLOSING_LOOK = 1.5;
+const TRY_EVERY = 0.3;
+const TRY_AGAIN = 2.5;
+const ATTACK_MIN = 0.006;
+const ATTACK_KEEP = 0.7;
+const ATTACK_RUN = 500;
+const ATTACK_LOST = 60;
+const BOXED_IN = 25;
+/**
+ * Into a corner beside another car. A car that has pulled out and is not
+ * beside the other yet when the corner comes stays out there only if it
+ * will be within LEVEL metres of level where the corner begins, which is
+ * what gives it the right to its side of the road: by the speed it is
+ * closing at, and on the inside of a braking zone by braking later.
+ * LUNGE_LATE metres later for a driver of middling racecraft (half that to
+ * half as much again), which brings it forward by that distance times the
+ * share of its speed the corner takes: a hairpin after a straight gives
+ * most of it, a fast bend nearly nothing. A car right behind another may
+ * dive for the inside the same way, from LUNGE_FROM metres before the
+ * braking point. Otherwise it falls back in line. If it went and did not
+ * get beside the other car after all it has overdone it, and loses
+ * LUNGE_MISSED seconds.
+ */
+/**
+ * Defending. A car that sees another pull out for the inside of a braking
+ * zone that is DEFEND_LOOK metres or less ahead (and no nearer than
+ * DEFEND_LATE: it may not move under braking, nor once the other is beside
+ * it) moves over once, far enough that a car no longer fits on that side by
+ * COVER_SHORT metres, and stays there to the corner's slowest point. It
+ * takes the corner from there, off the racing line, which costs it speed
+ * out of it; the other car has the outside. Whether it sees it in time goes
+ * by its racecraft: a chance of COVER_LEAST, and COVER_SKILL more for the best.
+ */
+const DEFEND_LOOK = 400;
+const DEFEND_LATE = 60;
+const COVER_SHORT = 0.3;
+const COVER_LEAST = 0.3;
+const COVER_SKILL = 0.6;
+const LUNGE_LATE = 8;
+const LUNGE_FROM = 120;
+const LUNGE_MISSED = 0.25;
+/**
+ * The first corner of the race: from FIRST_CORNER_BEFORE metres before it to
+ * FIRST_CORNER_AFTER metres beyond its start, nobody drives round the cars
+ * ahead of it, whatever lane they are in; cars already side by side stay so.
+ */
+const FIRST_CORNER_BEFORE = 200;
+const FIRST_CORNER_AFTER = 300;
+/** Dirty air in lanes: all of the downforce loss within WAKE_FULL seconds of the car ahead, none beyond WAKE_REACH, falling away with the square in between. */
+const WAKE_FULL = 0.2;
+const WAKE_REACH = 1;
+/** A car being lapped moves this far off the racing line (metres) and lifts this much, from when the faster car is this many seconds behind. */
+const GIVE_WAY_ASIDE = 2.6;
+const GIVE_WAY_LIFT = 0.06;
+const GIVE_WAY_GAP = 1.2;
+/** Seconds a car loses when it is passed: it lifts and falls in behind. */
+const PASSED_LOSS = 0.3;
 /** Cars queue at the pit exit this far apart (metres) behind the first, which stops this far short of the end of the speed limit. */
 const QUEUE_GAP = 8;
 const QUEUE_FRONT = 10;
@@ -477,6 +636,14 @@ export class RaceSim {
   protected sharedBoxes = true;
   protected trackOrder: RaceCar[] = [];
   private finishCount = 0;
+  /** Whether cars have a real place across the road and race side by side (every class is cars), or run in one line (bikes). */
+  readonly lanes: boolean;
+  /** Scratch space for updateLanes: each car's sideways limits and next position, who squeezes it, and the pairs side by side. */
+  private laneLo = new Float64Array(0);
+  private laneHi = new Float64Array(0);
+  private laneNext = new Float64Array(0);
+  private laneSqueezed = new Int32Array(0);
+  private lanePairs: number[] = [];
   /** Race progress of the first corner (or braking zone) on lap 1; until then cars run up to ABREAST wide. */
   private readonly firstZoneU: number;
   /** The side of the track the pit lane is on, as a left-normal sign. */
@@ -518,6 +685,7 @@ export class RaceSim {
     this.mark[m.speedTrap] |= TRAP;
     this.trapBase = mod(m.line.s[m.speedTrap] - m.line.s[trapStart], m.line.length);
     this.classes = setup.models.map((cm, i) => new RaceClass(i, cm));
+    this.lanes = this.classes.every((c) => c.model.vehicle.kind === 'car');
     for (const c of this.classes) {
       c.model.zones.forEach((z) => { this.mark[z.station] |= ZONE; });
       c.model.drs.forEach((d) => { this.mark[d.start] |= DRS; });
@@ -561,6 +729,7 @@ export class RaceSim {
       car.prevU = g.u;
       car.accruedU = 0;
       car.lateral = g.lateral;
+      car.prevLateral = g.lateral;
       const d = car.driver;
       if (rolling) {
         // Already moving in formation: the start is how well each driver times the throttle.
@@ -615,17 +784,26 @@ export class RaceSim {
     const N = track.length;
     for (let i = 0; i < N; i++) {
       const car = track[i];
-      car.tow = 0;
+      let tow = 0;
       car.wake = 0;
-      for (let s = 1; s < Math.min(N, 4); s++) {
+      for (let s = 1; s < Math.min(N, this.lanes ? 6 : 4); s++) {
         const a = track[(i - s + N) % N];
         if (a.offTrack) continue;
         const gapT = (mod(a.u - car.u, n) * this.ds) / Math.max(car.v, 20);
-        car.tow = clamp01((1 - gapT) / 0.7);
-        car.wake = clamp01((1.6 - gapT) / 1.2);
+        // In lanes only a car on the same piece of road gives a tow: failing that, the next one ahead may.
+        const share = this.lanes ? clamp01((TOW_REACH - Math.abs(a.lateral - car.lateral)) / (TOW_REACH - TOW_FULL)) : 1;
+        if (share <= 0 && gapT < 1.6) continue;
+        // (In lanes the hole in the air closes quickly with distance: most of the tow and of the wake is gone half a second back.)
+        const pull = clamp01((1 - gapT) / 0.7);
+        const near = clamp01((WAKE_REACH - gapT) / (WAKE_REACH - WAKE_FULL));
+        tow = (this.lanes ? pull * pull : pull) * share;
+        car.wake = (this.lanes ? near * near : clamp01((1.6 - gapT) / 1.2)) * share;
         break;
       }
+      // A car that pulls out of a tow keeps the speed it gained for a few seconds.
+      car.tow = this.lanes ? Math.max(tow, car.tow - DT / TOW_HOLD) : tow;
     }
+    if (this.lanes) for (const car of track) this.considerPass(car, t0);
 
     // The safety car first, so the car behind it sees where it went.
     if (this.safetyCar) this.moveSafetyCar();
@@ -652,8 +830,12 @@ export class RaceSim {
     }
 
     this.t = t0 + DT;
-    this.resolvePasses();
-    this.updateLateral();
+    for (const car of this.cars) car.prevLateral = car.lateral;
+    if (this.lanes) this.updateLanes();
+    else {
+      this.resolvePasses();
+      this.updateLateral();
+    }
     this.updateOrder();
     this.checkFinished();
   }
@@ -742,7 +924,11 @@ export class RaceSim {
       return { x: at.x + Math.sin(at.heading) * off, y: at.y - Math.cos(at.heading) * off, heading: at.heading + (pit.side * Math.PI * g) / 2 };
     }
     const u = car.prevU + (car.u - car.prevU) * alpha;
-    return this.linePoint(u, car.lateral);
+    const p = this.linePoint(u, car.prevLateral + (car.lateral - car.prevLateral) * alpha);
+    // Moving across the road, the car points where it goes (its left is anticlockwise on the map).
+    const along = ((car.u - car.prevU) * this.model.line.length) / this.n;
+    if (along > 0.05) p.heading -= Math.atan2(car.lateral - car.prevLateral, along);
+    return p;
   }
 
   /** Where the safety car is, or null when it is not out. */
@@ -792,7 +978,20 @@ export class RaceSim {
     }
     const startU = car.u;
     this.walk(car, budget, t, this.limitFor(car));
-    if (car.status === 'running') car.v = ((car.u - startU) * this.model.line.length) / this.n / DT;
+    const moved = ((car.u - startU) * this.model.line.length) / this.n;
+    if (car.status === 'running') car.v = moved / DT;
+    if (car.capped) {
+      car.capped = false;
+      if (car.status === 'running') {
+        // Slower than the racing line through a corner, on its own line: it accelerates away from the speed it has
+        // (while it moves: time lost to a mistake is not speed lost), unless it is pulling away already.
+        const speed = moved / budget;
+        const l = car.launch;
+        // (As fast as that curve allowed where the step began: within a station the speed does not rise.)
+        const pulling = l !== null && speed >= 0.97 * l.factor * launchSpeed(car.model.launch, l.from, (Math.max(0, startU - l.u) * this.model.line.length) / this.n);
+        if (!pulling) car.launch = { u: car.u, from: speed, factor: 1 };
+      }
+    }
   }
 
   /** Moves a car on track for `budget` seconds, stopping short of `limit` (a race-progress value). */
@@ -850,6 +1049,28 @@ export class RaceSim {
     if (gw[0] !== 0) s *= 1 + gw[0] * (m.gripRatio[0][k] - 1) + gw[1] * (m.gripRatio[1][k] - m.gripRatio[0][k]);
     // Alongside in a pass: a little quicker, but never beyond the car's top speed.
     if (car.passing) s = Math.max(s * 0.9, this.lineDs[k] / m.vehicle.topSpeed);
+    if (this.lanes) {
+      const lat = car.lateral;
+      let pace = 1;
+      if (car.lungeUntilU > u) {
+        // Braking late for the inside: further along than its line allows, by the corner's slowest point (never beyond the car's top speed).
+        s = Math.min(s, Math.max(s * car.lungePace, this.lineDs[k] / m.vehicle.topSpeed));
+      } else if (car.lane !== 0) {
+        // A car beside it: it has its side of the road only, from the braking point on (the middle of three, the worse of both).
+        pace = car.lane === 2 ? MIDDLE * Math.min(m.laneCap[LEFT][k], m.laneCap[RIGHT][k]) : m.laneCap[car.lane > 0 ? LEFT : RIGHT][k];
+      } else if (lat > ON_LINE || lat < -ON_LINE) {
+        // Alone off the racing line where a corner holds that side: its share of what the lane's own line costs
+        // here, less than a car kept to the lane pays (it has the rest of the road to use).
+        const lane = lat > 0 ? LEFT : RIGHT;
+        const held = m.laneCap[lane][k];
+        if (held < 1) pace = 1 - ALONE * Math.min(1, Math.abs(lat) / Math.max(1, Math.abs(m.laneShift[lane][k]))) * (1 - held);
+      }
+      if (pace < 1) {
+        s /= Math.max(0.4, pace);
+        car.capped = true;
+      }
+      if (car.giveWay !== 0) s *= 1 + GIVE_WAY_LIFT;
+    }
     const yellow = this.yellowAt[k];
     if (yellow) s *= yellow === 2 ? DOUBLE_YELLOW : SINGLE_YELLOW;
     if (this.phase !== 'green') {
@@ -864,7 +1085,8 @@ export class RaceSim {
     if (car.launch) {
       const d = ((u - car.launch.u) * m.line.length) / this.n;
       cap = launchSpeed(m.launch, car.launch.from, d) * car.launch.factor;
-      if (!Number.isFinite(cap)) car.launch = null;
+      // Up to speed again (in lanes a car pulls away out of every corner it took off the line, so this is not kept for 3 km).
+      if (!Number.isFinite(cap) || (this.lanes && d > 30 && cap * s > this.lineDs[k] * 1.05)) car.launch = null;
     }
     if (car.pitRequest && m.pit) {
       const toEntry = mod(m.pit.entry - u, this.n) * this.ds;
@@ -889,14 +1111,37 @@ export class RaceSim {
     const behind = (d: number, v: number) => car.u + Math.max(d - gap(v), Math.min((CLOSE_UP * v * DT) / this.ds, d - CLOSEST / this.ds));
     let limit = Infinity;
     let alongside = 0;
-    for (let s = 1; s < Math.min(N, 6); s++) {
+    car.heldBy = null;
+    const free = this.lanes && !this.noPassing(car);
+    // Into the first corner of the race the field holds station.
+    const firstCorner = this.lanes && car.lapsDone === 0 && !this.away(car) && car.u < this.firstZoneU + FIRST_CORNER_AFTER / this.ds;
+    for (let s = 1; s < Math.min(N, this.lanes ? 12 : 6); s++) {
       const a = order[(car.trackIndex - s + N) % N];
       if (a.status !== 'running') continue;
+      const d = mod(a.u - car.u, this.n);
+      if (this.lanes) {
+        if (d * this.ds > 250) break;
+        const reach = (a.cls.length + car.cls.length) / 2 + ALONG_GAP;
+        // Only a car in its way holds it up.
+        if (!this.inTheWay(a, car, free)) {
+          // Not in its way, but ahead of it into the first corner: up to its tail and no further.
+          if (firstCorner && d * this.ds >= reach && !a.offTrack) limit = Math.min(limit, car.u + d - reach / this.ds);
+          continue;
+        }
+        if (d * this.ds < reach) {
+          // Beside a car with no room to stay there: it lifts until it is clear behind.
+          limit = Math.min(limit, car.u + (BACK_OUT * a.v * DT) / this.ds);
+        } else {
+          limit = Math.min(limit, behind(d, a.v));
+          // (Held up, or about to be: a car closing fast looks for a way by before it has to lift.)
+          if (d * this.ds < 1.6 * gap(a.v) * this.ds + 4 + Math.max(0, car.v - a.v) * CLOSING_LOOK) car.heldBy = a;
+        }
+        break;
+      }
       // On the run to the first corner a car may run beside (or pass) the next cars ahead, but no more than
       // ABREAST wide: the car beyond those holds it up.
       const full = this.beforeFirstZone(a, car) && ++alongside >= ABREAST;
       if (!full && !this.blocks(a, car)) continue;
-      const d = mod(a.u - car.u, this.n);
       if (d * this.ds <= 250) limit = behind(d, a.v);
       break;
     }
@@ -924,6 +1169,30 @@ export class RaceSim {
     const pit = ahead.model.pit;
     if (ahead.pitRequest && pit && mod(pit.entry - ahead.u, this.n) * this.ds < ENTRY_ROAD) return false;
     return true;
+  }
+
+  /**
+   * Lanes: whether `ahead` is in the way of `car`. Not when it is off the
+   * track or on the pit entry or exit road; otherwise when there is no room
+   * to go by it where the two are (or the car has to fall in behind it, or
+   * may not pass at all: `free` is false).
+   */
+  private inTheWay(ahead: RaceCar, car: RaceCar, free: boolean): boolean {
+    if (ahead.offTrack || ahead.exitUntilU > ahead.u) return false;
+    const pit = ahead.model.pit;
+    if (ahead.pitRequest && pit && mod(pit.entry - ahead.u, this.n) * this.ds < ENTRY_ROAD) return false;
+    if (!free || car.squeezed === ahead) return true;
+    return Math.abs(ahead.lateral - car.lateral) < ahead.cls.half + car.cls.half + SIDE_GAP - SLACK;
+  }
+
+  /** Away from the grid and not yet near the first corner of the race: the field fans out, each car round the next as its start allows. */
+  private away(car: RaceCar): boolean {
+    return car.lapsDone === 0 && car.u < this.firstZoneU - FIRST_CORNER_BEFORE / this.ds;
+  }
+
+  /** No passing here and now: under a neutralisation or waved yellows, and before the line after a restart. */
+  private noPassing(car: RaceCar): boolean {
+    return this.phase !== 'green' || car.u < car.holdUntilU || this.yellowAt[mod(Math.floor(car.u), this.n)] !== 0;
   }
 
   /** Both cars on the run from the grid to the first corner, free to run side by side. */
@@ -1054,7 +1323,7 @@ export class RaceSim {
     if (m & ZONE) {
       const zone = car.cls.zoneAt[k];
       if (zone >= 0) {
-        this.attemptPass(car, u, t, k, zone);
+        if (!this.lanes) this.attemptPass(car, u, t, k, zone);
         car.zone = { index: zone, v: car.v, t };
       }
     }
@@ -1290,6 +1559,8 @@ export class RaceSim {
     car.pit = null;
     car.pitRequest = null;
     car.passing = null;
+    car.attack = null;
+    car.beside = [];
     car.retired = { reason, lap: car.lapsDone + 1, x: p?.x ?? 0, y: p?.y ?? 0, t };
     if (reason !== 'crash' && !reason.startsWith('collision')) this.log('retired', t, `${car.entrant.code} retires: ${reason}`, car.id, car.lapsDone + 1);
   }
@@ -2137,7 +2408,434 @@ export class RaceSim {
     car.cold = COLD_TYRES;
     car.lapPace = this.lapPaceFor(car);
     car.lateral = this.pitSide * 4;
+    car.prevLateral = car.lateral;
+    car.attack = null;
+    car.beside = [];
     car.v = v;
+  }
+
+  // ---- racing in lanes ------------------------------------------------------------------
+
+  /** Metres `a` is ahead of `b` round the lap (negative behind), whatever lap each is on. */
+  private aheadBy(a: RaceCar, b: RaceCar): number {
+    let d = mod(a.u - b.u, this.n);
+    if (d > this.n / 2) d -= this.n;
+    return d * this.ds;
+  }
+
+  /**
+   * A car held up looks for a way past: pulls out to the side of the car
+   * ahead where there is room, when its pace off the line over the next
+   * stretch beats that car's by enough to draw level before the road bends.
+   * The inside for the next corner comes first.
+   */
+  private considerPass(car: RaceCar, t: number): void {
+    const a = car.heldBy;
+    if (!a || car.attack || t < car.nextTry) return;
+    car.nextTry = t + TRY_EVERY;
+    if (a.status !== 'running' || car.offTrack || car.pitRequest || car.exitUntilU > car.u || car.giveWay !== 0 || this.noPassing(car)) return;
+    // A car that is making way for it moves over by itself.
+    if (a.giveWayTo === car) return;
+    const d = this.aheadBy(a, car);
+    if (d <= 0) return;
+    if (this.away(car)) {
+      // Off the grid: round a slower starter on whichever side has room, the nearer to the middle of the road first.
+      const k = mod(Math.floor(a.u), this.n);
+      const toMiddle: 1 | -1 = a.lateral + this.model.line.offset[k] > 0 ? -1 : 1;
+      const gap = a.cls.half + car.cls.half + SIDE_GAP;
+      for (const side of [toMiddle, -toMiddle as 1 | -1]) {
+        if (!this.roomBeside(car, a, a.lateral + side * gap, d)) continue;
+        car.attack = { target: a, side, untilU: this.firstZoneU };
+        return;
+      }
+      return;
+    }
+    // How readily the class's drivers go for a pass (0: never).
+    const keen = car.rules.pace.overtaking;
+    if (keen <= 0) return;
+    const n = this.n;
+    const m = car.model;
+    const k0 = mod(Math.floor(car.u), n);
+    // Its own time over the stretch ahead on either side of the line, with the tow and the open wing it has, against the other car's.
+    const look = Math.round(ATTACK_LOOK / this.ds);
+    const drsFor = m.drsRatio ? car.drsUntilU - car.u : 0;
+    const lift = a.giveWay !== 0 ? 1 + GIVE_WAY_LIFT : 1;
+    let his = 0;
+    let left = 0;
+    let right = 0;
+    for (let j = 0; j < look; j++) {
+      const k = (k0 + j) % n;
+      let r = 1 + car.tow * (m.towRatio[k] - 1);
+      if (j < drsFor) r += m.drsRatio![k] - 1;
+      const own = m.seg[k] * car.lapPace * r;
+      his += a.model.seg[k] * a.lapPace * lift;
+      left += own / Math.max(0.4, m.laneCap[LEFT][k]);
+      right += own / Math.max(0.4, m.laneCap[RIGHT][k]);
+    }
+    // The inside for the next corner: the right for a right-hander.
+    const curvature = this.model.line.curvature;
+    let first: 1 | -1 = 1;
+    for (let j = 0, end = Math.round(400 / this.ds); j < end; j += 3) {
+      const c = curvature[(k0 + j) % n];
+      if (c > 1 / 400 || c < -1 / 400) {
+        first = c > 0 ? -1 : 1;
+        break;
+      }
+    }
+    const sep = a.cls.half + car.cls.half + SIDE_GAP;
+    // At a braking point, close enough behind to out-brake it: a dive down the inside.
+    const zone = car.cls.brakingAt[k0];
+    if (zone >= 0) {
+      const side = m.zones[zone].inside;
+      if (this.roomBeside(car, a, a.lateral + side * sep, d) && this.intoCorner(car, a, d, side, k0)) car.attack = { target: a, side, untilU: car.u + ATTACK_RUN / this.ds };
+      return;
+    }
+    const sides: (1 | -1)[] = first > 0 ? [1, -1] : [-1, 1];
+    for (const side of sides) {
+      const lane = side > 0 ? LEFT : RIGHT;
+      const advantage = 1 - (side > 0 ? left : right) / his;
+      if (advantage < ATTACK_MIN) continue;
+      if (!this.roomBeside(car, a, a.lateral + side * sep, d)) continue;
+      // The run it has: to where a corner holds that side of the road.
+      const held = m.laneCap[lane];
+      let run = 0;
+      for (const end = Math.round(900 / this.ds); run < end && held[(k0 + run) % n] > 0.97; run++);
+      // Enough to be level with it by the braking point (near enough to have the right to its side of the road
+      // there), counting what braking later on the inside adds.
+      const braking = run * this.ds < 900 ? car.cls.brakingAt[(k0 + run) % n] : -1;
+      const late = braking >= 0 && m.zones[braking].inside === side ? this.late(car) * m.zones[braking].drop : 0;
+      const gain = advantage * ATTACK_KEEP * run * this.ds + late;
+      if (gain * keen < (d - LEVEL) * (1.2 - 0.4 * car.driver.racecraft)) continue;
+      car.attack = { target: a, side, untilU: car.u + ATTACK_RUN / this.ds };
+      return;
+    }
+  }
+
+  /**
+   * Whether `car` could run at sideways position `slot`, beside the car `a`
+   * that is `d` metres ahead of it: on the road there, with nobody in that
+   * strip from beside itself to a little beyond `a` (it would be boxed in).
+   */
+  private roomBeside(car: RaceCar, a: RaceCar, slot: number, d: number): boolean {
+    const n = this.n;
+    const k = mod(Math.floor(a.u), n);
+    const half = this.model.track.width[k] / 2 - car.cls.half - EDGE_GAP;
+    const offset = this.model.line.offset[k];
+    if (slot < -half - offset - 0.05 || slot > half - offset + 0.05) return false;
+    const order = this.trackOrder;
+    const N = order.length;
+    const behind = car.cls.length + ALONG_GAP;
+    for (let s = -Math.min(3, N - 1); s <= Math.min(10, N - 1); s++) {
+      if (s === 0) continue;
+      const o = order[(((car.trackIndex - s) % N) + N) % N];
+      if (o === a || o === car || o.status !== 'running' || o.offTrack) continue;
+      if (Math.abs(o.lateral - slot) >= o.cls.half + car.cls.half + SIDE_GAP - SLACK) continue;
+      const rel = this.aheadBy(o, car);
+      if (rel > -behind && rel < d + BOXED_IN) return false;
+    }
+    return true;
+  }
+
+  /** How much later than the car ahead a driver dares to brake, metres. */
+  private late(car: RaceCar): number {
+    return LUNGE_LATE * (0.5 + car.driver.racecraft) * Math.min(car.rules.pace.overtaking, 1.5);
+  }
+
+  /**
+   * A car coming to a corner `d` metres behind the car `a` it is after
+   * (centre to centre), on side `side` of it at station `k`: whether it
+   * stays out there for the corner. It does if the speed it is closing at,
+   * and braking later where that is the inside of a braking zone, bring it
+   * level enough by the corner to have the right to its side of the road;
+   * then it is committed until the corner's slowest point.
+   */
+  private intoCorner(car: RaceCar, a: RaceCar, d: number, side: 1 | -1, k: number): boolean {
+    const n = this.n;
+    const zone = car.cls.brakingAt[k];
+    const z = zone >= 0 ? car.model.zones[zone] : null;
+    const gain = z && z.inside === side ? this.late(car) * z.drop : 0;
+    // To where the corner begins: the braking point (it may be past it already), or where the road bends.
+    const ahead = z ? mod(z.station - k, n) : 0;
+    const toCorner = z ? (ahead < n / 2 ? ahead * this.ds : 0) : CORNER_LOOK;
+    const closing = (Math.max(0, car.v - a.v) * toCorner) / Math.max(car.v, 20);
+    if (d - closing - gain > LEVEL) return false;
+    const end = z ? mod(z.apex - k, n) * this.ds : CORNER_LOOK + 60;
+    if (end < 10) return false;
+    car.lungeUntilU = car.u + end / this.ds;
+    car.lungePace = gain > 0 ? Math.max(0.8, 1 - gain / end) : 1;
+    return true;
+  }
+
+  /** Whether a corner holds the car's side of the road within CORNER_LOOK metres: time to make for the racing line. */
+  private cornerSoon(car: RaceCar, k: number): boolean {
+    const held = car.model.laneCap[car.lateral > 0 ? LEFT : RIGHT];
+    for (let j = 0, end = Math.round(CORNER_LOOK / this.ds); j <= end; j += 2) if (held[(k + j) % this.n] < 0.98) return true;
+    return false;
+  }
+
+  /**
+   * Whether `def` moves over for `car` before it is held up: in a race, for a
+   * car of its own class that is lapping it. (A slower class holds its line
+   * and keeps its pace: the faster car finds its own way by.)
+   */
+  protected makesWay(def: RaceCar, car: RaceCar): boolean {
+    return car.cls === def.cls && car.u - def.u > this.n / 2;
+  }
+
+  /**
+   * Where every car goes across the road, once all have moved along it.
+   *
+   * Each car makes for the place it wants at no more than SIDEWAYS: the pit
+   * side on the pit entry and exit roads, its slot on the grid, beside the
+   * car it has pulled out to pass, aside for a car lapping it, and otherwise
+   * the racing line; but a car with another beside it holds its side until a
+   * corner is near, and the field holds its grid lanes down to the first
+   * corner. Then no two cars side by side may be closer than their widths
+   * and SIDE_GAP, and all stay on the road:
+   *
+   * - A car at least LEVEL metres ahead of the one beside it has the right to
+   *   its line: the other makes room. If it has none (it is against the
+   *   edge), it is squeezed, and lifts until it is clear behind (limitFor).
+   * - Level, neither may move in on the other; the edges may still push one
+   *   into the other (the racing line swings across the road through a
+   *   corner, and positions are measured from it), and then the other makes
+   *   room: the inside car takes the apex, the outside car the exit.
+   *
+   * A car that comes up beside another from behind and gets clear ahead of
+   * it has passed it.
+   */
+  private updateLanes(): void {
+    const n = this.n;
+    const ds = this.ds;
+    const line = this.model.line;
+    const widths = this.model.track.width;
+    const pit = this.model.pit;
+    const cars = this.trackOrder.filter((c) => c.status === 'running');
+    cars.sort((a, b) => mod(b.u, n) - mod(a.u, n));
+    const N = cars.length;
+    if (this.laneNext.length < N) {
+      this.laneLo = new Float64Array(N);
+      this.laneHi = new Float64Array(N);
+      this.laneNext = new Float64Array(N);
+      this.laneSqueezed = new Int32Array(N);
+    }
+    const lo = this.laneLo;
+    const hi = this.laneHi;
+    const next = this.laneNext;
+    const squeezed = this.laneSqueezed;
+
+    // Pairs side by side: i is ahead of j, or level with it. Two cars nose to tail on the same piece of road are
+    // not a pair (the one behind is held up, not pushed aside), unless their bodies overlap.
+    const pairs = this.lanePairs;
+    pairs.length = 0;
+    for (let i = 0; i < N; i++) {
+      squeezed[i] = 0;
+      const a = cars[i];
+      for (let s = 1; s < N; s++) {
+        const j = (i + s) % N;
+        const b = cars[j];
+        const d = mod(a.u - b.u, n) * ds;
+        if (d > 14) break;
+        const reach = (a.cls.length + b.cls.length) / 2;
+        if (d >= reach + ALONG_GAP) continue;
+        if (d < reach - 0.3 || Math.abs(a.lateral - b.lateral) >= a.cls.half + b.cls.half + SIDE_GAP - SLACK - 0.05) pairs.push(i, j);
+      }
+    }
+    // Bit 1: has a car beside it.
+    for (let p = 0; p < pairs.length; p++) squeezed[pairs[p]] = 1;
+
+    // Defending: a car with one coming up its inside for a braking zone shuts that side, once, if it sees it in time.
+    if (!this.setup.session) {
+      for (const car of cars) {
+        const attack = car.attack;
+        if (!attack || attack.answered || car.lungeUntilU > -Infinity) continue;
+        const def = attack.target;
+        const kd = mod(Math.floor(def.u), n);
+        const zone = def.cls.nextZone[kd];
+        if (zone < 0) continue;
+        const z = def.model.zones[zone];
+        const to = mod(z.station - kd, n) * ds;
+        if (to > DEFEND_LOOK || z.inside !== attack.side) continue;
+        attack.answered = true;
+        // Not for a car lapping it, nor one of another class; and too late once that car is beside it or the braking point is here.
+        if (def.cls !== car.cls || car.u > def.u || to < DEFEND_LATE || this.aheadBy(def, car) < (def.cls.length + car.cls.length) / 2 + ALONG_GAP + 1) continue;
+        if (def.attack || def.giveWay !== 0 || def.pitRequest || def.exitUntilU > def.u || def.offTrack || this.noPassing(def)) continue;
+        if (def.rng() > COVER_LEAST + COVER_SKILL * def.driver.racecraft) continue;
+        def.coverSide = attack.side;
+        def.coverUntilU = def.u + mod(z.apex - kd, n);
+      }
+    }
+
+    for (let i = 0; i < N; i++) {
+      const car = cars[i];
+      const k = mod(Math.floor(car.u), n);
+      const half = Math.max(0, widths[k] / 2 - car.cls.half - EDGE_GAP);
+      lo[i] = -half - line.offset[k];
+      hi[i] = half - line.offset[k];
+      const closed = this.noPassing(car);
+
+      // An attack ends beside its target (then the two sort it out), when the target is gone, or when it has come to nothing.
+      const attack = car.attack;
+      let chasing = false;
+      if (attack) {
+        const tgt = attack.target;
+        const d = this.aheadBy(tgt, car);
+        const reach = (car.cls.length + tgt.cls.length) / 2 + ALONG_GAP;
+        const lunging = car.lungeUntilU > -Infinity;
+        if (tgt.status !== 'running' || tgt.offTrack || closed || d > ATTACK_LOST || d < -reach || (lunging ? car.u > car.lungeUntilU : d >= reach && car.u > attack.untilU)) {
+          car.attack = null;
+          if (d >= reach) {
+            car.nextTry = this.t + TRY_AGAIN;
+            if (lunging && tgt.status === 'running') {
+              // Braked too late for nothing: it runs deep and falls back in line.
+              car.delay += LUNGE_MISSED;
+              car.delayShare = Math.max(car.delayShare, 0.35);
+            }
+          }
+          car.lungeUntilU = -Infinity;
+        } else if (d >= reach) {
+          chasing = true;
+          // The door is shut on that side: round the other.
+          if (!lunging && tgt.coverUntilU > tgt.u && tgt.coverSide === attack.side) attack.side = -attack.side as 1 | -1;
+          // Coming to a corner and not beside it yet: on into it if it will be level enough there, else fall back in line.
+          if (!lunging && this.cornerSoon(car, k) && !this.intoCorner(car, tgt, d, attack.side, k)) {
+            car.attack = null;
+            car.nextTry = this.t + TRY_AGAIN;
+            chasing = false;
+          }
+        }
+      }
+
+      let want = 0;
+      if (car.exitUntilU > car.u && pit) want = this.pitSide * 1e3;
+      else if (car.pitRequest && pit && mod(pit.entry - car.u, n) * ds < ENTRY_ROAD) want = this.pitSide * 1e3;
+      else if (this.regrid?.lateral.has(car.id)) want = this.regrid.lateral.get(car.id)!;
+      else if (closed) want = 0;
+      else if (chasing) want = attack!.target.lateral + attack!.side * (car.cls.half + attack!.target.cls.half + SIDE_GAP);
+      else if (car.coverUntilU > car.u) {
+        // Shutting the inside: over until a car does not fit there, and no further once one is beside it.
+        const edge = car.coverSide > 0 ? hi[i] : lo[i];
+        want = squeezed[i] === 1 ? car.lateral : edge - car.coverSide * (2 * car.cls.half + SIDE_GAP - COVER_SHORT);
+        if ((want - car.lateral) * car.coverSide < 0) want = car.lateral;
+      } else if (car.giveWay !== 0) want = car.giveWay * GIVE_WAY_ASIDE;
+      else if ((car.lapsDone === 0 && car.u < this.firstZoneU) || (squeezed[i] === 1 && !this.cornerSoon(car, k))) want = car.lateral;
+      // (Off the grid a car jinks out from behind another at little more than walking pace.)
+      const rate = Math.min(SIDEWAYS, Math.max(SIDEWAYS_SLOPE * car.v, this.away(car) && car.v > 2 ? AWAY_SIDEWAYS : 0)) * DT;
+      const to = car.lateral + Math.max(-rate, Math.min(rate, want - car.lateral));
+      next[i] = to < lo[i] ? lo[i] : to > hi[i] ? hi[i] : to;
+      squeezed[i] = -1;
+    }
+
+    for (let pass = 0; pass < 3; pass++) {
+      for (let p = 0; p < pairs.length; p += 2) {
+        const i = pairs[p];
+        const j = pairs[p + 1];
+        const a = cars[i];
+        const b = cars[j];
+        // Which side of `a` the other car is on: as they stand; in the same spot, where it has more room.
+        let dir = Math.sign(b.lateral - a.lateral);
+        if (dir === 0) dir = hi[j] - b.lateral > b.lateral - lo[j] ? 1 : -1;
+        const deficit = a.cls.half + b.cls.half + SIDE_GAP - (next[j] - next[i]) * dir;
+        if (deficit <= 1e-6) continue;
+        const roomA = Math.max(0, dir > 0 ? next[i] - lo[i] : hi[i] - next[i]);
+        const roomB = Math.max(0, dir > 0 ? hi[j] - next[j] : next[j] - lo[j]);
+        const lead = mod(a.u - b.u, n) * ds >= LEVEL;
+        let ma: number;
+        let mb: number;
+        if (lead) {
+          mb = Math.min(roomB, deficit);
+          ma = Math.min(roomA, deficit - mb);
+          // From here on `b` keeps clear of `a` on this side, whoever else pushes it (a car between two others has no room at all).
+          const bound = next[i] - dir * ma + dir * (a.cls.half + b.cls.half + SIDE_GAP);
+          if (dir > 0) lo[j] = Math.min(hi[j], Math.max(lo[j], bound));
+          else hi[j] = Math.max(lo[j], Math.min(hi[j], bound));
+        } else {
+          ma = Math.min(roomA, deficit / 2);
+          mb = Math.min(roomB, deficit - ma);
+          ma = Math.min(roomA, deficit - mb);
+        }
+        next[i] -= dir * ma;
+        next[j] += dir * mb;
+        // No room for both, or the car with the right to the road kept off its line by one with nowhere to go.
+        if (pass === 2 && (deficit - ma - mb > 0.02 || (lead && ma > 0.005 && roomB - mb < 0.005))) squeezed[j] = i;
+      }
+    }
+
+    for (let i = 0; i < N; i++) {
+      const car = cars[i];
+      car.lateral = next[i];
+      car.squeezed = squeezed[i] >= 0 ? cars[squeezed[i]] : null;
+      car.lane = 0;
+    }
+    // Each car of a pair has its side of the road.
+    for (let p = 0; p < pairs.length; p += 2) {
+      const a = cars[pairs[p]];
+      const b = cars[pairs[p + 1]];
+      const left = b.lateral > a.lateral ? b : a;
+      const right = left === a ? b : a;
+      left.lane = left.lane === -1 || left.lane === 2 ? 2 : 1;
+      right.lane = right.lane === 1 || right.lane === 2 ? 2 : -1;
+    }
+
+    // A car that comes up beside another from behind is fighting it for its place.
+    for (let p = 0; p < pairs.length; p += 2) {
+      const a = cars[pairs[p]];
+      const b = cars[pairs[p + 1]];
+      if (b.beside.some((f) => f.car === a) || a.beside.some((f) => f.car === b)) continue;
+      b.beside.push({ car: a, place: a.position, classPlace: a.classPosition });
+    }
+    for (const car of cars) {
+      if (!car.beside.length) continue;
+      car.beside = car.beside.filter((f) => {
+        const o = f.car;
+        if (o.status !== 'running') return false;
+        const d = this.aheadBy(car, o);
+        const clear = (car.cls.length + o.cls.length) / 2 + ALONG_GAP;
+        if (d >= clear) {
+          // No reply at once: the car passed lifts, falls in behind and needs a while to line one up.
+          o.nextTry = Math.max(o.nextTry, this.t + TRY_AGAIN);
+          // (Not on the run from the grid to the first corner, where places change hands as the starts go.)
+          if (!this.setup.session && car.cls === o.cls && car.u > o.u && car.u - o.u < n / 2 && o.exitUntilU <= o.u && !o.offTrack && !(car.lapsDone === 0 && car.u < this.firstZoneU)) {
+            o.delay += PASSED_LOSS;
+            o.delayShare = Math.max(o.delayShare, 0.3);
+            this.passed(car, o, f.place, f.classPlace);
+          }
+          return false;
+        }
+        return d > -clear - 2;
+      });
+    }
+
+    // Out of the way of a car coming to lap it, where that costs nothing; back once it is clear ahead.
+    for (let i = 0; i < N; i++) {
+      const def = cars[i];
+      let to: RaceCar | null = null;
+      if (!def.attack && !def.pitRequest && def.exitUntilU <= def.u && !this.noPassing(def)) {
+        // Still letting the same car by: until it is clear ahead, or has dropped away.
+        const was = def.giveWayTo;
+        if (was && was.status === 'running') {
+          const d = this.aheadBy(was, def);
+          if (d < (def.cls.length + was.cls.length) / 2 + ALONG_GAP && d > -GIVE_WAY_GAP * Math.max(was.v, 20)) to = was;
+        }
+        for (let s = 1; !to && s < Math.min(N, 4); s++) {
+          const c = cars[(i + s) % N];
+          if (mod(def.u - c.u, n) * ds > GIVE_WAY_GAP * Math.max(c.v, 20)) break;
+          if (this.makesWay(def, c) || (c.heldBy === def && c.cls === def.cls && this.yields(def, c))) to = c;
+        }
+      }
+      let side: 0 | 1 | -1 = 0;
+      if (to) {
+        // Off the racing line to the side with more road, where no corner holds that side (once aside, it stays there).
+        side = def.giveWay;
+        const k = mod(Math.floor(def.u), n);
+        const left = hi[i] - def.lateral;
+        const right = def.lateral - lo[i];
+        if (side === 0 || (side > 0 ? left : right) < 0.5) side = left > right ? 1 : -1;
+        if (def.giveWay === 0 && this.cornerSoon({ model: def.model, lateral: side } as RaceCar, k)) side = 0;
+      }
+      def.giveWay = side;
+      def.giveWayTo = side !== 0 ? to : null;
+    }
   }
 
   // ---- racing ----------------------------------------------------------------------
@@ -2276,13 +2974,17 @@ export class RaceSim {
     }
   }
 
-  /** A pass completed: a real overtake in the class is news, a leader lapping a backmarker is not. */
-  protected passed(car: RaceCar, def: RaceCar): void {
+  /**
+   * A pass completed, for the place `def` held (in the race and in its
+   * class): a real overtake in the class is news, a leader lapping a
+   * backmarker is not.
+   */
+  protected passed(car: RaceCar, def: RaceCar, place = def.position, classPlace = def.classPosition): void {
     if (car.cls !== def.cls || car.u <= def.u || car.u - def.u >= this.n / 2) return;
     const where = this.where(car.u - 60 / this.ds);
     const text = this.multiClass
-      ? `${car.entrant.code} passes ${def.entrant.code} for ${car.cls.label} P${def.classPosition}${where}`
-      : `${car.entrant.code} passes ${def.entrant.code} for P${def.position}${where}`;
+      ? `${car.entrant.code} passes ${def.entrant.code} for ${car.cls.label} P${classPlace}${where}`
+      : `${car.entrant.code} passes ${def.entrant.code} for P${place}${where}`;
     this.log('overtake', this.t, text, car.id, car.lapsDone + 1, def.id);
   }
 

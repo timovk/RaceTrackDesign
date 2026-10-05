@@ -362,6 +362,11 @@ export class SessionSim extends RaceSim {
     return true;
   }
 
+  protected override makesWay(def: RaceCar, car: RaceCar): boolean {
+    // A car on a slow lap moves over for one on a push lap as it comes up, before it is held up.
+    return slow(this.state.get(def.id)) && !slow(this.state.get(car.id));
+  }
+
   protected override passed(car: RaceCar, def: RaceCar): void {
     // Passing in a session is traffic, not news.
     void car;
@@ -556,6 +561,8 @@ export class SessionSim extends RaceSim {
    * pusher goes by (losing a moment, now and then more), the slow car lifts.
    */
   private waveBy(): void {
+    // In lanes the slow car moves over and the pusher drives by (makesWay).
+    if (this.lanes) return;
     const n = this.n;
     const running = this.cars.filter((c) => c.status === 'running');
     for (const car of running) {

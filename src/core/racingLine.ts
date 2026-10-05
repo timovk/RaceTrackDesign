@@ -50,6 +50,16 @@ export interface RacingLine {
 
 /** Space kept between the line and each track edge: half a car's width plus a little. */
 export const LINE_MARGIN = 1.2;
+
+/**
+ * Limits on the line's offset from the centreline at each station, in place
+ * of the track's edges less the margin: the part of the road a car keeps to
+ * with another beside it (see race/lanes.ts).
+ */
+export interface Corridor {
+  lo: ArrayLike<number>;
+  hi: ArrayLike<number>;
+}
 /** Newton steps at most; a 5 km circuit takes about 40. */
 const MAX_ITERATIONS = 200;
 /** Barrier weight at the start and at the end, where the line is within about a centimetre of the edges it touches. */
@@ -64,7 +74,7 @@ const CROSSING = 0.9;
 /** Smoothing of the line's curvature in metres. */
 const CURVATURE_SMOOTHING = 3;
 
-export function computeRacingLine(t: Track, margin = LINE_MARGIN): RacingLine {
+export function computeRacingLine(t: Track, margin = LINE_MARGIN, corridor?: Corridor): RacingLine {
   const n = t.n;
   const nx = new Float64Array(n);
   const ny = new Float64Array(n);
@@ -74,8 +84,8 @@ export function computeRacingLine(t: Track, margin = LINE_MARGIN): RacingLine {
     nx[k] = Math.sin(t.heading[k]);
     ny[k] = -Math.cos(t.heading[k]);
     const limit = Math.max(0, t.width[k] / 2 - margin);
-    lo[k] = -limit;
-    hi[k] = limit;
+    lo[k] = corridor ? corridor.lo[k] : -limit;
+    hi[k] = corridor ? corridor.hi[k] : limit;
   }
   // Neighbouring normals cross at chord / turn on the inside of a bend (the right for a right-hander).
   for (let k = 0; k < n; k++) {
@@ -91,11 +101,22 @@ export function computeRacingLine(t: Track, margin = LINE_MARGIN): RacingLine {
       hi[k1] = Math.min(hi[k1], reach);
     }
   }
-  // Stations with no room to move stay on the centreline.
+  // Stations with no room to move stay on the centreline (in a corridor: in its middle, or where the bend's inside ends).
   const held = new Uint8Array(n);
-  for (let k = 0; k < n; k++) held[k] = Math.min(-lo[k], hi[k]) < 1e-6 ? 1 : 0;
-
   const offset = new Float64Array(n);
+  for (let k = 0; k < n; k++) {
+    if (!corridor) {
+      held[k] = Math.min(-lo[k], hi[k]) < 1e-6 ? 1 : 0;
+      continue;
+    }
+    if (hi[k] - lo[k] < 1e-6) {
+      held[k] = 1;
+      // Limits that cross (a road too narrow for the corridor, or normals crossing inside it): the one nearer the centreline holds.
+      const at = Math.abs(lo[k]) < Math.abs(hi[k]) ? lo[k] : hi[k];
+      lo[k] = hi[k] = offset[k] = at;
+    } else offset[k] = (lo[k] + hi[k]) / 2;
+  }
+
   const trial = new Float64Array(n);
   const px = new Float64Array(n);
   const py = new Float64Array(n);
@@ -126,8 +147,8 @@ export function computeRacingLine(t: Track, margin = LINE_MARGIN): RacingLine {
   let mu = BARRIER_START;
   for (let k = 0; k < n; k++) {
     if (held[k]) continue;
-    zl[k] = mu / -lo[k];
-    zu[k] = mu / hi[k];
+    zl[k] = mu / (offset[k] - lo[k]);
+    zu[k] = mu / (hi[k] - offset[k]);
   }
   place(offset);
   let energy = bending(px, py);

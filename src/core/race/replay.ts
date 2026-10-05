@@ -140,6 +140,7 @@ export class ReplayBuffer {
         prevU: before[o],
         u: now[o],
         v: now[o + 1],
+        prevLateral: before[o + 2],
         lateral: now[o + 2],
         status,
         pit: inPit ? { ...(car.pit ?? {}), prevP: Number.isFinite(before[o + 4]) ? before[o + 4] : now[o + 4], p: now[o + 4], stopped: now[o + 5] === 1 } : null,

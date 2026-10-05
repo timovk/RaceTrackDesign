@@ -283,7 +283,7 @@ export class CarLayer {
     // Side by side where cars would overlap.
     const onTrack = view.cars.filter((c) => c.status === 'running');
     this.spread = spreadCars(
-      onTrack.map((c) => ({ id: c.id, u: lerpU(c), lateral: c.lateral, length: this.looks[c.id].set.model.length, width: this.looks[c.id].set.model.width })),
+      onTrack.map((c) => ({ id: c.id, u: lerpU(c), lateral: c.prevLateral + (c.lateral - c.prevLateral) * alpha, length: this.looks[c.id].set.model.length, width: this.looks[c.id].set.model.width })),
       { n, ds, width: t.width, lineOffset: line.offset },
       this.spread, dt,
     );
@@ -375,8 +375,11 @@ export class CarLayer {
       }
       this.aside.delete(car.id);
       const u = lerpU(car);
-      const lateral = car.lateral + (this.spread.get(car.id) ?? 0);
+      const lateral = car.prevLateral + (car.lateral - car.prevLateral) * alpha + (this.spread.get(car.id) ?? 0);
       const p = linePoint(line, n, u, lateral);
+      // Moving across the road, the car points where it goes (its left is anticlockwise on the map).
+      const along = (car.u - car.prevU) * ds;
+      if (along > 0.05) p.heading -= Math.atan2(car.lateral - car.prevLateral, along);
       const k = Math.floor(((u % n) + n) % n) % n;
       const drs = car.drsUntilU > u ? 1 : 0;
       place(car.id, look, p.x, p.y, p.heading, u * ds, car.v, line.curvature[k], line.curvature[k], drs, compound, lightsOf(car));

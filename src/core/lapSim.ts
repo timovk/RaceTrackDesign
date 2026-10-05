@@ -58,7 +58,7 @@ export function simulateLap(track: Track, line: RacingLine, car: VehicleClass): 
   return best!;
 }
 
-export function simulateLapAtTrim(track: Track, line: RacingLine, car: VehicleClass, trim: number): LapResult {
+export function simulateLapAtTrim(track: Track, line: RacingLine, car: VehicleClass, trim: number, drsWhere?: Uint8Array): LapResult {
   const n = line.n;
   const m = car.mass;
   const weight = m * GRAVITY;
@@ -83,7 +83,8 @@ export function simulateLapAtTrim(track: Track, line: RacingLine, car: VehicleCl
   // Grip falls off linearly as the load rises above the car's weight.
   const grip = (fz: number) => fz * car.grip * Math.max(0.5, 1 - car.loadSensitivity * (fz / weight - 1));
   const drag = (v: number) => q * cdA * v * v;
-  const drsOpen = car.drs > 0 ? drsStations(line) : null;
+  // The wing opens in every DRS zone, or only at the stations given (the race's shorter zones).
+  const drsOpen = car.drs > 0 ? drsWhere ?? drsStations(line) : null;
   const dragAccelerating = (k: number, v: number) => (drsOpen?.[k] ? (1 - car.drs) * drag(v) : drag(v));
 
   // 1. Cornering limit per station.
