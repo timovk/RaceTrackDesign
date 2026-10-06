@@ -3,14 +3,17 @@
  * broadcast graphics of 2010 to 2014: slanted dark bars, the position in a
  * box of its own (red for the leader, white with a red number for the cars
  * that would go out in qualifying), the driver's three letters and a gap or
- * a lap time, with the tyres and the stops added at the end of each row. A
- * badge on top shows the lap ("Lap 16 / 56") or the session and its clock
- * ("Q2 4:31"). Times widens the tower with places gained, the last and best
- * lap and the latest sector times, coloured purple (best in the class),
- * green (personal best) or yellow. A banner shows the flags. In a
- * multi-class race each row carries its class, gaps are within the class,
- * and tabs show one class at a time. Rows are reused and refreshed a few
- * times a second.
+ * a lap time, with the tyres and the stops added at the end of each row.
+ * Times widens the tower with places gained, the last and best lap and the
+ * latest sector times, coloured purple (best in the class), green (personal
+ * best) or yellow. A banner shows the flags. In a multi-class race each row
+ * carries its class, gaps are within the class, and tabs show one class at a
+ * time. Rows are reused and refreshed a few times a second.
+ *
+ * The lap counter belongs to it but sits in the top middle of the map: the
+ * lap ("Lap 16 / 56") or the session and its clock ("Q2 4:31"), on black,
+ * on yellow under yellow flags or a neutralisation, and on red under a red
+ * flag.
  */
 import { formatLapTime } from '../core/calibration.ts';
 import { SessionSim } from '../core/race/session.ts';
@@ -22,6 +25,10 @@ import type { Store, Topic } from './store.ts';
 
 const REFRESH_MS = 160;
 const PREFS_KEY = 'racetrackdesign.tower';
+/** The lap counter: pixels from the top of the map in the top row and under the toolbars, and the room it keeps to what is beside it. */
+const COUNTER_TOP = 12;
+const COUNTER_BELOW = 96;
+const COUNTER_ROOM = 14;
 
 interface Row {
   el: HTMLElement;
@@ -85,8 +92,9 @@ export class TimingTower {
     this.gapHead = h('button', { class: 'tower-toggle', onclick: () => this.setPrefs({ interval: !this.interval }) });
     this.sizeButton = h('button', { class: 'tower-toggle tower-size', title: 'Show or hide places gained, lap and sector times', onclick: () => this.setPrefs({ compact: !this.compact }) });
     this.body = h('div', { class: 'tower-body' });
+    this.badge.hidden = true;
     this.el = h('div', { class: 'tower', hidden: true },
-      h('div', { class: 'tower-head' }, this.badge, this.weather, this.sizeButton),
+      h('div', { class: 'tower-head' }, this.weather, this.sizeButton),
       this.flag,
       this.tabs,
       h('div', { class: 'tower-row tower-labels' },
@@ -143,11 +151,17 @@ export class TimingTower {
     setChildren(this.tabs, tab('All', null), ...sim.classes.map((c) => tab(c.label, c.index, c.color)));
   }
 
-  /** The badge on top: the lap of a race (and the time left in a race by time), or the session and its clock. */
-  private updateBadge(sim: RaceSim, session: SessionSim | null): void {
+  /**
+   * The lap counter: the lap of a race (and the time left in a race by
+   * time), or the session and its clock; black, yellow under yellow flags or
+   * a neutralisation (`flag`: what race control shows), red under a red flag.
+   */
+  private updateBadge(sim: RaceSim, session: SessionSim | null, flag: string | null): void {
     const over = sim.finished || sim.chequered;
     this.badge.classList.toggle('session', !!session);
     this.badge.classList.toggle('over', over);
+    this.badge.classList.toggle('red', flag === 'red');
+    this.badge.classList.toggle('yellow', flag !== null && flag !== 'red');
     if (session) {
       setText(this.badgeLabel, session.spec.name);
       setText(this.badgeValue, over ? '' : clock(session.timeLeft));
@@ -165,10 +179,56 @@ export class TimingTower {
     setText(this.badgeExtra, over ? '' : left);
   }
 
+  /**
+   * Puts the lap counter in the top middle of the map: in the top row when
+   * the figures at the left and the toolbars at the right leave the middle
+   * free, otherwise under the toolbars, as near the middle as the tower and
+   * whatever else reaches down there allow. What the broadcast shows under
+   * it moves down with it (--counter-shift).
+   */
+  private placeBadge(): void {
+    const map = this.el.parentElement;
+    const width = map?.clientWidth ?? 0;
+    const w = this.badge.offsetWidth;
+    const height = this.badge.offsetHeight;
+    if (!map || !width || !w) return;
+    const box = map.getBoundingClientRect();
+    const others = [...map.querySelectorAll<HTMLElement>('.map-hud, .map-right > *, .tower')].map((el) => el.getBoundingClientRect()).filter((r) => r.width > 0);
+    /** How far the counter's middle can go to the left and to the right in the row `top` pixels down. */
+    const room = (top: number): [number, number] => {
+      let lo = COUNTER_ROOM + w / 2;
+      let hi = width - COUNTER_ROOM - w / 2;
+      for (const r of others) {
+        if (r.top - box.top >= top + height || r.bottom - box.top <= top) continue;
+        const left = r.left - box.left;
+        const right = r.right - box.left;
+        // What stands in the left half keeps it from the left, the rest from the right.
+        if ((left + right) / 2 < width / 2) lo = Math.max(lo, right + COUNTER_ROOM + w / 2);
+        else hi = Math.min(hi, left - COUNTER_ROOM - w / 2);
+      }
+      return [lo, hi];
+    };
+    const middle = width / 2;
+    const [lo, hi] = room(COUNTER_TOP);
+    const below = middle < lo || middle > hi;
+    let x = middle;
+    if (below) {
+      const [from, to] = room(COUNTER_BELOW);
+      x = Math.max(from, Math.min(to, middle));
+    }
+    this.badge.style.left = `${Math.round(x)}px`;
+    this.badge.style.top = `${below ? COUNTER_BELOW : COUNTER_TOP}px`;
+    map.style.setProperty('--counter-shift', below ? `${height + 8}px` : '0px');
+  }
+
   private refresh(force: boolean): void {
     const sim = this.race.sim;
     const show = !!sim && this.store.mode === 'race';
+    // The lap counter is the tower's, but stands on the map itself.
+    const map = this.el.parentElement;
+    if (map && this.badge.parentElement !== map) map.append(this.badge);
     this.el.hidden = !show;
+    this.badge.hidden = !show;
     if (!sim || !show) return;
     const now = performance.now();
     if (!force && now - this.last < REFRESH_MS) return;
@@ -186,10 +246,11 @@ export class TimingTower {
     this.updateTabs(sim);
     const session = sim instanceof SessionSim ? sim : null;
     this.el.classList.toggle('session', !!session);
-    this.updateBadge(sim, session);
     const w = sim.wetness;
     setText(this.weather, w >= 0.02 || sim.rain > 0.05 ? `${sim.rain > 0.05 ? 'Rain · ' : ''}wet ${Math.round(w * 100)}%` : '');
     const flag = sim.finished ? null : flagText(sim);
+    this.updateBadge(sim, session, flag?.kind ?? null);
+    this.placeBadge();
     this.flag.hidden = !flag;
     if (flag) {
       setText(this.flag, flag.text);

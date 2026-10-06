@@ -1481,11 +1481,11 @@ input[type='range'] {
   stroke-width: 0.3%;
 }
 
-/* The final lap. */
+/* The final lap (under the lap counter, where that is below the toolbars). */
 .tv-lap {
   position: absolute;
   left: var(--tv-centre, 50%);
-  top: 130px;
+  top: calc(130px + var(--counter-shift, 0px));
   transform: translateX(-50%);
   animation: tv-pop 0.3s ease-out;
   color: #111;
@@ -1726,7 +1726,7 @@ input[type='range'] {
 .tv-replay {
   position: absolute;
   left: var(--tv-centre, 50%);
-  top: 96px;
+  top: calc(96px + var(--counter-shift, 0px));
   transform: translateX(-50%);
   padding: 4px 14px;
   border-radius: 4px;
@@ -2373,21 +2373,34 @@ input[type='range'] {
   display: none;
 }
 
-/* The badge: "Lap 16 / 56", or the session and its clock. */
 .tower-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 24px;
+  min-height: 18px;
   padding: 0 5px 0 3px;
 }
 
+/*
+ * The lap counter, in the top middle of the map: "Lap 16 / 56", or the
+ * session and its clock. It follows the flags: black, yellow under yellow
+ * flags or a neutralisation, red under a red flag.
+ */
 .tower-badge {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: stretch;
   gap: 2px;
-  height: 24px;
-  font-size: 15px;
+  height: 26px;
+  font: italic 700 16px/1 var(--fom-font);
+  text-transform: uppercase;
+  color: #fff;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.5));
+  pointer-events: none;
+  user-select: none;
 }
 
 .tb-label,
@@ -2401,20 +2414,23 @@ input[type='range'] {
 }
 
 .tb-value {
-  --fom-bg: var(--fom-yellow);
+  --fom-bg: var(--fom-black);
   min-width: 30px;
+}
+
+.tower-badge.yellow .tb-value {
+  --fom-bg: var(--fom-yellow);
   color: #111;
+}
+
+.tower-badge.red .tb-value {
+  --fom-bg: var(--fom-red);
 }
 
 .tb-extra {
   --fom-bg: var(--fom-black);
   min-width: 30px;
   font-weight: 600;
-}
-
-.tower-badge.session .tb-value {
-  --fom-bg: var(--fom-black);
-  color: #fff;
 }
 
 /* The chequered flag once it is out. */
@@ -2424,7 +2440,6 @@ input[type='range'] {
 }
 
 .tower-weather {
-  margin-left: auto;
   font-size: 11px;
   font-weight: 600;
   color: #bfe3ff;
@@ -2445,14 +2460,11 @@ input[type='range'] {
 
 .tower-size {
   height: 18px;
+  margin-left: auto;
   padding: 0 9px;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.05em;
-}
-
-.tower-weather:empty + .tower-size {
-  margin-left: auto;
 }
 
 .tower-size:hover {
