@@ -36,8 +36,8 @@ export interface RaceRules {
   pace: { race: number; consistency: number; overtaking: number };
   fuel: { perMetre: number; capacity: number; refuelRate: number };
   tyres: { mustUseTwo: boolean; compounds: Compound[] };
-  /** Driver change time and the longest a driver stays in the car (seconds; 0 for no limit). */
-  pit: { stops: boolean; tyreChange: number; concurrent: boolean; minStops: number; minStationary: number; driverChange: number; driverStint: number };
+  /** Driver change time, the longest a driver stays in the car (seconds; 0 for no limit), and the time repairing contact damage adds to a stop. */
+  pit: { stops: boolean; tyreChange: number; concurrent: boolean; minStops: number; minStationary: number; driverChange: number; driverStint: number; repair: number };
   /** Null when the class has no DRS. */
   drs: { fromLap: number; gap: number } | null;
   air: { towDragCut: number; wakeDownforceLoss: number };
@@ -217,6 +217,7 @@ export function parseRaceRules(raw: unknown, vehicle: Pick<VehicleClass, 'id' | 
       minStationary: num(pit, 'minStationaryS', 0, 0, 600),
       driverChange: num(pit, 'driverChangeS', 25, 0, 300),
       driverStint: num(pit, 'driverStintMinutes', 0, 0, 1440) * 60,
+      repair: num(pit, 'repairS', bike ? 0 : 30, 0, 3600),
     },
     drs: hasDrs ? { fromLap: Math.round(num(drs, 'fromLap', 3, 1, 100)), gap: num(drs, 'gapS', 1, 0.1, 5) } : null,
     air: {

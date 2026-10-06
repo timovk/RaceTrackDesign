@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ReplayBuffer } from '../src/core/race/replay.ts';
 import { DT } from '../src/core/race/sim.ts';
-import { car, start } from './raceFixture.ts';
+import { calm, car, start } from './raceFixture.ts';
 
 describe('replays', () => {
   it('draw the race as it was a few seconds ago, between two steps, from the last stretch only', () => {
@@ -55,5 +55,38 @@ describe('replays', () => {
     expect(was.status).toBe('pit');
     expect(was.pit?.stopped).toBe(true);
     expect(sim.cars[stop!.id].pit?.stopped ?? false).toBe(false);
+  });
+
+  it('remember a car spinning off the road', () => {
+    // A driver alone who gets every corner wrong: sooner or later a spin.
+    const base = calm(car('f1'));
+    const rules = { ...base, incidents: { ...base.incidents, off: 1000 }, pit: { ...base.pit, stops: false, minStops: 0 } };
+    const sim = start(car('f1'), { kind: 'laps', laps: 8, cars: 1 }, rules);
+    const c = sim.cars[0];
+    const buffer = new ReplayBuffer(30);
+    let spun: { t: number; yaw: number; lateral: number } | null = null;
+    for (let i = 0; i < 6000 && !spun; i++) {
+      sim.step();
+      buffer.record(sim);
+      if (c.spin && Math.abs(c.yaw) > 2 && c.v === 0) spun = { t: sim.t, yaw: c.yaw, lateral: c.lateral };
+    }
+    expect(spun).not.toBeNull();
+    // On until it is back on the road and facing ahead, then look back.
+    for (let i = 0; i < 280 && (c.offTrack || c.yaw !== 0); i++) {
+      sim.step();
+      buffer.record(sim);
+    }
+    expect(c.offTrack).toBe(false);
+    expect(c.yaw).toBe(0);
+    const r = buffer.view(sim, spun!.t)!;
+    const was = r.view.cars[0];
+    expect(was.yaw).toBe(spun!.yaw);
+    expect(was.offTrack).toBe(true);
+    expect(was.lateral).toBe(spun!.lateral);
+    // Drawn turned round where it stood, not pointing along the track.
+    const pose = r.view.pose(was, r.alpha)!;
+    const along = r.view.pose(Object.assign(Object.create(was), { yaw: 0, prevYaw: 0 }), r.alpha)!;
+    expect(Math.abs(pose.heading - along.heading)).toBeCloseTo(Math.abs(spun!.yaw), 6);
+    expect(pose.x).toBe(along.x);
   });
 });

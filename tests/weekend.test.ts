@@ -47,6 +47,9 @@ describe('sessions', () => {
     expect(sim.entries.some((c) => c.history.filter((h) => h.kind === 'long').length >= 8)).toBe(true);
     expect([...sim.seen().values()].some((s) => s.some((x) => x >= 8))).toBe(true);
     expect(sim.events.some((e) => e.kind === 'chequered')).toBe(true);
+    // Nobody races anybody in a session: a driver's own trouble at most, no contact.
+    expect(sim.contacts).toHaveLength(0);
+    expect(sim.tally.touches + sim.tally.tapped + sim.tally.forcedOff + sim.tally.damaged + sim.tally.collisions).toBe(0);
   });
 
   it('runs a qualifying push lap at the calibrated qualifying pace on a rubbered track', () => {

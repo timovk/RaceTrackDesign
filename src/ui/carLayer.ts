@@ -280,8 +280,8 @@ export class CarLayer {
     const dt = this.lastT < 0 || now < this.lastT ? Infinity : now - this.lastT;
     this.lastT = now;
     const lerpU = (car: RaceCar) => car.prevU + (car.u - car.prevU) * alpha;
-    // Side by side where cars would overlap.
-    const onTrack = view.cars.filter((c) => c.status === 'running');
+    // Side by side where cars would overlap (a car off the road stays where it is).
+    const onTrack = view.cars.filter((c) => c.status === 'running' && !c.offTrack);
     this.spread = spreadCars(
       onTrack.map((c) => ({ id: c.id, u: lerpU(c), lateral: c.prevLateral + (c.lateral - c.prevLateral) * alpha, length: this.looks[c.id].set.model.length, width: this.looks[c.id].set.model.width })),
       { n, ds, width: t.width, lineOffset: line.offset },
@@ -352,9 +352,9 @@ export class CarLayer {
       if (car.status === 'retired') {
         const pose = view.pose(car, alpha);
         if (!pose) continue;
-        // Parked beside the track, turned off the racing line.
-        const near = this.index?.nearest(pose.x, pose.y, 60);
-        const heading = near ? t.heading[near.k] + 0.5 : 0;
+        // Parked beside the track, turned off the racing line; or as it came to rest after a crash.
+        const near = car.retired?.heading === undefined ? this.index?.nearest(pose.x, pose.y, 60) : null;
+        const heading = car.retired?.heading ?? (near ? t.heading[near.k] + 0.5 : 0);
         place(car.id, look, pose.x, pose.y, heading, 0, 0, 0, 0, 0, compound, 0);
         continue;
       }
@@ -377,9 +377,11 @@ export class CarLayer {
       const u = lerpU(car);
       const lateral = car.prevLateral + (car.lateral - car.prevLateral) * alpha + (this.spread.get(car.id) ?? 0);
       const p = linePoint(line, n, u, lateral);
-      // Moving across the road, the car points where it goes (its left is anticlockwise on the map).
+      // Spinning, it is turned from the way it is going; otherwise, moving across the road, it points where it goes
+      // (its left is anticlockwise on the map).
       const along = (car.u - car.prevU) * ds;
-      if (along > 0.05) p.heading -= Math.atan2(car.lateral - car.prevLateral, along);
+      if (car.yaw !== 0 || car.prevYaw !== 0) p.heading += car.prevYaw + (car.yaw - car.prevYaw) * alpha;
+      else if (along > 0.05) p.heading -= Math.atan2(car.lateral - car.prevLateral, along);
       const k = Math.floor(((u % n) + n) % n) % n;
       const drs = car.drsUntilU > u ? 1 : 0;
       place(car.id, look, p.x, p.y, p.heading, u * ds, car.v, line.curvature[k], line.curvature[k], drs, compound, lightsOf(car));

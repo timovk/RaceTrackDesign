@@ -613,12 +613,13 @@ export class TvBroadcast {
       const at = (id: number) => this.buffer.view(sim, e.t)?.view.cars[id]?.u ?? sim.cars[id]?.u ?? 0;
       // A pass for the lead of the race is a major event; any other pass is not.
       if (e.kind === 'overtake') this.director.note(sim.cars[e.car]?.position === 1 ? 'lead' : 'overtake', e.car, sim.cars[e.car]?.position <= 10 ? { other: e.other, raceTime: e.t, u: at(e.car) } : undefined);
-      if (e.kind === 'off' || e.kind === 'contact') this.director.note('incident', e.car, { raceTime: e.t, u: at(e.car) });
+      // (Not a touch that cost the cars a little time and nothing else.)
+      if ((e.kind === 'off' || e.kind === 'contact') && !e.minor) this.director.note('incident', e.car, { raceTime: e.t, u: at(e.car) });
       if (e.kind === 'retired') this.director.note('incident', e.car);
       if (['overtake', 'fastest', 'off', 'contact', 'retired', 'pit', 'flag', 'weather'].includes(e.kind)) {
         const car = sim.cars[e.car];
         // Only the front of the field's passes and stops, to keep the screen clear.
-        if ((e.kind === 'overtake' || e.kind === 'pit') && car && car.position > 10) continue;
+        if ((e.kind === 'overtake' || e.kind === 'pit' || e.minor) && car && car.position > 10) continue;
         this.pop(e.kind, e.text);
       }
     }

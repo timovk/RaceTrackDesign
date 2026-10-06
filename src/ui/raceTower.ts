@@ -211,8 +211,11 @@ export class TimingTower {
         setText(row.pit, mark);
         row.pit.classList.toggle('in-pit', mark === 'GAR' || mark === 'PIT');
       } else {
-        setText(row.pit, car.status === 'pit' ? 'PIT' : car.status === 'finished' ? '🏁' : car.stops ? String(car.stops) : '');
+        // Damage that has the car making for the pits shows until it is repaired.
+        const damaged = car.status === 'running' && car.damage !== null && car.damage.kind !== 'body';
+        setText(row.pit, car.status === 'pit' ? 'PIT' : car.status === 'finished' ? '🏁' : damaged ? 'DMG' : car.stops ? String(car.stops) : '');
         row.pit.classList.toggle('in-pit', car.status === 'pit');
+        row.pit.classList.toggle('damaged', damaged);
       }
     });
   }

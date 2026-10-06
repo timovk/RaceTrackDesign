@@ -27,10 +27,15 @@
  * speed limit, for tyres, fuel, a driver change or a change of weather.
  *
  * The race brings mistakes, trips off the track, crashes and technical
- * failures. Race control shows yellow flags where something happened and,
- * when a car stops on track, may neutralise the race with a safety car, a
- * virtual safety car or a full course yellow. Rain comes and goes on a
- * seeded timeline and the track gets wet and dries.
+ * failures. In a race of cars a driver's own trouble comes at the corners,
+ * more often with a rival right behind: the car runs wide, leaves the road
+ * and comes back, or spins. And two cars side by side through a corner now
+ * and then touch: the speed and how far alongside they are decide between a
+ * touch that costs time, a spin, damage that needs the pits, and a car out
+ * of the race (cornerTrouble, sideBySide). Race control shows yellow flags
+ * where something happened and, when a car stops on track, may neutralise
+ * the race with a safety car, a virtual safety car or a full course yellow.
+ * Rain comes and goes on a seeded timeline and the track gets wet and dries.
  *
  * Time advances in fixed steps of DT seconds, so a seed always gives the same
  * race whatever the playback speed. Within a step, cars walk station by
@@ -41,7 +46,7 @@ import { hashSeed, mulberry32, seededRandom } from '../rng.ts';
 import type { Driver, Entrant } from './field.ts';
 import { gauss } from './field.ts';
 import { EDGE_GAP, LEFT, RIGHT, SIDE_GAP } from './lanes.ts';
-import { type RaceModel, gripBlend, lapRatioAtGrip, launchSpeed } from './model.ts';
+import { type PassingZone, type RaceModel, gripBlend, lapRatioAtGrip, launchSpeed } from './model.ts';
 import type { RaceRules, TyreType } from './rules.ts';
 import type { RaceSetup } from './setup.ts';
 import {
@@ -117,6 +122,33 @@ export interface RaceEvent {
   /** The car involved, or -1 for race control and the weather. */
   car: number;
   other?: number;
+  /** A touch that cost the cars a little time and nothing else: in the feed, not worth a replay. */
+  minor?: boolean;
+}
+
+/** What contact has done to a car: a broken front wing or nose, a puncture, bodywork it has to live with, or damage it cannot race on. */
+export type DamageKind = 'wing' | 'puncture' | 'body' | 'terminal';
+
+/** A contact between two cars, as stewards would look at it: who was where, and what came of it. */
+export interface ContactRecord {
+  t: number;
+  lap: number;
+  /** Race progress of the car ahead where it happened. */
+  u: number;
+  /** The car ahead and the car behind, and how far alongside the one behind was: 0 nose to tail, 1 level. */
+  ahead: number;
+  behind: number;
+  overlap: number;
+  /** The car on the inside of the corner. */
+  inside: number;
+  /** Speed of the faster of the two, m/s. */
+  speed: number;
+  /** The car that was braking later than its line allows, and the one with no room left; -1 for none. */
+  lunging: number;
+  squeezed: number;
+  outcome: 'touch' | 'forced off' | 'spin' | 'damage' | 'out';
+  /** The cars that came off worse: spun, forced off, damaged or out. */
+  hurt: number[];
 }
 
 /** A period under a safety car, virtual safety car or full course yellow, or stopped by a red flag. */
@@ -279,7 +311,8 @@ export class RaceCar {
   position = 0;
   classPosition = 0;
   finishTime: number | null = null;
-  retired: { reason: string; lap: number; x: number; y: number; t: number } | null = null;
+  /** Why and where the car stopped; `heading` when it came to rest some other way than parked along the track. */
+  retired: { reason: string; lap: number; x: number; y: number; t: number; heading?: number } | null = null;
   history: LapRecord[] = [];
   /** Driver in the car, since when, and each driver's time at the wheel before the current stint. */
   driverIndex = 0;
@@ -339,6 +372,27 @@ export class RaceCar {
   ground = 0;
   /** Cars beside it now (bodies overlapping along the road): bit 1 one on its left, bit 2 one on its right. */
   flank = 0;
+  /**
+   * Running wide: making for `reach` metres off the racing line on this side
+   * (+1 its left) and up to `beyond` metres past where the road ends for it
+   * (0: it stays on the road), until race progress `untilU`; then on its way
+   * `back`.
+   */
+  wide: { side: 1 | -1; reach: number; beyond: number; untilU: number; back: boolean } | null = null;
+  /**
+   * Spinning: since when, how long it slides, when it gets going again, the
+   * speed it had and the speed it goes sideways at, which way it turns (the
+   * sign of `yaw`) and how far round it comes to rest (radians); `out`: it
+   * does not get going again, and why.
+   */
+  spin: { from: number; slide: number; until: number; v: number; sideways: number; turn: 1 | -1; rest: number; out: string | null } | null = null;
+  /** How far the car is turned from the way it is going, radians, now and at the step before (a spin). */
+  yaw = 0;
+  prevYaw = 0;
+  /** Damage from contact, and the share of its lap time it costs until it is repaired. */
+  damage: { kind: DamageKind; pace: number } | null = null;
+  /** No contact before this race time: it has just had one. */
+  shaken = 0;
   /** No passing before this race progress (after a restart, until the line). */
   holdUntilU = -Infinity;
   stuckLaps = 0;
@@ -546,6 +600,106 @@ const LUNGE_MISSED = 0.25;
  * for the rest of the race, the same rules hold as everywhere.
  */
 const AWAY_UNTIL = 200;
+/**
+ * A driver's own trouble (lanes). The class's chances per lap of a mistake,
+ * a trip off and a crash are drawn at each braking point, in equal parts:
+ * SOLO of each for a car on its own, and PRESSED times that with a rival
+ * within PRESSED_GAP seconds behind it, or while it is going for a pass
+ * itself. The rest of the class's figures comes from contact (CONTACT);
+ * both are tuned on the real circuits so that the totals stay what the
+ * class's figures say (scripts/raceTrial.ts prints them).
+ *
+ * - A mistake: the car runs WIDE_LEAST to WIDE_MOST metres wide of its line
+ *   until WIDE_PAST metres past the corner's slowest point, and loses
+ *   MISTAKE_LOSS seconds on top, as MISTAKE_SHARE of its speed.
+ * - A trip off: it leaves the road on the outside by OFF_CLEAR metres, does
+ *   OFF_PACE of its speed there, loses OFF_LOSS seconds (as OFF_SHARE of
+ *   its speed) and comes back once nobody is within RETURN_GAP seconds
+ *   behind on the strip of road it joins.
+ * - SPIN_SHARE of the trips off are spins: the car slides to a stop over
+ *   SPIN_SLIDE seconds, turning round and going to the outside at
+ *   SPIN_SIDEWAYS metres per second (or what it takes to end up off the
+ *   road), stands for SPIN_STOPPED seconds (the last SPIN_TURN of them
+ *   turning to face the right way) and pulls away from a standstill.
+ * - A crash: the same slide, over CRASH_SLIDE seconds, into the barrier.
+ */
+const SOLO = { mistake: 0.665, off: 0.46, crash: 0.28 } as const;
+const PRESSED = 2.5;
+const PRESSED_GAP = 0.5;
+const WIDE_LEAST = 1.2;
+const WIDE_MOST = 3.5;
+const WIDE_PAST = 50;
+const MISTAKE_LOSS = [0.2, 0.9] as const;
+const MISTAKE_SHARE = 0.2;
+const OFF_LOSS = [1.5, 5] as const;
+const OFF_SHARE = 0.6;
+const OFF_CLEAR = 0.5;
+const OFF_PACE = 0.75;
+const RETURN_GAP = 0.6;
+const SPIN_SHARE = 0.4;
+const SPIN_SLIDE = 1.6;
+const SPIN_SIDEWAYS = 6;
+const SPIN_STOPPED = [3, 9] as const;
+const SPIN_TURN = 1.4;
+const CRASH_SLIDE = 1.1;
+/**
+ * Contact (lanes, in a race). Two cars side by side through a corner both
+ * need road the other is on. For every second of it there is a chance they
+ * touch: CONTACT times the classes' chances per lap of a mistake (a touch),
+ * of a trip off (a spin, a car forced off the road, damage) and of a crash
+ * (a car out), times the two drivers' error rates and the conditions;
+ * NO_ROOM times that when one of them has no room left, BRAKING_LATE times
+ * while one is braking later than its line allows, and less with little of
+ * one car beside the other (in full from OVERLAP_FULL of a car's length).
+ * Two cars that are not racing each other for position (one is lapping the
+ * other, or they are of two classes) touch TRAFFIC as often: one of them
+ * gives the other room.
+ *
+ * The speed and the overlap decide what comes of it. A car out is rare in a
+ * slow corner and common in a fast one: CRASH_SLOW of its chance below SLOW
+ * metres per second, rising with the square of the speed by CRASH_FAST up
+ * to FAST. Short of that, with the car behind less than LEVEL_WITH
+ * alongside, its nose is against the other's side or rear wheel: the car
+ * ahead is turned round (SPIN_TAP of the time in a slow corner, SPIN_FAST
+ * less in a fast one), or the car behind breaks its front wing (WING_SHARE
+ * of the time), or the car ahead has a puncture. Wheel to wheel, the car on
+ * the outside is forced off the road (FORCED_OFF of the time) or spins
+ * (SPIN_LESS less often than by a tap), or one of the two has a puncture or
+ * bodywork damage. Of a car out, the other is out as well BOTH_OUT of the
+ * time, and a car gets back to the pits to retire there LIMP_HOME of the
+ * time. After a contact the two are left alone for SHAKEN seconds.
+ *
+ * A touch costs each car TOUCH_LOSS seconds. A broken wing costs WING_PACE
+ * of the lap time until the pits fit a new one (the class's repair time),
+ * bodywork BODY_PACE for the rest of the race; with a puncture, or damage
+ * it cannot race on, a car does LIMP of its pace back to the pits.
+ */
+const CONTACT = { touch: 0.41, off: 1.3, crash: 1.45 } as const;
+const NO_ROOM = 3;
+const BRAKING_LATE = 2;
+const TRAFFIC = 0.25;
+const OVERLAP_FULL = 0.25;
+const LEVEL_WITH = 0.6;
+/** A corner holds a side of the road where a car in that lane does less than this share of the racing line's pace. */
+const CORNER_HELD = 0.98;
+const SLOW = 20;
+const FAST = 70;
+const CRASH_SLOW = 0.25;
+const CRASH_FAST = 3;
+const SPIN_TAP = 0.55;
+const SPIN_FAST = 0.3;
+const SHAKEN = 5;
+const TOUCH_LOSS = [0.15, 0.5] as const;
+const TOUCH_SHARE = 0.2;
+const WING_PACE = [0.012, 0.03] as const;
+const BODY_PACE = [0.003, 0.009] as const;
+const LIMP = 0.6;
+const FORCED_OFF = 0.45;
+const SPIN_LESS = 0.2;
+const WING_SHARE = 0.3;
+const BOTH_OUT = 0.4;
+const LIMP_HOME = 0.3;
+const DAMAGE_RANK: Record<DamageKind, number> = { body: 0, wing: 1, puncture: 2, terminal: 3 };
 /** Dirty air in lanes: all of the downforce loss within WAKE_FULL seconds of the car ahead, none beyond WAKE_REACH, falling away with the square in between. */
 const WAKE_FULL = 0.2;
 const WAKE_REACH = 1;
@@ -608,6 +762,10 @@ export class RaceSim {
   events: RaceEvent[] = [];
   /** Every pit stop, in the order they started. */
   stops: PitStopRecord[] = [];
+  /** Every contact between two cars, in the order they happened. */
+  contacts: ContactRecord[] = [];
+  /** Drivers' trouble so far, by what came of it (a race of cars; contact is counted once, whatever number of cars it took out). */
+  readonly tally = { mistakes: 0, offs: 0, spins: 0, crashes: 0, touches: 0, forcedOff: 0, tapped: 0, damaged: 0, collisions: 0 };
   /** Race time at which the first car completed each lap (index = lap - 1). */
   lapLeaders: number[] = [];
   /** Race control. */
@@ -952,7 +1110,7 @@ export class RaceSim {
   /** Map position between the last two steps (alpha 0..1), or null when the car is off the map. */
   pose(car: RaceCar, alpha: number): { x: number; y: number; heading: number } | null {
     if (car.status === 'finished') return null;
-    if (car.status === 'retired') return car.retired ? { x: car.retired.x, y: car.retired.y, heading: 0 } : null;
+    if (car.status === 'retired') return car.retired ? { x: car.retired.x, y: car.retired.y, heading: car.retired.heading ?? 0 } : null;
     if (car.status === 'pit' && car.pit && this.model.pit) {
       const pit = this.model.pit;
       const p = car.pit.prevP + (car.pit.p - car.pit.prevP) * alpha;
@@ -965,9 +1123,11 @@ export class RaceSim {
     }
     const u = car.prevU + (car.u - car.prevU) * alpha;
     const p = this.linePoint(u, car.prevLateral + (car.lateral - car.prevLateral) * alpha);
-    // Moving across the road, the car points where it goes (its left is anticlockwise on the map).
+    // Spinning, it is turned from the way it is going; otherwise, moving across the road, it points where it
+    // goes (its left is anticlockwise on the map).
     const along = ((car.u - car.prevU) * this.model.line.length) / this.n;
-    if (along > 0.05) p.heading -= Math.atan2(car.lateral - car.prevLateral, along);
+    if (car.yaw !== 0 || car.prevYaw !== 0) p.heading += car.prevYaw + (car.yaw - car.prevYaw) * alpha;
+    else if (along > 0.05) p.heading -= Math.atan2(car.lateral - car.prevLateral, along);
     return p;
   }
 
@@ -995,6 +1155,15 @@ export class RaceSim {
 
   private moveTrackCar(car: RaceCar, t0: number): void {
     car.prevU = car.u;
+    if (car.spin) {
+      this.moveSpinning(car, t0);
+      return;
+    }
+    if (car.yaw !== 0 || car.prevYaw !== 0) {
+      // Facing the right way again.
+      car.yaw = 0;
+      car.prevYaw = 0;
+    }
     let t = t0;
     let budget = DT;
     if (car.startDelay > t0) {
@@ -1013,7 +1182,9 @@ export class RaceSim {
       t += loss;
       if (car.delay <= 1e-9) {
         car.delay = 0;
-        car.offTrack = false;
+        // (In lanes a car is off the track while it is off the road: see updateLanes.)
+        if (this.lanes) car.delayShare = 0.5;
+        else car.offTrack = false;
       }
     }
     const startU = car.u;
@@ -1037,6 +1208,43 @@ export class RaceSim {
         const pulling = l !== null && speed >= 0.97 * l.factor * launchSpeed(car.model.launch, l.from, Math.max(0, this.lineAt(startU) - this.lineAt(l.u)));
         if (!pulling) car.launch = { u: car.u, from: speed, factor: 1 };
       }
+    }
+  }
+
+  /**
+   * A car that has lost it: it slides to a stop, turning round, and stands
+   * there; then it turns to face the right way and pulls away from a
+   * standstill, or it is out of the race where it stopped.
+   */
+  private moveSpinning(car: RaceCar, t0: number): void {
+    const sp = car.spin!;
+    const since = t0 - sp.from;
+    car.prevYaw = car.yaw;
+    if (since < sp.slide) {
+      // Its speed falls away evenly to nothing.
+      const metres = sp.v * Math.max(0, 1 - (since + DT / 2) / sp.slide) * DT;
+      this.advanceTo(car, this.onward(car.u, metres, car.lateral));
+      if (car.status !== 'running') return;
+      car.v = metres / DT;
+      car.ground = car.v;
+      const x = Math.min(1, (since + DT) / sp.slide);
+      car.yaw = sp.turn * sp.rest * (1 - (1 - x) * (1 - x));
+      return;
+    }
+    car.v = 0;
+    car.ground = 0;
+    const t = t0 + DT;
+    const over = t >= sp.until - 1e-9;
+    if (sp.out !== null) {
+      if (over) this.retire(car, sp.out, t, 0, this.linePoint(car.u, car.lateral).heading + car.yaw);
+      return;
+    }
+    const turning = clamp01((t - (sp.until - SPIN_TURN)) / SPIN_TURN);
+    car.yaw = sp.turn * (sp.rest + (2 * Math.PI - sp.rest) * turning * turning * (3 - 2 * turning));
+    if (over) {
+      car.spin = null;
+      car.launch = { u: car.u, from: 0, factor: 1 };
+      if (car.wide) car.wide.untilU = -Infinity;
     }
   }
 
@@ -1161,6 +1369,11 @@ export class RaceSim {
         car.capped = true;
       }
       if (car.giveWay !== 0) s *= 1 + GIVE_WAY_LIFT;
+      // Off the road: on grass or gravel, and back up to speed from what it has left.
+      if (car.offTrack) {
+        s /= OFF_PACE;
+        car.capped = true;
+      }
     }
     const yellow = this.yellowAt[k];
     if (yellow) s *= yellow === 2 ? DOUBLE_YELLOW : SINGLE_YELLOW;
@@ -1432,6 +1645,7 @@ export class RaceSim {
       const zone = car.cls.zoneAt[k];
       if (zone >= 0) {
         if (!this.lanes) this.attemptPass(car, u, t, k, zone);
+        else this.cornerTrouble(car, car.model.zones[zone], u, t);
         car.zone = { index: zone, v: car.v, t };
       }
     }
@@ -1562,6 +1776,8 @@ export class RaceSim {
     car.status = 'finished';
     car.finishTime = t;
     car.pit = null;
+    car.spin = null;
+    car.wide = null;
     this.finishCount++;
     car.cls.finishers++;
     if (this.multiClass) {
@@ -1569,7 +1785,11 @@ export class RaceSim {
     } else if (this.finishCount > 1 && this.finishCount <= 3) this.log('finish', t, `${car.entrant.code} finishes P${this.finishCount}`, car.id, car.lapsDone);
   }
 
-  /** Per-lap draws: pace scatter, and whether this lap brings a mistake, a trip off, a crash or a failure. */
+  /**
+   * Per-lap draws: pace scatter, and whether this lap brings a failure, or
+   * (bikes, and cars on a lap without braking zones) a mistake, a trip off
+   * or a crash. In a race of cars those come corner by corner: cornerTrouble.
+   */
   protected startLap(car: RaceCar, t: number): void {
     const d = car.driver;
     // More scatter on a wet track.
@@ -1581,7 +1801,7 @@ export class RaceSim {
     car.incident = null;
     if (car.status !== 'running') return;
     const inc = car.rules.incidents;
-    const risk = (car.wear > 1 ? 1.5 : 1) * riskFactor(car.tyreType, this.wetness) * this.incidentRisk(car);
+    const risk = this.driverRisk(car);
     if (risk <= 0) return;
     const lapStartU = car.lapsDone * this.n;
     const zones = car.model.zones;
@@ -1592,6 +1812,7 @@ export class RaceSim {
       car.incident = { u: lapStartU + Math.floor(car.rng() * this.n), kind: 'failure' };
       return;
     }
+    if (this.lanes && zones.length) return;
     acc += inc.crash * d.errorRate * risk;
     if (r < acc) {
       car.incident = { u: lapStartU + atZone(), kind: 'crash' };
@@ -1613,6 +1834,159 @@ export class RaceSim {
     return 1;
   }
 
+  /** How much more likely than usual a driver is to get it wrong: on worn-out tyres, on the wrong tyres for the track, in the rain. */
+  private driverRisk(car: RaceCar): number {
+    return (car.wear > 1 ? 1.5 : 1) * riskFactor(car.tyreType, this.wetness) * this.incidentRisk(car);
+  }
+
+  /** Whether a driver is under pressure: a rival of its class close behind in the fight for a place, or going for a pass itself. */
+  private pressed(car: RaceCar): boolean {
+    if (this.setup.session) return false;
+    if (car.attack) return true;
+    const order = this.trackOrder;
+    const o = order[(car.trackIndex + 1) % order.length];
+    if (!o || o === car || o.status !== 'running' || o.offTrack || o.cls !== car.cls) return false;
+    const d = car.u - o.u;
+    return d > 0 && d < this.n / 2 && d * this.ds < PRESSED_GAP * Math.max(o.v, 20);
+  }
+
+  /**
+   * A car of a race of cars at a braking point: now and then the driver gets
+   * the corner wrong (see SOLO). The car goes to the outside of the corner,
+   * as far as the mistake takes it.
+   */
+  private cornerTrouble(car: RaceCar, zone: PassingZone, u: number, t: number): void {
+    if (this.phase !== 'green' || car.wide || car.spin || car.startDelay > t || car.exitUntilU > u) return;
+    const risk = this.driverRisk(car) * car.driver.errorRate;
+    if (risk <= 0) return;
+    const per = troubleChances(car.rules.incidents, car.model.zones.length, this.pressed(car));
+    const crash = per.crash * risk;
+    const off = crash + per.off * risk;
+    const mistake = off + per.mistake * risk;
+    if (mistake <= 0) return;
+    const r = car.rng();
+    if (r >= mistake) return;
+    this.trouble(car, r < crash ? 'crash' : r < off ? 'off' : 'mistake', -zone.inside as 1 | -1, u + mod(zone.apex - zone.station, this.n) + WIDE_PAST / this.ds, t);
+  }
+
+  /**
+   * A driver's own trouble (lanes), going to `side` of the road until race
+   * progress `untilU`: a mistake that takes the car wide, a trip off the
+   * road or a spin, or a crash.
+   */
+  private trouble(car: RaceCar, kind: 'mistake' | 'off' | 'crash', side: 1 | -1, untilU: number, t: number): void {
+    const lap = car.lapsDone + 1;
+    const where = this.where(car.u);
+    if (kind === 'mistake') {
+      this.tally.mistakes++;
+      car.wide = { side, reach: WIDE_LEAST + (WIDE_MOST - WIDE_LEAST) * car.rng(), beyond: 0, untilU, back: false };
+      this.lose(car, MISTAKE_LOSS, MISTAKE_SHARE);
+      return;
+    }
+    if (kind === 'crash') {
+      this.tally.crashes++;
+      this.log('retired', t, `${car.entrant.code} crashes out${where}`, car.id, lap);
+      this.spinCar(car, side, 'crash', t);
+      this.trackIncident(car.u, 'crash', t, car);
+      return;
+    }
+    if (car.rng() < SPIN_SHARE) {
+      this.tally.spins++;
+      this.log('off', t, `${car.entrant.code} spins${where}`, car.id, lap);
+      this.spinCar(car, side, null, t);
+    } else {
+      this.tally.offs++;
+      this.log('off', t, `${car.entrant.code} goes off${where}`, car.id, lap);
+      this.leaveRoad(car, side, untilU);
+    }
+    this.trackIncident(car.u, 'off', t, car);
+  }
+
+  /** Time lost to a mistake or a knock: `range` seconds, as `share` of the car's speed while it lasts. */
+  private lose(car: RaceCar, range: readonly [number, number], share: number): void {
+    car.delay += range[0] + (range[1] - range[0]) * car.rng();
+    car.delayShare = share;
+  }
+
+  /** Off the road on `side` and back: a trip across the grass or the run-off. */
+  private leaveRoad(car: RaceCar, side: 1 | -1, untilU: number): void {
+    car.wide = { side, reach: 1e3, beyond: this.offBy(car, mod(Math.floor(car.u), this.n), side), untilU, back: false };
+    car.offTrack = true;
+    car.attack = null;
+    car.lungeUntilU = -Infinity;
+    this.lose(car, OFF_LOSS, OFF_SHARE);
+  }
+
+  /**
+   * The car spins, going to `side`; with `out`, it does not get going again
+   * (the reason it retires). It ends up off the road, however far across it
+   * that is; a car that is out, never against the pit wall.
+   */
+  private spinCar(car: RaceCar, side: 1 | -1, out: string | null, t: number): void {
+    const k = mod(Math.floor(car.u), this.n);
+    if (out !== null && this.pitBeside(k, side)) side = -side as 1 | -1;
+    const slide = out !== null ? CRASH_SLIDE : SPIN_SLIDE;
+    const stopped = out !== null ? 0.5 : SPIN_STOPPED[0] + (SPIN_STOPPED[1] - SPIN_STOPPED[0]) * car.rng();
+    const beyond = this.offBy(car, k, side) + (out !== null ? OFF_CLEAR : 0);
+    const across = (this.roadEdge(car, k, side) - car.lateral) * side + beyond;
+    car.spin = {
+      from: t, slide, until: t + slide + stopped, v: car.ground > 0 ? car.ground : car.v, sideways: Math.max(SPIN_SIDEWAYS, across / (0.8 * slide)), turn: side,
+      rest: 2.2 + 1.6 * car.rng(), out,
+    };
+    car.wide = { side, reach: 1e3, beyond, untilU: Infinity, back: false };
+    car.offTrack = true;
+    car.delay = 0;
+    car.attack = null;
+    car.lungeUntilU = -Infinity;
+    car.coverUntilU = -Infinity;
+    car.beside = [];
+    car.giveWay = 0;
+    car.giveWayTo = null;
+    car.heldBy = null;
+    car.drsUntilU = -Infinity;
+  }
+
+  /** Whether the pit lane runs beside the track on `side` at station `k` (its wall is there, not grass). */
+  private pitBeside(k: number, side: 1 | -1): boolean {
+    const pit = this.model.pit;
+    if (!pit || side !== this.pitSide) return false;
+    const margin = Math.round(80 / this.ds);
+    return mod(k - pit.entry + margin, this.n) <= pit.span + 2 * margin;
+  }
+
+  /** The sideways position of a car that is against the edge of the road on `side` at station `k`. */
+  private roadEdge(car: RaceCar, k: number, side: 1 | -1): number {
+    return side * Math.max(0, this.model.track.width[k] / 2 - car.cls.half - EDGE_GAP) - this.model.line.offset[k];
+  }
+
+  /** How far past the edge of the road (as roadEdge has it) a car that leaves it on `side` goes: clear of the road, short of the barrier. */
+  private offBy(car: RaceCar, k: number, side: 1 | -1): number {
+    return this.pitBeside(k, side) ? 0 : 2 * car.cls.half + EDGE_GAP + OFF_CLEAR;
+  }
+
+  /** The side a car at station `k` gets off the road on: the nearer one, unless the pit lane is there. */
+  private nearSide(car: RaceCar, k: number): 1 | -1 {
+    const side = car.lateral + this.model.line.offset[k] >= 0 ? 1 : -1;
+    return this.pitBeside(k, side) ? -side as 1 | -1 : side;
+  }
+
+  /** The outside of the corner the road is in at station `k` or comes to within CORNER_LOOK metres; on a straight, the car's nearer side. */
+  private outsideAt(car: RaceCar, k: number): 1 | -1 {
+    const curvature = this.model.line.curvature;
+    for (let j = 0, end = Math.round(CORNER_LOOK / this.ds); j <= end; j += 2) {
+      const c = curvature[(k + j) % this.n];
+      if (c > 1 / 400 || c < -1 / 400) return c > 0 ? 1 : -1;
+    }
+    return this.nearSide(car, k);
+  }
+
+  /** How far to the side of where it is a car that stops comes to stand (lanes): beside the nearer edge of the road, right against it or `clear` of it. */
+  private aside(car: RaceCar, clear: boolean): number {
+    const k = mod(Math.floor(car.u), this.n);
+    const side = this.nearSide(car, k);
+    return this.roadEdge(car, k, side) + side * (this.offBy(car, k, side) - (clear ? 0 : OFF_CLEAR)) - car.lateral;
+  }
+
   /** Where along the pit lane a car stops: its team's box (team-mates share one). */
   protected boxFor(car: RaceCar): number {
     const pit = car.model.pit!;
@@ -1625,6 +1999,11 @@ export class RaceSim {
     car.incident = null;
     const where = this.where(inc.u);
     const lap = car.lapsDone + 1;
+    if (this.lanes && inc.kind !== 'failure') {
+      // (A lap without braking zones: wherever on it the car is.)
+      this.trouble(car, inc.kind, this.outsideAt(car, mod(Math.floor(car.u), this.n)), car.u + WIDE_PAST / this.ds, t);
+      return false;
+    }
     if (inc.kind === 'failure') {
       const list = car.model.vehicle.kind === 'bike' ? FAILURES_BIKE : FAILURES_CAR;
       const reason = list[Math.floor(car.rng() * list.length)];
@@ -1637,8 +2016,9 @@ export class RaceSim {
         car.retired = { ...car.retired!, x: p.x, y: p.y };
         return true;
       }
-      this.retire(car, reason, t, r < 0.7 ? 14 : 6);
-      this.trackIncident(car.u, r < 0.7 ? 'parked' : 'stopped', t, car);
+      const parked = r < 0.7;
+      this.retire(car, reason, t, this.lanes ? this.aside(car, parked) : parked ? 14 : 6);
+      this.trackIncident(car.u, parked ? 'parked' : 'stopped', t, car);
       return true;
     }
     if (inc.kind === 'crash') {
@@ -1661,7 +2041,7 @@ export class RaceSim {
     return false;
   }
 
-  protected retire(car: RaceCar, reason: string, t: number, aside = 8): void {
+  protected retire(car: RaceCar, reason: string, t: number, aside = 8, heading?: number): void {
     const p = car.status === 'pit' ? this.pose(car, 1) : this.linePoint(car.u, car.lateral + aside);
     car.status = 'retired';
     car.pit = null;
@@ -1669,7 +2049,9 @@ export class RaceSim {
     car.passing = null;
     car.attack = null;
     car.beside = [];
-    car.retired = { reason, lap: car.lapsDone + 1, x: p?.x ?? 0, y: p?.y ?? 0, t };
+    car.spin = null;
+    car.wide = null;
+    car.retired = { reason, lap: car.lapsDone + 1, x: p?.x ?? 0, y: p?.y ?? 0, t, ...(heading === undefined ? {} : { heading }) };
     if (reason !== 'crash' && !reason.startsWith('collision')) this.log('retired', t, `${car.entrant.code} retires: ${reason}`, car.id, car.lapsDone + 1);
   }
 
@@ -2151,7 +2533,7 @@ export class RaceSim {
       + aquaplaning(car.tyreType, this.wetness);
     // A green track is slower until rubber builds up on the racing line.
     const green = car.rules.weekend.evolution * (1 - this.rubber);
-    return (1 + car.entrant.carPace + car.driver.pace) * (1 + loss) * (1 + car.noise) * (1 + green) * this.lapFactor(car);
+    return (1 + car.entrant.carPace + car.driver.pace) * (1 + loss) * (1 + car.noise) * (1 + green) * this.lapFactor(car) * (1 + (car.damage?.pace ?? 0));
   }
 
   /** Lap-time fraction a driver gives away against a qualifying lap: race pace (managing tyres and fuel, engine modes). */
@@ -2270,6 +2652,11 @@ export class RaceSim {
 
   protected decide(car: RaceCar, t: number): void {
     if (car.pitRequest || this.chequered) return;
+    // Damage that has not been seen to (the car came in for a red flag meanwhile).
+    if (car.damage && this.needsPits(car)) {
+      car.pitRequest = 'damage';
+      return;
+    }
     const left = this.lapsLeft(car);
     if (left <= 1) return;
     const m = car.model;
@@ -2367,7 +2754,7 @@ export class RaceSim {
     const ahead = car.cls.order[car.classPosition - 2];
     const iv = ahead ? this.gapBetween(car, ahead) : null;
     if (!queue && ahead && ahead.status === 'running' && iv?.kind === 'time' && iv.value < 3) ahead.threatLap = car.lapsDone + 1;
-    const service: Service = queue ? { compound: null, fuel: 0, time: Infinity, reason: 'red flag', driver: null } : this.planService(car, car.pitRequest ?? 'plan');
+    const service: Service = queue ? { compound: null, fuel: 0, time: Infinity, reason: 'red flag', driver: null } : this.repairs(car, this.planService(car, car.pitRequest ?? 'plan'));
     const record: PitStopRecord = {
       car: car.id, lap: car.lapsDone + 1, entry: t, exit: NaN, stationary: NaN,
       from: car.compound, to: service.compound, fuel: service.fuel, driver: service.driver, reason: service.reason,
@@ -2381,6 +2768,29 @@ export class RaceSim {
     car.offTrack = false;
     car.delay = 0;
     car.incident = null;
+    car.wide = null;
+    car.spin = null;
+  }
+
+  /** Whether a car's damage is a reason to come in: not bodywork it can only live with, and not a front wing with the race nearly run. */
+  private needsPits(car: RaceCar): boolean {
+    const kind = car.damage?.kind;
+    if (!kind || kind === 'body' || !car.model.pit) return false;
+    return kind !== 'wing' || this.lapsLeft(car) > 2;
+  }
+
+  /**
+   * What repairing contact damage adds to a stop: a new front wing takes the
+   * class's repair time, a puncture needs tyres whatever the plan was, and
+   * a car that cannot race on is pushed into its garage.
+   */
+  private repairs(car: RaceCar, s: Service): Service {
+    const kind = car.damage?.kind;
+    if (!kind || kind === 'body') return s;
+    if (kind === 'terminal') return { compound: null, fuel: 0, time: 3, reason: s.reason, driver: null };
+    const pit = car.rules.pit;
+    if (kind === 'wing') return { ...s, time: s.time + pit.repair * (0.85 + 0.3 * car.rng()) };
+    return s.compound !== null ? s : { ...s, compound: car.compound, time: pit.concurrent ? Math.max(s.time, pit.tyreChange) : s.time + pit.tyreChange };
   }
 
   /** What the crew does: tyres (which compound, for the conditions), fuel, a driver change, and how long it takes. */
@@ -2467,6 +2877,13 @@ export class RaceSim {
     }
     car.pit!.record.stationary = t - car.pit!.stopStart;
     const lap = car.lapsDone + 1;
+    if (car.damage?.kind === 'terminal') {
+      this.log('retired', t, `${car.entrant.code} retires in the pits: collision damage`, car.id, lap);
+      this.retire(car, 'collision damage', t);
+      return;
+    }
+    const repaired = car.damage !== null && car.damage.kind !== 'body';
+    if (repaired) car.damage = null;
     const r = car.rules;
     const old = r.tyres.compounds[car.compound];
     if (s.compound !== null) {
@@ -2489,7 +2906,7 @@ export class RaceSim {
     car.pitRequest = null;
     const tyres = s.compound !== null ? `${old.name} → ${r.tyres.compounds[s.compound].name}` : 'no tyres';
     const fuel = s.fuel > 0 ? `, ${Math.round(s.fuel)} kg fuel` : '';
-    this.log('pit', t, `${car.entrant.code} pits: ${tyres}${fuel}${change}, ${s.time.toFixed(1)} s`, car.id, lap);
+    this.log('pit', t, `${car.entrant.code} pits: ${tyres}${fuel}${change}${repaired ? ', repairs' : ''}, ${s.time.toFixed(1)} s`, car.id, lap);
     if (r.fuel.refuelRate <= 0 && r.pit.stops) {
       if (car.tyreType !== 'slick') {
         car.plan = [];
@@ -2771,11 +3188,14 @@ export class RaceSim {
     for (let i = 0; i < N; i++) {
       squeezed[i] = 0;
       const a = cars[i];
+      // (A car off the road is beside nobody.)
+      if (a.offTrack) continue;
       for (let s = 1; s < N; s++) {
         const j = (i + s) % N;
         const b = cars[j];
         const d = mod(a.u - b.u, n) * ds;
         if (d > 30) break;
+        if (b.offTrack) continue;
         const reach = (a.cls.length + b.cls.length) / 2;
         const apart = Math.abs(a.lateral - b.lateral) >= a.cls.half + b.cls.half + SIDE_GAP - SLACK - 0.05;
         if (d >= reach + ALONG_GAP) {
@@ -2826,6 +3246,24 @@ export class RaceSim {
       hi[i] = half - line.offset[k];
       const closed = this.noPassing(car);
 
+      // Running wide, off the road or on its way back: for this car the road ends further out. It is off the
+      // track (in nobody's way, and beside nobody) from when it leaves the road until it is back on it.
+      const wide = car.wide;
+      let returning = false;
+      if (wide) {
+        const out = (car.lateral - (wide.side > 0 ? hi[i] : lo[i])) * wide.side;
+        if (!wide.back && !car.spin && car.delay <= 0 && car.u >= wide.untilU) wide.back = true;
+        if (wide.back && (wide.beyond <= 0 || out <= 1e-6)) car.wide = null;
+        else {
+          // (On its way back, no further out than it is.)
+          const room = wide.back ? Math.min(wide.beyond, Math.max(0, out)) : wide.beyond;
+          if (wide.side > 0) hi[i] += room;
+          else lo[i] -= room;
+          returning = wide.back;
+        }
+      }
+      car.offTrack = car.spin !== null || (car.wide !== null && car.wide.beyond > 0);
+
       // An attack ends beside its target (then the two sort it out), when the target is gone, or when it has come to nothing.
       const attack = car.attack;
       let chasing = false;
@@ -2862,6 +3300,9 @@ export class RaceSim {
       if (car.exitUntilU > car.u && pit) want = this.pitSide * 1e3;
       else if (car.pitRequest && pit && mod(pit.entry - car.u, n) * ds < ENTRY_ROAD) want = this.pitSide * 1e3;
       else if (this.regrid?.lateral.has(car.id)) want = this.regrid.lateral.get(car.id)!;
+      // Wide: as far out as the mistake takes it (no further in than it is); back when the road is clear for it.
+      else if (car.wide && !returning) want = car.wide.side * Math.max(car.wide.reach, car.wide.side * car.lateral);
+      else if (returning) want = this.clearToReturn(car, k) ? 0 : car.lateral;
       else if (closed) want = 0;
       else if (chasing) want = attack!.target.lateral + attack!.side * (car.cls.half + attack!.target.cls.half + SIDE_GAP);
       else if (car.coverUntilU > car.u) {
@@ -2871,9 +3312,14 @@ export class RaceSim {
         if ((want - car.lateral) * car.coverSide < 0) want = car.lateral;
       } else if (car.giveWay !== 0) want = car.giveWay * GIVE_WAY_ASIDE;
       else if (squeezed[i] === 1 && !this.cornerSoon(car, k)) want = car.lateral;
-      // (Off the grid a car jinks out from behind another at little more than walking pace.)
-      const rate = Math.min(SIDEWAYS, Math.max(SIDEWAYS_SLOPE * car.v, this.away(car) && car.v > 2 ? AWAY_SIDEWAYS : 0)) * DT;
-      const to = car.lateral + Math.max(-rate, Math.min(rate, want - car.lateral));
+      // (Off the grid a car jinks out from behind another at little more than walking pace; a car that spins slides
+      // out while it is still moving.)
+      const rate = (car.spin
+        ? this.t - car.spin.from < car.spin.slide ? car.spin.sideways : 0
+        : Math.min(SIDEWAYS, Math.max(SIDEWAYS_SLOPE * car.v, this.away(car) && car.v > 2 ? AWAY_SIDEWAYS : 0))) * DT;
+      let to = car.lateral + Math.max(-rate, Math.min(rate, want - car.lateral));
+      // (Sliding, it does not follow the racing line across the road: it goes straight on, and out.)
+      if (car.spin && car.wide && rate > 0) to = car.lateral - (line.offset[k] - line.offset[mod(Math.floor(car.prevU), n)]) + car.wide.side * rate;
       next[i] = to < lo[i] ? lo[i] : to > hi[i] ? hi[i] : to;
       squeezed[i] = -1;
     }
@@ -3020,6 +3466,155 @@ export class RaceSim {
       def.giveWay = side;
       def.giveWayTo = side !== 0 ? to : null;
     }
+
+    // Side by side through a corner, each needs road the other is on: now and then they touch.
+    if (!this.setup.session && this.phase === 'green') {
+      for (let p = 0; p < pairs.length; p += 2) this.sideBySide(cars[pairs[p]], cars[pairs[p + 1]]);
+    }
+  }
+
+  /**
+   * Whether a car off the road at station `k` can come back onto it: nobody
+   * on the strip of road it joins, from RETURN_GAP seconds behind it to a
+   * length ahead.
+   */
+  private clearToReturn(car: RaceCar, k: number): boolean {
+    const edge = this.roadEdge(car, k, car.wide!.side);
+    for (const o of this.trackOrder) {
+      if (o === car || o.status !== 'running' || o.offTrack) continue;
+      if (Math.abs(o.lateral - edge) >= o.cls.half + car.cls.half + SIDE_GAP) continue;
+      const rel = this.aheadBy(o, car);
+      if (rel < car.cls.length + 2 && rel > -(o.cls.length + RETURN_GAP * Math.max(o.ground, 10))) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Two cars side by side, `a` ahead of `b` or level with it, where a corner
+   * holds the road or one of them has no room left: the chance, in this
+   * step, that they touch, and what comes of it (see CONTACT).
+   */
+  private sideBySide(a: RaceCar, b: RaceCar): void {
+    const t = this.t;
+    if (t < a.shaken || t < b.shaken || a.offTrack || b.offTrack || a.status !== 'running' || b.status !== 'running') return;
+    if (a.exitUntilU > a.u || b.exitUntilU > b.u) return;
+    const k = mod(Math.floor(a.u), this.n);
+    const squeezed = a.squeezed === b ? a : b.squeezed === a ? b : null;
+    const m = a.model;
+    if (!squeezed && Math.min(m.laneCap[LEFT][k], m.laneCap[RIGHT][k]) >= CORNER_HELD) return;
+    const overlap = clamp01(1 - Math.abs(this.aheadBy(a, b)) / ((a.cls.length + b.cls.length) / 2));
+    const lunging = b.lungeUntilU > b.u ? b : a.lungeUntilU > a.u ? a : null;
+    const ia = a.rules.incidents;
+    const ib = b.rules.incidents;
+    const speed = Math.max(a.ground, b.ground);
+    const per = contactChances({ mistake: (ia.mistake + ib.mistake) / 2, off: (ia.off + ib.off) / 2, crash: (ia.crash + ib.crash) / 2 }, speed, overlap, {
+      noRoom: squeezed !== null, brakingLate: lunging !== null, traffic: a.cls !== b.cls || Math.abs(a.u - b.u) >= this.n / 2,
+    });
+    // The two drivers, and the conditions each is in.
+    const scale = ((a.driver.errorRate * this.driverRisk(a) + b.driver.errorRate * this.driverRisk(b)) / 2) * DT;
+    const crash = per.crash * scale;
+    const off = crash + per.off * scale;
+    const touch = off + per.touch * scale;
+    if (touch <= 0) return;
+    const r = this.rng();
+    if (r >= touch) return;
+    this.collide(a, b, r < crash ? 'crash' : r < off ? 'off' : 'touch', overlap, speed, k, lunging, squeezed);
+  }
+
+  /** What a contact does (see CONTACT): `a` is ahead and `b` is `overlap` alongside it at station `k`, at `speed` metres per second. */
+  private collide(a: RaceCar, b: RaceCar, level: 'touch' | 'off' | 'crash', overlap: number, speed: number, k: number, lunging: RaceCar | null, squeezed: RaceCar | null): void {
+    const t = this.t;
+    a.shaken = t + SHAKEN;
+    b.shaken = t + SHAKEN;
+    const lap = a.lapsDone + 1;
+    const where = this.where(a.u);
+    const other = (c: RaceCar) => (c === a ? b : a);
+    // The outside of the corner; on a straight, the side of the car that has no room left.
+    const curve = this.model.line.curvature[k];
+    const out: 1 | -1 = curve > 1 / 2000 ? 1 : curve < -1 / 2000 ? -1 : squeezed ? (squeezed.lateral > other(squeezed).lateral ? 1 : -1) : this.nearSide(a, k);
+    const outer = (a.lateral - b.lateral) * out > 0 ? a : b;
+    /** The side a car goes to when it is knocked off its line: away from the other. */
+    const away = (c: RaceCar): 1 | -1 => (c.lateral >= other(c).lateral ? 1 : -1);
+    const record = (outcome: ContactRecord['outcome'], hurt: RaceCar[]) => {
+      this.contacts.push({
+        t, lap, u: a.u, ahead: a.id, behind: b.id, overlap, inside: other(outer).id, speed, lunging: lunging?.id ?? -1, squeezed: squeezed?.id ?? -1, outcome, hurt: hurt.map((c) => c.id),
+      });
+    };
+    for (const c of [a, b]) this.lose(c, TOUCH_LOSS, TOUCH_SHARE);
+    const both = `${b.entrant.code} and ${a.entrant.code}`;
+    const r = this.rng();
+    if (level === 'touch') {
+      // Each loses a little, and the car on the outside is pushed off its line.
+      this.tally.touches++;
+      record('touch', []);
+      if (!outer.wide) outer.wide = { side: out, reach: WIDE_LEAST + (WIDE_MOST - WIDE_LEAST) * r, beyond: 0, untilU: outer.u + WIDE_PAST / this.ds, back: false };
+      this.log('contact', t, `${both} touch${where}`, b.id, lap, a.id, true);
+      return;
+    }
+    const result = contactResult(level === 'crash', speed, overlap, r);
+    const victim = result.who === 'ahead' ? a : result.who === 'behind' ? b : outer;
+    if (result.outcome === 'out') {
+      // Out where it stops, or after limping back to the pits; often the other car with it.
+      this.tally.collisions++;
+      const victims = result.both ? [victim, other(victim)] : [victim];
+      record('out', victims);
+      const said: string[] = [];
+      let stopped: RaceCar | null = null;
+      for (const c of victims) {
+        if (c.model.pit && c.rng() < LIMP_HOME) {
+          said.push(`${c.entrant.code} limps to the pits`);
+          this.hurt(c, 'terminal', t);
+        } else {
+          said.push(`${c.entrant.code} is out`);
+          this.spinCar(c, away(c), 'collision', t);
+          stopped ??= c;
+        }
+      }
+      this.log('contact', t, `Contact between ${both}${where}: ${said.join(', ')}`, victim.id, lap, other(victim).id);
+      this.trackIncident((stopped ?? a).u, stopped ? 'crash' : 'contact', t, stopped ?? a);
+      return;
+    }
+    record(result.outcome, [victim]);
+    let what: string;
+    if (result.outcome === 'spin') {
+      what = 'spins';
+      this.tally.tapped++;
+      this.spinCar(victim, away(victim), null, t);
+      this.trackIncident(victim.u, 'off', t, victim);
+    } else if (result.outcome === 'forced off') {
+      what = 'is forced off';
+      this.tally.forcedOff++;
+      this.leaveRoad(victim, out, victim.u + WIDE_PAST / this.ds);
+      this.trackIncident(victim.u, 'off', t, victim);
+    } else {
+      const kind = result.damage!;
+      what = kind === 'wing' ? 'damages its nose' : kind === 'puncture' ? 'has a puncture' : 'has bodywork damage';
+      this.tally.damaged++;
+      this.hurt(victim, kind, t);
+    }
+    this.log('contact', t, `Contact between ${both}${where}: ${victim.entrant.code} ${what}`, victim.id, lap, other(victim).id);
+  }
+
+  /**
+   * Damage to a car: it loses pace, and unless it is bodywork it can only
+   * live with, it makes for the pits (or stops, where there is no pit lane
+   * to make for).
+   */
+  private hurt(car: RaceCar, kind: DamageKind, t: number): void {
+    if (car.damage && DAMAGE_RANK[car.damage.kind] >= DAMAGE_RANK[kind]) return;
+    const range = kind === 'wing' ? WING_PACE : BODY_PACE;
+    car.damage = { kind, pace: kind === 'puncture' || kind === 'terminal' ? 1 / LIMP - 1 : range[0] + (range[1] - range[0]) * car.rng() };
+    car.lapPace = this.lapPaceFor(car);
+    if (kind === 'body') return;
+    car.attack = null;
+    car.lungeUntilU = -Infinity;
+    if (!car.model.pit) {
+      if (kind === 'wing') return;
+      this.retire(car, kind === 'puncture' ? 'puncture' : 'collision damage', t, this.aside(car, true));
+      this.trackIncident(car.u, 'parked', t, car);
+      return;
+    }
+    if (this.needsPits(car)) car.pitRequest = 'damage';
   }
 
   // ---- racing ----------------------------------------------------------------------
@@ -3232,9 +3827,75 @@ export class RaceSim {
     }
   }
 
-  protected log(kind: RaceEventKind, t: number, text: string, car: number, lap = this.leaderLap, other?: number): void {
-    this.events.push({ t, lap, kind, text, car, other });
+  protected log(kind: RaceEventKind, t: number, text: string, car: number, lap = this.leaderLap, other?: number, minor = false): void {
+    this.events.push({ t, lap, kind, text, car, other, ...(minor ? { minor } : {}) });
   }
+}
+
+/**
+ * The chances at one braking point that a driver gets the corner wrong (a
+ * mistake, a trip off the road or a spin, a crash), before the driver and
+ * the conditions come into it: see SOLO. `rates` are the class's chances
+ * per lap, shared out over the lap's `zones` braking points; `pressed`: with
+ * a rival right behind, or going for a pass.
+ */
+export function troubleChances(rates: { mistake: number; off: number; crash: number }, zones: number, pressed = false): { mistake: number; off: number; crash: number } {
+  const scale = (pressed ? PRESSED : 1) / Math.max(1, zones);
+  return { mistake: SOLO.mistake * rates.mistake * scale, off: SOLO.off * rates.off * scale, crash: SOLO.crash * rates.crash * scale };
+}
+
+/**
+ * The chances, per second side by side through a corner, of a touch, of
+ * something worse (a spin, a car forced off the road, damage) and of a car
+ * out of the race, before the drivers and the conditions come into it: see
+ * CONTACT. `rates` are the class's chances per lap, `speed` is in metres
+ * per second and `overlap` runs from 0 (nose to tail) to 1 (level); `how`:
+ * one of them has no room left, one is braking later than its line allows,
+ * the two are not racing each other for position.
+ */
+export function contactChances(
+  rates: { mistake: number; off: number; crash: number }, speed: number, overlap: number, how: { noRoom?: boolean; brakingLate?: boolean; traffic?: boolean } = {},
+): { touch: number; off: number; crash: number } {
+  const heat = clamp01(overlap / OVERLAP_FULL) * (how.noRoom ? NO_ROOM : 1) * (how.brakingLate ? BRAKING_LATE : 1) * (how.traffic ? TRAFFIC : 1);
+  const fast = clamp01((speed - SLOW) / (FAST - SLOW));
+  return {
+    touch: CONTACT.touch * rates.mistake * heat,
+    off: CONTACT.off * rates.off * heat,
+    crash: CONTACT.crash * rates.crash * (CRASH_SLOW + CRASH_FAST * fast * fast) * heat,
+  };
+}
+
+/** What a contact worse than a touch comes to, and for which car. */
+export interface ContactResult {
+  outcome: 'spin' | 'forced off' | 'damage' | 'out';
+  /** The car that comes off worse: the one ahead, the one behind, or the one on the outside of the corner. */
+  who: 'ahead' | 'behind' | 'outside';
+  /** What is damaged. */
+  damage?: DamageKind;
+  /** A car out: whether the other is out as well. */
+  both?: boolean;
+}
+
+/**
+ * What a contact worse than a touch comes to (see CONTACT): one that puts a
+ * car `out`, or one short of that, at `speed` metres per second with the car
+ * behind `overlap` alongside (0 nose to tail, 1 level), for a draw `r` in [0, 1).
+ */
+export function contactResult(out: boolean, speed: number, overlap: number, r: number): ContactResult {
+  // The nose of the car behind against the other's side or rear wheel, or the two wheel to wheel.
+  const partial = overlap < LEVEL_WITH;
+  if (out) return { outcome: 'out', who: partial ? 'ahead' : 'outside', both: r < BOTH_OUT };
+  const spin = SPIN_TAP - SPIN_FAST * clamp01((speed - SLOW) / (FAST - SLOW));
+  if (partial) {
+    if (r < spin) return { outcome: 'spin', who: 'ahead' };
+    return r < spin + WING_SHARE ? { outcome: 'damage', who: 'behind', damage: 'wing' } : { outcome: 'damage', who: 'ahead', damage: 'puncture' };
+  }
+  if (r < FORCED_OFF) return { outcome: 'forced off', who: 'outside' };
+  const from = FORCED_OFF + spin - SPIN_LESS;
+  if (r < from) return { outcome: 'spin', who: 'outside' };
+  // Either car's tyre or bodywork, in equal parts.
+  const x = (r - from) / (1 - from);
+  return { outcome: 'damage', who: x < 0.5 ? 'ahead' : 'behind', damage: (2 * x) % 1 < 0.5 ? 'puncture' : 'body' };
 }
 
 /** The side of the track the pit lane is on, as a left-normal sign. */

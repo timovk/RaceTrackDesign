@@ -296,8 +296,8 @@ describe('the start in lanes', () => {
 
   it('gets a full grid round a real hairpin at the end of a short run: Sakhir', () => {
     // The racing line's stations are under half a metre long at this apex and over two metres just after it: cars
-    // following each other by stations and not by road stood still here.
-    const m = circuitRace('Sakhir', car('f1'));
+    // following each other by stations and not by road stood still here. (Without incidents: the start alone.)
+    const m = circuitRace('Sakhir', car('f1'), calm(car('f1')));
     for (const seed of ['lap1-0', 'lap1-1']) {
       const lap = firstLap(trialRace(m, seed));
       expect(lap.through).toBeLessThan(8);

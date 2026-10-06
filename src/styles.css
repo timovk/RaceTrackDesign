@@ -2370,6 +2370,14 @@ input[type='range'] {
   font-weight: 800;
 }
 
+.tw-pit.damaged {
+  color: #0b0d10;
+  background: #ff9f43;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
 /* Race analysis dock under the map */
 
 .dock {

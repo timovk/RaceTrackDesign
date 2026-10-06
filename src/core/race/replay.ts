@@ -22,8 +22,11 @@ export interface RaceView {
 
 const STATUS: readonly CarStatus[] = ['running', 'pit', 'finished', 'retired'];
 const TYRES: readonly TyreType[] = ['slick', 'inter', 'wet'];
-/** Per car per step: u, speed, lateral, status, pit progress, stopped in the box, compound, tyre type, DRS until, where it retired (x, y), how far into its garage. */
-const FIELDS = 12;
+/**
+ * Per car per step: u, speed, lateral, status, pit progress, stopped in the box, compound, tyre type, DRS until,
+ * where it retired (x, y), how far into its garage, how far it is turned round (a spin), whether it is off the road.
+ */
+const FIELDS = 14;
 
 interface Step {
   t: number;
@@ -110,6 +113,8 @@ export class ReplayBuffer {
       d[o + 9] = car.retired ? car.retired.x : NaN;
       d[o + 10] = car.retired ? car.retired.y : NaN;
       d[o + 11] = car.garage;
+      d[o + 12] = car.yaw;
+      d[o + 13] = car.offTrack ? 1 : 0;
     }
     const sc = sim.safetyCar;
     step.scU = sc ? sc.u : NaN;
@@ -150,6 +155,10 @@ export class ReplayBuffer {
         retired: status === 'retired' ? { ...(car.retired ?? { reason: '', lap: 0, t: b.t }), x: now[o + 9], y: now[o + 10] } : null,
         prevGarage: before[o + 11],
         garage: now[o + 11],
+        // (A spin ends a full turn round, which is facing ahead again: no turning back through it.)
+        prevYaw: Math.abs(now[o + 12] - before[o + 12]) > Math.PI ? now[o + 12] : before[o + 12],
+        yaw: now[o + 12],
+        offTrack: now[o + 13] === 1,
       });
       return stand;
     });

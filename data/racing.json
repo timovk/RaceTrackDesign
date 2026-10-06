@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "notes": "Race rules per vehicle class, keyed by the class id in vehicles.json; a class missing here gets generic defaults. Percentages are shares of the lap time. label and color: the class badge in multi-class races. field: default grid size, cars per team, drivers per car (they share the driving in stints) and the spread (standard deviation) of car and driver pace. race: default length, either distanceKm (laps rounded up) or minutes, a time limit, and a standing or rolling start. pace: racePct is how much slower race laps are than qualifying before fuel and tyres (engine modes, tyre saving); consistencyPct the lap-to-lap scatter; overtaking is how readily the class's drivers go for a pass and how late they dare to brake for one (0 = never; bikes: how easily a pass succeeds). fuel: typical kg per km on the reference circuits, tank size, refuelling rate (0 = no refuelling). tyres: compounds with their type (slick, inter or wet), pace offset to the fastest slick, life in km on the reference circuits and pace lost at the end of that life; mustUseTwo requires two different slick compounds in a dry race. A class without an inter or wet compound gets a generic wet tyre. pit: whether stops are allowed at all, stationary time for four tyres, whether refuelling and tyres happen at once, mandatory stops, the shortest stationary time of a mandatory stop, the time a driver change takes (done while refuelling) and the longest a driver stays in the car. drs: the lap from which it is enabled and the gap in seconds at the detection point. air: share of drag removed when right behind another car (within 0.3 s; most of it is gone half a second back), and share of downforce lost in its wake. incidents: chances per lap and technical retirements per 1000 km. flags: whether race control uses a safety car, and a virtual safety car (vsc, everyone vscPct slower than the race lap) or a full course yellow (fcy, a speed limit of fcyKmh) or neither (null). In a multi-class race the fastest class's flags apply. reference: average wheel energy (MJ/km) and tyre work per km on the real circuits in data/circuits, printed by scripts/raceReference.ts; fuel and tyre wear scale with a track's own values against these. All figures are approximate defaults meant to be edited.",
+  "notes": "Race rules per vehicle class, keyed by the class id in vehicles.json; a class missing here gets generic defaults. Percentages are shares of the lap time. label and color: the class badge in multi-class races. field: default grid size, cars per team, drivers per car (they share the driving in stints) and the spread (standard deviation) of car and driver pace. race: default length, either distanceKm (laps rounded up) or minutes, a time limit, and a standing or rolling start. pace: racePct is how much slower race laps are than qualifying before fuel and tyres (engine modes, tyre saving); consistencyPct the lap-to-lap scatter; overtaking is how readily the class's drivers go for a pass and how late they dare to brake for one (0 = never; bikes: how easily a pass succeeds). fuel: typical kg per km on the reference circuits, tank size, refuelling rate (0 = no refuelling). tyres: compounds with their type (slick, inter or wet), pace offset to the fastest slick, life in km on the reference circuits and pace lost at the end of that life; mustUseTwo requires two different slick compounds in a dry race. A class without an inter or wet compound gets a generic wet tyre. pit: whether stops are allowed at all, stationary time for four tyres, whether refuelling and tyres happen at once, mandatory stops, the shortest stationary time of a mandatory stop, the time a driver change takes (done while refuelling), the longest a driver stays in the car, and repairS: how much longer a stop takes to repair contact damage (a new nose on a single-seater, bodywork on a closed car; this project's own rough figures). drs: the lap from which it is enabled and the gap in seconds at the detection point. air: share of drag removed when right behind another car (within 0.3 s; most of it is gone half a second back), and share of downforce lost in its wake. incidents: a driver's chances per lap of a mistake, a trip off the track and a crash, and technical retirements per 1000 km; in a race of cars part of each comes from contact between cars side by side (see ARCHITECTURE.md, Contact and mistakes). flags: whether race control uses a safety car, and a virtual safety car (vsc, everyone vscPct slower than the race lap) or a full course yellow (fcy, a speed limit of fcyKmh) or neither (null). In a multi-class race the fastest class's flags apply. reference: average wheel energy (MJ/km) and tyre work per km on the real circuits in data/circuits, printed by scripts/raceReference.ts; fuel and tyre wear scale with a track's own values against these. All figures are approximate defaults meant to be edited.",
   "weekendNotes": "weekend: the race weekend before the race. practice: sessions with their length in minutes, the day of the weekend they run on (the track loses some rubber overnight) and longRuns where teams run their race simulations. qualifyingDay: the day qualifying runs. qualifying: stages in order, each a session of some minutes with the cars it takes (entry; everyone when missing): the top count of an earlier stage or of practice (from \"practice\", the best laps over the practice sessions listed, 1-based, or all), the rest after them, or odd or even places (groups); driver picks a crew's driver (0 = the fastest). The grid comes from the last stage a car ran in, later stages in front and groups taking places in turn; with averageTimes from the mean of its best laps over the stages; with knockout the same number of cars goes out at each step whatever the field size, the last stage keeping its size. evolutionPct: how much slower a green track is than one fully rubbered in. redFlag: where cars wait (pitlane: queued at the pit exit; track: stopped in single file before the line), whether the stoppage is added to the race clock, a standing or rolling restart (rollingWhenWet: rolling on a wet track), whether tyres may be changed (work), how many laps back a race that is not resumed is classified, completeAtPct (bikes: a race stopped after this share of its distance is over), whether rain alone stops the race, whether the practice and qualifying clocks stop, and what a car that brings out a red flag in qualifying loses (none, best, best2, all). Figures from the 2026 sporting regulations (2025 for MotoGP and WorldSBK), see weekendSources; the IndyCar groups are split by practice here (in 2026 by the previous race), GT World Challenge runs its three qualifying sessions unsplit (the 2025 format), GT4 qualifying is the session that sets the first race's grid.",
   "weekendSources": {
     "f1": "FIA 2026 F1 Sporting Regulations (Section B, issue 9): https://www.fia.com/system/files/documents/fia_2026_f1_regulations_-_section_b_sporting_-_iss_09_-_2026-10-01.pdf",
@@ -32,7 +32,7 @@
           { "name": "Wet", "code": "W", "color": "#0a84ff", "type": "wet", "lifeKm": 160, "degPct": 1.5 }
         ]
       },
-      "pit": { "stops": true, "tyreChangeS": 2.4, "concurrent": true, "minStops": 0, "minStationaryS": 0 },
+      "pit": { "stops": true, "tyreChangeS": 2.4, "concurrent": true, "minStops": 0, "minStationaryS": 0, "repairS": 8 },
       "drs": { "fromLap": 3, "gapS": 1 },
       "air": { "towDragCut": 0.12, "wakeDownforceLoss": 0.2 },
       "incidents": { "mistakePerLap": 0.02, "offPerLap": 0.003, "crashPerLap": 0.0004, "dnfPer1000Km": 0.15 },
@@ -66,7 +66,7 @@
           { "name": "Wet", "code": "W", "color": "#0a84ff", "type": "wet", "lifeKm": 140, "degPct": 1.6 }
         ]
       },
-      "pit": { "stops": true, "tyreChangeS": 3.2, "concurrent": true, "minStops": 1, "minStationaryS": 0 },
+      "pit": { "stops": true, "tyreChangeS": 3.2, "concurrent": true, "minStops": 1, "minStationaryS": 0, "repairS": 10 },
       "drs": { "fromLap": 3, "gapS": 1 },
       "air": { "towDragCut": 0.12, "wakeDownforceLoss": 0.25 },
       "incidents": { "mistakePerLap": 0.025, "offPerLap": 0.004, "crashPerLap": 0.0006, "dnfPer1000Km": 0.25 },
@@ -97,7 +97,7 @@
           { "name": "Rain", "code": "R", "color": "#0a84ff", "type": "wet", "lifeKm": 140, "degPct": 1.6 }
         ]
       },
-      "pit": { "stops": true, "tyreChangeS": 6, "concurrent": true, "minStops": 0, "minStationaryS": 0 },
+      "pit": { "stops": true, "tyreChangeS": 6, "concurrent": true, "minStops": 0, "minStationaryS": 0, "repairS": 10 },
       "air": { "towDragCut": 0.12, "wakeDownforceLoss": 0.25 },
       "incidents": { "mistakePerLap": 0.02, "offPerLap": 0.003, "crashPerLap": 0.0005, "dnfPer1000Km": 0.2 },
       "flags": { "safetyCar": true, "virtual": null },
@@ -129,7 +129,7 @@
           { "name": "Wet", "code": "W", "color": "#0a84ff", "type": "wet", "lifeKm": 300, "degPct": 1.5 }
         ]
       },
-      "pit": { "stops": true, "tyreChangeS": 22, "concurrent": false, "minStops": 0, "minStationaryS": 0, "driverChangeS": 20, "driverStintMinutes": 110 },
+      "pit": { "stops": true, "tyreChangeS": 22, "concurrent": false, "minStops": 0, "minStationaryS": 0, "driverChangeS": 20, "driverStintMinutes": 110, "repairS": 35 },
       "air": { "towDragCut": 0.1, "wakeDownforceLoss": 0.15 },
       "incidents": { "mistakePerLap": 0.015, "offPerLap": 0.002, "crashPerLap": 0.0002, "dnfPer1000Km": 0.1 },
       "flags": { "safetyCar": true, "virtual": "fcy", "fcyKmh": 80 },
@@ -159,7 +159,7 @@
           { "name": "Wet", "code": "W", "color": "#0a84ff", "type": "wet", "lifeKm": 250, "degPct": 1.5 }
         ]
       },
-      "pit": { "stops": true, "tyreChangeS": 25, "concurrent": false, "minStops": 0, "minStationaryS": 0, "driverChangeS": 20, "driverStintMinutes": 110 },
+      "pit": { "stops": true, "tyreChangeS": 25, "concurrent": false, "minStops": 0, "minStationaryS": 0, "driverChangeS": 20, "driverStintMinutes": 110, "repairS": 35 },
       "air": { "towDragCut": 0.1, "wakeDownforceLoss": 0.15 },
       "incidents": { "mistakePerLap": 0.02, "offPerLap": 0.003, "crashPerLap": 0.0003, "dnfPer1000Km": 0.08 },
       "flags": { "safetyCar": true, "virtual": "fcy", "fcyKmh": 80 },
@@ -188,7 +188,7 @@
           { "name": "Wet", "code": "W", "color": "#0a84ff", "type": "wet", "lifeKm": 250, "degPct": 1.5 }
         ]
       },
-      "pit": { "stops": true, "tyreChangeS": 20, "concurrent": false, "minStops": 2, "minStationaryS": 0, "driverChangeS": 20, "driverStintMinutes": 65 },
+      "pit": { "stops": true, "tyreChangeS": 20, "concurrent": false, "minStops": 2, "minStationaryS": 0, "driverChangeS": 20, "driverStintMinutes": 65, "repairS": 60 },
       "air": { "towDragCut": 0.1, "wakeDownforceLoss": 0.1 },
       "incidents": { "mistakePerLap": 0.02, "offPerLap": 0.003, "crashPerLap": 0.0003, "dnfPer1000Km": 0.06 },
       "flags": { "safetyCar": true, "virtual": "fcy", "fcyKmh": 80 },
@@ -220,7 +220,7 @@
           { "name": "Wet", "code": "W", "color": "#0a84ff", "type": "wet", "lifeKm": 200, "degPct": 1.5 }
         ]
       },
-      "pit": { "stops": true, "tyreChangeS": 20, "concurrent": false, "minStops": 1, "minStationaryS": 30, "driverChangeS": 15, "driverStintMinutes": 35 },
+      "pit": { "stops": true, "tyreChangeS": 20, "concurrent": false, "minStops": 1, "minStationaryS": 30, "driverChangeS": 15, "driverStintMinutes": 35, "repairS": 60 },
       "air": { "towDragCut": 0.1, "wakeDownforceLoss": 0.1 },
       "incidents": { "mistakePerLap": 0.025, "offPerLap": 0.004, "crashPerLap": 0.0004, "dnfPer1000Km": 0.08 },
       "flags": { "safetyCar": true, "virtual": "fcy", "fcyKmh": 80 },
@@ -249,7 +249,7 @@
           { "name": "Wet", "code": "W", "color": "#0a84ff", "type": "wet", "lifeKm": 180, "degPct": 1.5 }
         ]
       },
-      "pit": { "stops": false, "tyreChangeS": 20, "concurrent": false, "minStops": 0, "minStationaryS": 0 },
+      "pit": { "stops": false, "tyreChangeS": 20, "concurrent": false, "minStops": 0, "minStationaryS": 0, "repairS": 60 },
       "air": { "towDragCut": 0.12, "wakeDownforceLoss": 0.05 },
       "incidents": { "mistakePerLap": 0.03, "offPerLap": 0.005, "crashPerLap": 0.0008, "dnfPer1000Km": 0.2 },
       "flags": { "safetyCar": true, "virtual": null },
