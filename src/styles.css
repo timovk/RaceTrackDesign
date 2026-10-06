@@ -1129,6 +1129,213 @@ input[type='range'] {
   background: #0b0d10;
 }
 
+/*
+ * Captions in the look of the timing tower: a name on a slanted bar with the
+ * position in a box beside it, lines under it, and a tag over it. Used for
+ * the car or battle the camera picks up, the pit stop timer, the gap between
+ * two cars and the qualifying lap timer.
+ */
+.fc {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font: italic 700 15px/1 var(--fom-font);
+  text-transform: uppercase;
+  color: #fff;
+  white-space: nowrap;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.5));
+}
+
+.fc-tag {
+  --fom-bg: var(--fom-white);
+  margin-left: 4px;
+  padding: 4px 10px 3px;
+  color: #111;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+}
+
+.fc-main {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.fc-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fc-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 190px;
+  height: 28px;
+  padding: 0 14px;
+  font-size: 18px;
+  letter-spacing: 0.02em;
+}
+
+.fc-name::before {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.fc-team {
+  flex-shrink: 0;
+  width: 5px;
+  height: 18px;
+  transform: skewX(var(--fom-skew));
+}
+
+.fc-line {
+  --fom-bg: var(--fom-black);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 22px;
+  padding: 0 14px;
+  color: #e3e5e8;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.fc .grow {
+  flex: 1;
+}
+
+.fc-line.red {
+  --fom-bg: var(--fom-red);
+  color: #fff;
+}
+
+.fc-line.yellow {
+  --fom-bg: var(--fom-yellow);
+  color: #111;
+}
+
+.fc-line.green {
+  --fom-bg: linear-gradient(180deg, #36d86a, #0f9a3c);
+  color: #fff;
+}
+
+.fc-line.purple {
+  --fom-bg: linear-gradient(180deg, #c05cff, #7a17c4);
+  color: #fff;
+}
+
+.fc-line.time {
+  height: 26px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.fc-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffe42b;
+}
+
+.fc-value.done {
+  color: #5ee08a;
+}
+
+/* The position: a box as tall as the lines beside it, red for the leader. */
+.fc-pos {
+  display: grid;
+  place-items: center;
+  min-width: 46px;
+  padding: 0 8px;
+  font-size: 30px;
+}
+
+.fc-pos.lead {
+  --fom-bg: var(--fom-red);
+}
+
+.fc-pos.small {
+  min-width: 28px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 15px;
+}
+
+/* A line with the position in front of it: the time to beat, or a car of a battle. */
+.fc-row {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+}
+
+.fc-row .fc-line {
+  min-width: 150px;
+}
+
+.fc-row .fc-name {
+  min-width: 170px;
+  height: 22px;
+  font-size: 15px;
+}
+
+.fc .tv-tyre {
+  width: 17px;
+  height: 17px;
+  border-width: 2px;
+  font-size: 9px;
+  font-style: normal;
+}
+
+.tv-lower .fc {
+  align-items: stretch;
+}
+
+.tv-lower .fc-tag {
+  align-self: flex-start;
+}
+
+/* The qualifying lap timer: the car on a flying lap at the left, its split as it completes a sector at the right. */
+.tv-laptimer,
+.tv-split {
+  position: absolute;
+  bottom: 62px;
+}
+
+.tv-laptimer {
+  left: calc(var(--tv-left, 0px) + 26px);
+}
+
+.tv-split {
+  right: 26px;
+  animation: tv-pop 0.3s ease-out;
+}
+
+.tv-laptimer .fc-name,
+.tv-split .fc-name {
+  min-width: 200px;
+}
+
+.tv-laptimer .fc-line,
+.tv-split .fc-line {
+  min-width: 140px;
+}
+
+.tv-laptimer .fc-row .fc-line,
+.tv-split .fc-row .fc-line {
+  height: 26px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.tv-laptimer .fc-pos.small,
+.tv-split .fc-pos.small {
+  height: 26px;
+  font-size: 17px;
+}
+
 .tv-pops {
   position: absolute;
   right: 14px;
@@ -1204,42 +1411,19 @@ input[type='range'] {
 /* The pit stop timer: the time standing in the box, green once the car is away. */
 .tv-timer {
   position: absolute;
-  right: 14px;
+  right: 26px;
   bottom: 62px;
-  min-width: 150px;
-  background: rgba(10, 12, 16, 0.88);
-  border-radius: 6px;
-  overflow: hidden;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
-  color: #f4f6f8;
-  text-align: center;
   animation: tv-pop 0.3s ease-out;
 }
 
-.tv-timer-head {
-  padding: 3px 12px;
-  background: var(--accent);
+.tv-timer .fc-line {
+  justify-content: space-between;
+}
+
+.tv-timer .fc-line.note {
+  height: 18px;
   font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.tv-timer-time {
-  padding: 4px 12px 0;
-  font-size: 30px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-}
-
-.tv-timer-time.done {
-  color: #3ad06b;
-}
-
-.tv-timer-work {
-  padding: 0 12px 7px;
-  font-size: 11px;
-  color: #aeb6c0;
+  color: #c9ccd1;
 }
 
 /* The circuit map: the track, every car as a dot, the cars on screen larger and named. */
@@ -1304,16 +1488,17 @@ input[type='range'] {
   top: 130px;
   transform: translateX(-50%);
   animation: tv-pop 0.3s ease-out;
-  padding: 5px 12px;
-  border-radius: 5px;
-  background: rgba(10, 12, 16, 0.88);
-  border-left: 4px solid var(--accent);
-  color: #f4f6f8;
-  font-size: 15px;
-  font-weight: 800;
+  color: #111;
+  font: italic 700 17px/1 var(--fom-font);
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  font-variant-numeric: tabular-nums;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.5));
+}
+
+.tv-lap span {
+  --fom-bg: var(--fom-yellow);
+  display: block;
+  padding: 7px 16px 6px;
 }
 
 /* The start lights: five pairs of red lights, and the green flag of a rolling start. */
@@ -1375,46 +1560,40 @@ input[type='range'] {
   left: var(--tv-centre, 50%);
   bottom: 62px;
   transform: translateX(-50%);
-  min-width: 260px;
-  background: rgba(10, 12, 16, 0.88);
-  border-radius: 6px;
-  overflow: hidden;
-  color: #f4f6f8;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
 }
 
 .tv-gap-now {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  padding: 6px 12px 2px;
+  min-width: 250px;
+  height: 34px;
+  justify-content: space-between;
 }
 
 .tv-gap-value {
-  font-size: 26px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
+  color: #fff;
+  font-size: 24px;
+  font-weight: 700;
 }
 
 .tv-gap-trend {
   font-size: 12px;
-  font-weight: 700;
 }
 
 .tv-gap-trend.closing {
-  color: #3ad06b;
+  color: #5ee08a;
 }
 
 .tv-gap-trend.growing {
-  color: #ff6b5e;
+  color: #ff7a70;
 }
 
 .tv-gap-bars {
+  --fom-bg: var(--fom-black);
   display: flex;
   gap: 6px;
   align-items: flex-end;
-  height: 46px;
-  padding: 4px 12px 8px;
+  align-self: stretch;
+  height: 50px;
+  padding: 5px 16px 6px;
 }
 
 .tv-gap-bar {
@@ -1430,13 +1609,14 @@ input[type='range'] {
 .tv-gap-fill {
   width: 100%;
   min-height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--accent);
+  transform: skewX(var(--fom-skew));
+  background: #f2b900;
 }
 
 .tv-gap-lap {
   font-size: 9px;
-  color: #aeb6c0;
+  font-weight: 600;
+  color: #c9ccd1;
 }
 
 /* The chequered flag as the winner takes it, below the map. */
@@ -2101,281 +2281,496 @@ input[type='range'] {
   white-space: nowrap;
 }
 
-/* Timing tower over the map */
+/* Timing tower over the map, in the look of Formula 1's broadcast graphics of 2010 to 2014 */
+
+@font-face {
+  font-family: 'Titillium Web';
+  font-style: italic;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/TitilliumWeb-SemiBoldItalic.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Titillium Web';
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/TitilliumWeb-BoldItalic.ttf') format('truetype');
+}
+
+:root {
+  --fom-font: 'Titillium Web', Bahnschrift, 'Arial Narrow', 'Segoe UI', sans-serif;
+  --fom-skew: -14deg;
+  --fom-dark: linear-gradient(180deg, rgba(80, 83, 90, 0.95), rgba(24, 25, 28, 0.95));
+  --fom-black: linear-gradient(180deg, rgba(22, 22, 24, 0.97), rgba(4, 4, 5, 0.97));
+  --fom-red: linear-gradient(180deg, #ee1c2e, #a40010);
+  --fom-yellow: linear-gradient(180deg, #ffe42b, #f2b900);
+  --fom-white: linear-gradient(180deg, #ffffff, #d6d8db);
+  --fom-chequer: conic-gradient(#fff 25%, #111 0 50%, #fff 0 75%, #111 0) 0 0 / 8px 8px;
+}
+
+/* A slanted piece: the text stands upright (in italics) on a background that leans with it. */
+.fom,
+.tw-pos,
+.tw-bar,
+.tb-label,
+.tb-value,
+.tb-extra,
+.tower-flag,
+.tower-tab,
+.tower-size {
+  position: relative;
+  z-index: 0;
+}
+
+.fom::before,
+.tw-pos::before,
+.tw-bar::before,
+.tb-label::before,
+.tb-value::before,
+.tb-extra::before,
+.tower-flag::before,
+.tower-tab::before,
+.tower-size::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  transform: skewX(var(--fom-skew));
+  background: var(--fom-bg, var(--fom-dark));
+}
 
 .tower {
+  --cols: 58px 70px 40px 30px;
   position: absolute;
   top: 66px;
-  left: 12px;
+  left: 14px;
   max-height: calc(100% - 110px);
   display: flex;
   flex-direction: column;
-  background: rgba(12, 15, 19, 0.88);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 12px;
-  overflow: hidden;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  gap: 3px;
+  font: italic 700 13px/1 var(--fom-font);
+  text-transform: uppercase;
+  color: #fff;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.5));
+  user-select: none;
 }
 
-.tower-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border);
+.tower:not(.compact) {
+  --cols: 58px 70px 24px 62px 62px 36px 36px 36px 40px 30px;
 }
 
-.tower-title {
-  font-weight: 700;
-  letter-spacing: 0.02em;
+.tower.multi {
+  --cols: 52px 84px 70px 40px 30px;
 }
 
-.tower-toggle {
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  padding: 0;
-  font-size: 11px;
-}
-
-.tower-toggle:hover {
-  color: var(--text);
-}
-
-.tower-body {
-  overflow-y: auto;
-}
-
-.tower-row {
-  display: grid;
-  grid-template-columns: 22px 26px 64px 72px 66px 66px 38px 38px 38px 40px 30px;
-  align-items: center;
-  column-gap: 4px;
-  padding: 2px 8px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.tower.compact .tower-row {
-  grid-template-columns: 22px 26px 64px 72px 40px 30px;
+.tower.multi:not(.compact) {
+  --cols: 52px 84px 70px 24px 62px 62px 36px 36px 36px 40px 30px;
 }
 
 .tower.compact .wide {
   display: none;
 }
 
-.tw-class {
-  display: none;
+/* The badge: "Lap 16 / 56", or the session and its clock. */
+.tower-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 24px;
+  padding: 0 5px 0 3px;
 }
 
-.tower.multi .tower-row {
-  grid-template-columns: 22px 50px 26px 84px 72px 66px 66px 38px 38px 38px 40px 30px;
+.tower-badge {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 24px;
+  font-size: 15px;
 }
 
-.tower.multi.compact .tower-row {
-  grid-template-columns: 22px 50px 26px 84px 72px 40px 30px;
+.tb-label,
+.tb-value,
+.tb-extra {
+  display: grid;
+  place-items: center;
+  padding: 0 10px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-.tower.multi .tw-class {
-  display: block;
-  padding: 0 4px;
-  border-radius: 3px;
-  background: var(--class, #9aa4b1);
-  color: #0b0d10;
-  font-size: 10px;
-  font-weight: 800;
-  text-align: center;
+.tb-value {
+  --fom-bg: var(--fom-yellow);
+  min-width: 30px;
+  color: #111;
 }
 
-.tower.multi .tower-labels .tw-class {
-  background: transparent;
-  color: var(--muted);
-}
-
-.tw-driver {
-  color: var(--muted);
+.tb-extra {
+  --fom-bg: var(--fom-black);
+  min-width: 30px;
   font-weight: 600;
-  font-size: 10px;
+}
+
+.tower-badge.session .tb-value {
+  --fom-bg: var(--fom-black);
+  color: #fff;
+}
+
+/* The chequered flag once it is out. */
+.tb-extra.chequer,
+.tower-badge.session.over .tb-value {
+  --fom-bg: var(--fom-chequer);
 }
 
 .tower-weather {
   margin-left: auto;
-  color: #9fd4ff;
   font-size: 11px;
+  font-weight: 600;
+  color: #bfe3ff;
+  text-shadow: 0 1px 2px #000;
+  white-space: nowrap;
+}
+
+.tower-toggle {
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.tower-size {
+  height: 18px;
+  padding: 0 9px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.tower-weather:empty + .tower-size {
+  margin-left: auto;
+}
+
+.tower-size:hover {
+  --fom-bg: var(--fom-red);
 }
 
 .tower-flag {
-  padding: 3px 8px;
-  font-size: 11px;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  background: #ffd60a;
-  color: #0b0d10;
-  text-align: center;
+  --fom-bg: var(--fom-yellow);
+  align-self: flex-start;
+  display: grid;
+  place-items: center;
+  height: 20px;
+  margin-left: 3px;
+  padding: 0 12px;
+  background: none;
+  color: #111;
+  font-size: 12px;
+  letter-spacing: 0.05em;
 }
 
 .tower-flag.sc {
-  background: #ffb020;
+  --fom-bg: linear-gradient(180deg, #ffb629, #ee8f00);
+}
+
+.tower-flag.red {
+  --fom-bg: var(--fom-red);
+  background: none;
+  color: #fff;
 }
 
 .tower-flag.yellow {
-  background: rgba(255, 214, 10, 0.2);
-  color: #ffd60a;
+  --fom-bg: var(--fom-black);
+  color: #ffe42b;
 }
 
 .tower-tabs {
   display: flex;
-  gap: 2px;
-  padding: 4px 6px;
-  border-bottom: 1px solid var(--border);
+  gap: 3px;
+  margin-left: 3px;
 }
 
 .tower-tab {
-  flex: 1;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--muted);
+  height: 18px;
+  padding: 0 10px;
+  border: none;
+  background: none;
+  color: #d7d9dc;
+  font: inherit;
   font-size: 11px;
-  font-weight: 700;
-  padding: 2px 4px;
+  text-transform: inherit;
   cursor: pointer;
 }
 
 .tower-tab:hover {
-  color: var(--text);
+  color: #fff;
 }
 
 .tower-tab.on {
-  border-color: var(--class, var(--border));
-  color: var(--text);
-  background: var(--panel-2);
+  --fom-bg: var(--class, var(--fom-white));
+  color: #111;
 }
 
-.tower-row:nth-child(even) {
-  background: rgba(255, 255, 255, 0.025);
+/* The rows: the position in its own box, a bar with the rest, and a mark after it. */
+.tower-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: -5px;
+  padding: 0 5px 3px 3px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.4) transparent;
 }
 
-.tower-row:hover {
-  background: var(--panel-3);
-}
-
-/* Qualifying: the cars in the drop zone, below the cut line. */
-.tower-row.drop {
-  background: rgba(255, 69, 58, 0.12);
-}
-
-.tower-row.cut {
-  box-shadow: inset 0 2px 0 #ff453a;
-}
-
-.tower-row.selected {
-  background: rgba(63, 182, 255, 0.18);
-}
-
-.tower-row.out {
-  color: var(--muted);
-}
-
-.tower-labels {
-  color: var(--muted);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  cursor: default;
-  border-bottom: 1px solid var(--border);
-}
-
-.tower-labels:hover {
-  background: transparent;
+.tower-row {
+  display: flex;
+  flex-shrink: 0;
+  align-items: stretch;
+  gap: 3px;
+  height: 21px;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .tw-pos {
-  text-align: right;
-  font-weight: 700;
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 26px;
+  font-size: 14px;
 }
 
-.tw-moved {
-  font-size: 9px;
+.tower-row.lead .tw-pos {
+  --fom-bg: var(--fom-red);
 }
 
-.tw-moved.up {
-  color: var(--ok);
+/* Qualifying: the cars that would go out, below the cut. */
+.tower-row.drop .tw-pos {
+  --fom-bg: var(--fom-white);
+  color: #d0021b;
 }
 
-.tw-moved.down {
-  color: var(--error);
+.tower-row.cut {
+  margin-top: 4px;
+}
+
+.tw-bar {
+  display: grid;
+  grid-template-columns: var(--cols);
+  align-items: center;
+  column-gap: 6px;
+  padding: 0 9px;
+}
+
+.tw-bar::before {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.tower-row:hover .tw-bar {
+  --fom-bg: linear-gradient(180deg, rgba(104, 107, 115, 0.96), rgba(40, 42, 46, 0.96));
+}
+
+.tower-row.selected .tw-bar {
+  --fom-bg: linear-gradient(180deg, rgba(124, 127, 135, 0.97), rgba(60, 62, 68, 0.97));
+}
+
+.tower-row.selected .tw-bar::before {
+  box-shadow: inset 4px 0 0 #ffd91a, inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.tower-row.out {
+  opacity: 0.6;
+}
+
+/* After the bar: a chequered flag for a car that has finished, a red arrow for one on a flying lap. */
+.tw-end {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 13px;
+}
+
+.tw-end.flag::before {
+  content: '';
+  width: 12px;
+  height: 10px;
+  transform: skewX(var(--fom-skew));
+  background: conic-gradient(#fff 25%, #111 0 50%, #fff 0 75%, #111 0) 0 0 / 6px 5px;
+  outline: 1px solid rgba(0, 0, 0, 0.5);
+}
+
+.tw-end.hot::before {
+  content: '';
+  border-left: 8px solid #ff3a1c;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+}
+
+.tw-class {
+  display: none;
+}
+
+.tower.multi .tw-class {
+  display: block;
+  padding: 2px 4px 1px;
+  transform: skewX(var(--fom-skew));
+  background: var(--class, #9aa4b1);
+  color: #111;
+  font-size: 10px;
+  text-align: center;
 }
 
 .tw-code {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .tw-team {
+  flex-shrink: 0;
   width: 4px;
-  height: 14px;
-  border-radius: 2px;
+  height: 13px;
+  transform: skewX(var(--fom-skew));
+}
+
+.tw-driver {
+  color: #c9ccd1;
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .tw-gap,
 .tw-time,
 .tw-sector {
   text-align: right;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 .tw-time,
 .tw-sector {
-  color: var(--muted);
+  color: #d0d3d8;
+  font-size: 12px;
 }
 
 .tw-sector.normal {
-  color: #f5d76e;
+  color: #ffe14a;
 }
 
 .tw-sector.personal,
 .tw-time.personal {
-  color: #4ade80;
+  color: #5ee08a;
 }
 
 .tw-sector.best,
 .tw-time.best {
-  color: #c084fc;
+  color: #d79bff;
+}
+
+.tw-moved {
+  font-size: 9px;
+  font-style: normal;
+  text-align: center;
+}
+
+.tw-moved.up {
+  color: #5ee08a;
+}
+
+.tw-moved.down {
+  color: #ff7a70;
 }
 
 .tw-tyre {
   display: flex;
-  align-items: center;
+  align-items: baseline;
+  justify-content: flex-end;
   gap: 3px;
+}
+
+.tw-tyre b {
   color: var(--tyre, #ccc);
-  font-weight: 700;
+}
+
+.tw-age {
+  min-width: 15px;
+  color: #d0d3d8;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .tw-pit {
+  color: #d0d3d8;
+  font-size: 11px;
+  font-weight: 600;
   text-align: center;
-  color: var(--muted);
 }
 
-.tw-pit.in-pit {
-  color: #0b0d10;
+.tw-pit.in-pit,
+.tw-pit.damaged {
+  padding: 2px 0 1px;
+  transform: skewX(var(--fom-skew));
   background: #f4f4f4;
-  border-radius: 3px;
+  color: #111;
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .tw-pit.damaged {
-  color: #0b0d10;
   background: #ff9f43;
-  border-radius: 3px;
-  font-size: 10px;
-  font-weight: 800;
+}
+
+/* What the columns are, over the rows. */
+.tower-labels {
+  height: 12px;
+  padding: 0 5px 0 3px;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-shadow: 0 1px 2px #000;
+  cursor: default;
+}
+
+.tower-labels .tw-pos::before,
+.tower-labels .tw-bar::before {
+  content: none;
+}
+
+.tower-labels .tw-time,
+.tower-labels .tw-sector,
+.tower-labels .tw-pit {
+  color: inherit;
+  font-size: inherit;
+}
+
+.tower.multi .tower-labels .tw-class {
+  transform: none;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+}
+
+.tower-labels .tw-tyre {
+  justify-content: flex-end;
+}
+
+.tower-labels .tower-toggle {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.tower-labels .tower-toggle:hover {
+  color: #ffe42b;
 }
 
 /* Race analysis dock under the map */

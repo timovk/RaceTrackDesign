@@ -13,9 +13,13 @@
  * it (position, driver, team, gap, tyre); overtakes, fastest laps,
  * incidents, retirements, race control's flags and the weather pop up as
  * they happen, and the sector and lap times of the car on screen as it sets
- * them (purple for the best of all, green for its own best). In the rain,
- * drops settle on the lens (a fresh set at every cut), except the
- * helicopter's.
+ * them (purple for the best of all, green for its own best). In qualifying
+ * a lap timer takes their place: the running time of the car on a flying
+ * lap with the lap to beat under it, and beside it the car's time at each
+ * sector and at the line with how far that is from the lap to beat. The
+ * captions, the stop timer and the lap timer have the look of the timing
+ * tower (Formula 1's graphics of 2010 to 2014). In the rain, drops settle
+ * on the lens (a fresh set at every cut), except the helicopter's.
  *
  * Before the start, the camera walks the grid from tenth to pole, a caption
  * for each car, then looks down the grid from behind it while the start
@@ -31,6 +35,7 @@
 import * as THREE from 'three';
 import { type Heli, type OnboardView, type TvCamera, type TvCar, type TvShot, Director, framingFov, heliStart, heliStep, isOnboard, subjectIds } from '../core/broadcast.ts';
 import { formatLapTime } from '../core/calibration.ts';
+import { type LapToBeat, type Split, captionName, lapToBeat, splitTime } from '../core/race/lapTimer.ts';
 import { type RaceView, ReplayBuffer } from '../core/race/replay.ts';
 import { SessionSim } from '../core/race/session.ts';
 import { DT, type RaceCar, type RaceSim } from '../core/race/sim.ts';
@@ -88,6 +93,9 @@ const LIGHTS_OUT_MIN = 0.4;
 const LIGHTS_OUT_MAX = 2.4;
 /** Race seconds of the race kept for replays. */
 const REPLAY_KEEP = 40;
+/** The qualifying lap timer: screen seconds a split and a finished lap stay up. */
+const SPLIT_HOLD = 4.5;
+const LAP_HOLD = 7;
 const VIEW_LABEL: Record<OnboardView, string> = { tcam: 'Onboard', nose: 'Nose camera', rear: 'Rear camera', chase: 'Chase camera' };
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -100,6 +108,8 @@ export class TvBroadcast {
   private readonly pops: HTMLElement;
   private readonly drops: HTMLElement;
   private readonly timer: HTMLElement;
+  private readonly lapBox: HTMLElement;
+  private readonly splitBox: HTMLElement;
   private readonly sting: HTMLElement;
   private readonly badge: HTMLElement;
   private readonly graphics: TvGraphics;
@@ -128,6 +138,10 @@ export class TvBroadcast {
   private sim: RaceSim | null = null;
   /** Per car on screen: its laps and sectors done when last looked at. */
   private timing = new Map<number, string>();
+  /** The flying lap the lap timer follows: the car, the laps it had done when the lap began, the lap to beat, and the sectors of the lap behind it. */
+  private lapOn: { car: number; lap: number; target: LapToBeat | null; done: number } | null = null;
+  private lapKey = '';
+  private splitUntil = 0;
 
   constructor(host: TvHost, race: RaceController, cameras: TvCamera[], n: number, ds: number) {
     this.host = host;
@@ -137,10 +151,12 @@ export class TvBroadcast {
     this.pops = h('div', { class: 'tv-pops' });
     this.drops = h('div', { class: 'tv-drops' });
     this.timer = h('div', { class: 'tv-timer', hidden: true });
+    this.lapBox = h('div', { class: 'tv-laptimer', hidden: true });
+    this.splitBox = h('div', { class: 'tv-split', hidden: true });
     this.sting = h('div', { class: 'tv-sting', hidden: true }, h('span', null, 'Replay'));
     this.badge = h('div', { class: 'tv-replay', hidden: true }, 'Replay');
     this.graphics = new TvGraphics(host.track);
-    this.layer = h('div', { class: 'tv' }, this.drops, this.graphics.el, this.lower, this.timer, this.pops, this.badge, this.sting);
+    this.layer = h('div', { class: 'tv' }, this.drops, this.graphics.el, this.lower, this.timer, this.lapBox, this.splitBox, this.pops, this.badge, this.sting);
     host.overlay.append(this.layer);
     this.stopRecording = race.onStep((sim) => this.buffer.record(sim));
   }
@@ -192,6 +208,8 @@ export class TvBroadcast {
       this.shot = null;
       this.replayed = null;
       this.buffer.clear();
+      this.lapOn = null;
+      this.splitUntil = 0;
     }
     this.readEvents(sim);
     if (sim.t === 0 && !r.playing && !sim.setup.session) {
@@ -232,6 +250,7 @@ export class TvBroadcast {
         if (!shot.replay) this.showTiming(shot, sim, cut);
       }
       this.showStop(shot?.replay ? null : shot, sim);
+      this.showLapTimer(shot?.replay ? null : shot, sim);
     }
     if (this.time > this.captionUntil) this.lower.hidden = true;
     this.updateGraphics(sim);
@@ -272,6 +291,7 @@ export class TvBroadcast {
     if (view.covered > 0) cam.setViewOffset(view.width, view.height, -view.covered / 2, 0, view.width, view.height);
     else cam.clearViewOffset();
     this.layer.style.setProperty('--tv-centre', `${view.covered + (view.width - view.covered) / 2}px`);
+    this.layer.style.setProperty('--tv-left', `${view.covered}px`);
     return (view.width - view.covered) / Math.max(1, view.height);
   }
 
@@ -481,7 +501,7 @@ export class TvBroadcast {
   private gridCaption(sim: RaceSim, car: RaceCar): void {
     const slot = sim.multiClass ? car.classGrid : car.gridPosition;
     const head = slot === 1 ? `Pole position${sim.multiClass ? ` · ${car.cls.label}` : ''}` : `Grid · P${slot}${sim.multiClass ? ` ${car.cls.label}` : ''}`;
-    this.showCaption(h('div', { class: 'tv-card' }, h('div', { class: 'tv-card-head' }, head), carRow(sim, car, '', true, slot)), GRID_PER_CAR - 0.4);
+    this.showCaption(carCaption(sim, car, head, '', slot), GRID_PER_CAR - 0.4);
   }
 
   /** Where the helicopter hangs for a subject at `centre`: off to the side and up, at least 50 m over the ground below it. */
@@ -569,16 +589,16 @@ export class TvBroadcast {
       const b = sim.cars[shot.subject.behind];
       if (!a || !b) return null;
       const gap = sim.classInterval(b);
-      return h('div', { class: 'tv-card' },
-        h('div', { class: 'tv-card-head' }, `Battle for ${placeText(sim, a)}`),
-        carRow(sim, a, ''),
-        carRow(sim, b, gap.kind === 'time' ? `+${gap.value.toFixed(3)}` : ''));
+      return h('div', { class: 'fc' },
+        h('div', { class: 'fc-tag fom' }, `Battle for ${placeText(sim, a)}`),
+        pairRow(sim, a, ''),
+        pairRow(sim, b, gap.kind === 'time' ? `+${gap.value.toFixed(3)}` : ''));
     }
     const car = sim.cars[shot.subject.id];
     if (!car) return null;
     const gap = sim.classGap(car);
     const gapText = car.status === 'retired' ? 'Out' : gap.kind === 'leader' ? 'Leader' : gap.kind === 'time' ? `+${gap.value.toFixed(3)}` : gap.kind === 'laps' ? `+${gap.value} lap${gap.value > 1 ? 's' : ''}` : '';
-    return h('div', { class: 'tv-card' }, head ? h('div', { class: 'tv-card-head' }, head) : null, carRow(sim, car, gapText, true));
+    return carCaption(sim, car, head, gapText);
   }
 
   /** The stop timer while the pit box camera is on: the time standing in the box, and the work done. */
@@ -597,11 +617,90 @@ export class TvBroadcast {
     if (service.compound !== null) work.push(`${car.rules.tyres.compounds[service.compound]?.name ?? 'New'} tyres`);
     if (service.fuel > 0) work.push('Fuel');
     if (service.driver !== null) work.push(`${car.entrant.drivers[service.driver]?.name ?? 'Driver'} in`);
-    setChildren(this.timer,
-      h('div', { class: 'tv-timer-head' }, `Pit stop · ${car.entrant.code}`),
-      h('div', { class: `tv-timer-time${pit.stopped ? '' : ' done'}` }, time.toFixed(1)),
-      work.length ? h('div', { class: 'tv-timer-work' }, work.join(' · ')) : null);
+    const pos = sim.multiClass ? car.classPosition : car.position;
+    setChildren(this.timer, h('div', { class: 'fc' },
+      h('div', { class: 'fc-main' },
+        h('div', { class: 'fc-lines' },
+          nameBar(car),
+          h('div', { class: 'fc-line fom' }, h('span', null, 'Pit stop'), h('span', { class: `fc-value${pit.stopped ? '' : ' done'}` }, time.toFixed(1))),
+          work.length ? h('div', { class: 'fc-line fom note' }, work.join(' · ')) : null),
+        h('div', { class: `fc-pos fom${pos === 1 ? ' lead' : ''}` }, String(pos)))));
     this.timer.hidden = false;
+  }
+
+  /**
+   * In qualifying, for the car on screen on a flying lap: its running time
+   * with the lap to beat under it (and DRS over it while the wing is open),
+   * and beside it, for a few seconds each, its time at the end of every
+   * sector and at the line with how far that is from the lap to beat.
+   */
+  private showLapTimer(shot: TvShot | null, sim: RaceSim): void {
+    const session = sim instanceof SessionSim && sim.spec.kind === 'qualifying' ? sim : null;
+    const shown = session && shot && shot.subject.kind === 'car' ? sim.cars[shot.subject.id] ?? null : null;
+    const state = shown ? session!.of(shown) : null;
+    const flying = !!shown && shown.status === 'running' && !!state && state.phase === 'push' && state.fromLine;
+    const on = this.lapOn;
+    if (on) {
+      const car = sim.cars[on.car];
+      // Over the line: the lap time and where it puts the car. Or the lap was given up, or the camera has left it.
+      if (car && car.lapsDone === on.lap + 1 && car.lastLap !== null) {
+        this.showSplit(sim, car, splitTime(car, 3, on.target));
+        this.lapOn = null;
+      } else if (!flying || shown!.id !== on.car || shown!.lapsDone !== on.lap) this.lapOn = null;
+    }
+    this.splitBox.hidden = this.time > this.splitUntil;
+    if (!flying || !shown) {
+      this.lapBox.hidden = true;
+      return;
+    }
+    // Sectors of this lap behind it (after the line the three of the lap before are still there).
+    const done = shown.sectors[2] !== null ? 0 : shown.sectors.filter((x) => x !== null).length;
+    let cur = this.lapOn;
+    if (!cur) cur = this.lapOn = { car: shown.id, lap: shown.lapsDone, target: lapToBeat(shown.cls), done };
+    else {
+      cur.target = lapToBeat(shown.cls) ?? cur.target;
+      if (done > cur.done) this.showSplit(sim, shown, splitTime(shown, done, cur.target));
+      cur.done = done;
+    }
+    const running = runningTime(sim.t - DT * (1 - this.race.alpha) - shown.lapStart);
+    const drs = shown.rules.drs !== null && shown.drsUntilU > shown.u;
+    const key = `${shown.id}:${running}:${cur.target?.time ?? 0}:${drs}`;
+    if (key !== this.lapKey) {
+      this.lapKey = key;
+      setChildren(this.lapBox, h('div', { class: 'fc' },
+        drs ? h('div', { class: 'fc-tag fom' }, 'DRS') : null,
+        nameBar(shown),
+        h('div', { class: 'fc-line fom time' }, running),
+        cur.target ? h('div', { class: 'fc-row' }, h('span', { class: 'fc-pos small fom lead' }, '1'), h('div', { class: 'fc-line fom red' }, formatLapTime(cur.target.time))) : null));
+    }
+    this.lapBox.hidden = false;
+  }
+
+  /**
+   * A car's time at the end of a sector, or its lap time at the line, with
+   * how far that is from the lap to beat: yellow when slower, green when
+   * quicker, purple for a lap that is now the fastest. At the line the box
+   * in front has the car's new position; at a sector, the 1 of the lap it
+   * is measured against.
+   */
+  private showSplit(sim: RaceSim, car: RaceCar, split: Split | null): void {
+    if (!split) return;
+    const final = split.sector === 3;
+    const fastest = final && car.cls.fastest?.car === car.id && car.cls.fastest.time === split.time;
+    const d = split.delta;
+    const text = d === null ? (fastest ? 'Fastest' : '') : `${d < 0 ? '-' : '+'}${Math.abs(d).toFixed(3)}`;
+    const colour = fastest ? 'purple' : d !== null && d < 0 ? 'green' : 'yellow';
+    const pos = final ? (sim.multiClass ? car.classPosition : car.position) : 1;
+    setChildren(this.splitBox, h('div', { class: 'fc' },
+      nameBar(car),
+      h('div', { class: 'fc-line fom time' }, formatLapTime(split.time)),
+      text ? h('div', { class: 'fc-row' }, h('span', { class: `fc-pos small fom${pos === 1 ? ' lead' : ''}` }, String(pos)), h('div', { class: `fc-line fom ${colour}` }, text)) : null));
+    this.splitBox.hidden = false;
+    // Restart the slide-in.
+    this.splitBox.style.animation = 'none';
+    void this.splitBox.offsetWidth;
+    this.splitBox.style.animation = '';
+    this.splitUntil = this.time + (final ? LAP_HOLD : SPLIT_HOLD);
   }
 
   /** New race events: the director hears of incidents and overtakes; notable ones pop up. */
@@ -631,6 +730,8 @@ export class TvBroadcast {
   private showTiming(shot: TvShot, sim: RaceSim, cut: boolean): void {
     // Only racing laps: not behind a safety car or on the way in under a red flag.
     if (shot.subject.kind === 'group' || sim.phase !== 'green') return;
+    // (A single car in qualifying has the lap timer for it.)
+    if (shot.subject.kind === 'car' && sim instanceof SessionSim && sim.spec.kind === 'qualifying') return;
     const ids = subjectIds(shot.subject);
     for (const id of ids) {
       const car = sim.cars[id];
@@ -701,16 +802,47 @@ function placeText(sim: RaceSim, car: RaceCar): string {
   return sim.multiClass ? `P${car.classPosition} ${car.cls.label}` : `P${car.position}`;
 }
 
-/** One car's line in a caption: position, team colour, number and driver, team, gap and tyre. */
-function carRow(sim: RaceSim, car: RaceCar, gap: string, full = false, place?: number): HTMLElement {
+/** A lap time as it runs, to the tenth: 1:31.7. */
+function runningTime(seconds: number): string {
+  const t = Math.floor(Math.max(0, seconds) * 10) / 10;
+  const min = Math.floor(t / 60);
+  const sec = t - min * 60;
+  return min > 0 ? `${min}:${sec.toFixed(1).padStart(4, '0')}` : sec.toFixed(1);
+}
+
+/** The bar with a driver's name on it, behind the team's colour (styles: .fc). */
+function nameBar(car: RaceCar, ...more: (HTMLElement | null)[]): HTMLElement {
+  return h('div', { class: 'fc-name fom' }, h('span', { class: 'fc-team', style: `background:${car.entrant.color}` }), h('span', { class: 'grow' }, captionName(car.driver.name)), ...more);
+}
+
+function tyreMark(car: RaceCar): HTMLElement | null {
   const compound = car.rules.tyres.compounds[car.compound];
+  return compound ? h('span', { class: 'tv-tyre', style: `border-color:${compound.color}`, title: compound.name }, compound.code) : null;
+}
+
+/**
+ * A caption for one car: its name on a bar with the position in a box
+ * beside it (red for the leader), a line under it with the number, the team,
+ * the gap and the tyre, and a tag over it.
+ */
+function carCaption(sim: RaceSim, car: RaceCar, tag: string, gap: string, place?: number): HTMLElement {
   const pos = place ?? (sim.multiClass ? car.classPosition : car.position);
-  return h('div', { class: 'tv-row' },
-    h('span', { class: 'tv-pos' }, String(pos)),
-    h('span', { class: 'tv-team', style: `background:${car.entrant.color}` }),
-    h('span', { class: 'tv-name' },
-      h('span', { class: 'tv-driver' }, full ? car.driver.name.toUpperCase() : car.entrant.code),
-      full ? h('span', { class: 'tv-sub' }, `#${car.entrant.number} · ${car.entrant.team}${sim.multiClass ? ` · ${car.cls.label}` : ''}`) : null),
-    gap ? h('span', { class: 'tv-gap' }, gap) : null,
-    compound ? h('span', { class: 'tv-tyre', style: `border-color:${compound.color}`, title: compound.name }, compound.code) : null);
+  return h('div', { class: 'fc' },
+    tag ? h('div', { class: 'fc-tag fom' }, tag) : null,
+    h('div', { class: 'fc-main' },
+      h('div', { class: 'fc-lines' },
+        nameBar(car),
+        h('div', { class: 'fc-line fom' },
+          h('span', { class: 'grow' }, `#${car.entrant.number} · ${car.entrant.team}${sim.multiClass ? ` · ${car.cls.label}` : ''}`),
+          gap ? h('span', null, gap) : null,
+          tyreMark(car))),
+      h('div', { class: `fc-pos fom${pos === 1 ? ' lead' : ''}` }, car.status === 'retired' ? '' : String(pos))));
+}
+
+/** One car of a battle: its position in a box, then its name, the gap and the tyre on a bar. */
+function pairRow(sim: RaceSim, car: RaceCar, gap: string): HTMLElement {
+  const pos = sim.multiClass ? car.classPosition : car.position;
+  return h('div', { class: 'fc-row' },
+    h('span', { class: `fc-pos small fom${pos === 1 ? ' lead' : ''}` }, String(pos)),
+    nameBar(car, gap ? h('span', null, gap) : null, tyreMark(car)));
 }

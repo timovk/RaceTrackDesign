@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { type LapToBeat, captionName, lapToBeat, splitTime } from '../src/core/race/lapTimer.ts';
 import { raceRules } from '../src/core/race/rules.ts';
 import { SessionSim } from '../src/core/race/session.ts';
 import { type RaceSettings, type SessionSpec, createField, createRaceSetup, defaultRaceSettings } from '../src/core/race/setup.ts';
@@ -59,6 +60,60 @@ describe('sessions', () => {
     const expected = c.model.qualifyingTime * (1 + c.entrant.carPace + c.driver.pace);
     expect(c.bestLap! / expected).toBeGreaterThan(0.99);
     expect(c.bestLap! / expected).toBeLessThan(1.01);
+  });
+
+  it('times a qualifying lap against the lap to beat, at each sector and at the line', () => {
+    const sim = session('f1', 6, { kind: 'qualifying', duration: 12 * 60 }, 1);
+    const cls = sim.classes[0];
+    expect(lapToBeat(cls)).toBeNull();
+    let splits = 0;
+    let laps = 0;
+    let improved = 0;
+    const lapsDone = new Map<number, number>();
+    while (!sim.finished) {
+      // The lap to beat as it stands while the cars are on their laps.
+      const target: LapToBeat | null = lapToBeat(cls);
+      for (const c of sim.entries) lapsDone.set(c.id, c.lapsDone);
+      sim.step();
+      for (const c of sim.entries) {
+        if (c.lapsDone > lapsDone.get(c.id)! && c.lastLap !== null && c.history[c.history.length - 1].kind === 'push') {
+          // Over the line: the lap time, against the lap that was there to beat.
+          const s = splitTime(c, 3, target)!;
+          expect(s.time).toBe(c.lastLap);
+          expect(s.delta).toBe(target ? c.lastLap - target.time : null);
+          laps++;
+          if (target && s.delta! < 0) {
+            improved++;
+            expect(lapToBeat(cls)!.car).toBe(c.id);
+          }
+        } else if (c.status === 'running' && c.sectors[0] !== null && c.sectors[2] === null) {
+          // One or two sectors of its lap behind it.
+          const first = splitTime(c, 1, target)!;
+          expect(first.time).toBe(c.sectors[0]);
+          expect(first.delta).toBe(target ? c.sectors[0]! - target.splits[0] : null);
+          const second = splitTime(c, 2, target);
+          if (c.sectors[1] === null) expect(second).toBeNull();
+          else expect(second!.time).toBeCloseTo(c.sectors[0]! + c.sectors[1], 9);
+          splits++;
+        }
+      }
+    }
+    expect(laps).toBeGreaterThan(5);
+    expect(splits).toBeGreaterThan(100);
+    expect(improved).toBeGreaterThan(0);
+    // The lap to beat at the end is the fastest of the session, with its time at the end of each sector.
+    const best = lapToBeat(cls)!;
+    const holder = sim.entries.find((c) => c.id === best.car)!;
+    expect(best.time).toBe(cls.fastest!.time);
+    expect(best.time).toBe(Math.min(...sim.entries.filter((c) => c.bestLap !== null).map((c) => c.bestLap!)));
+    expect(best.splits[2]).toBe(best.time);
+    expect(best.splits[0]).toBeGreaterThan(0);
+    expect(best.splits[1]).toBeGreaterThan(best.splits[0]);
+    expect(best.splits[1]).toBeLessThan(best.time);
+    expect(holder.history.some((r) => r.time === best.time && r.sectors[0] === best.splits[0])).toBe(true);
+    expect(splitTime(holder, 0, best)).toBeNull();
+    expect(captionName('N. Hulkenberg')).toBe('N HULKENBERG');
+    expect(captionName('  J. de  Vries ')).toBe('J DE VRIES');
   });
 
   it('times the last runs for the end, and counts a lap begun before the flag', () => {

@@ -9,7 +9,7 @@ import { formatLapTime } from '../core/calibration.ts';
 import type { RaceView } from '../core/race/replay.ts';
 import type { RaceCar, RaceSim } from '../core/race/sim.ts';
 import type { Track } from '../core/track.ts';
-import { h, setChildren, setText } from './dom.ts';
+import { h, setChildren } from './dom.ts';
 
 const SVG = 'http://www.w3.org/2000/svg';
 /** Laps shown in the gap graphic, and seconds the final lap and the chequered flag banners stay up. */
@@ -81,7 +81,7 @@ export class TvGraphics {
     this.safety.setAttribute('r', String(size / 55));
     this.map.append(this.safety);
     this.lights = h('div', { class: 'tv-lights', hidden: true });
-    this.lap = h('div', { class: 'tv-lap', hidden: true });
+    this.lap = h('div', { class: 'tv-lap', hidden: true }, h('span', { class: 'fom' }, 'Final lap'));
     this.gap = h('div', { class: 'tv-gap-box', hidden: true });
     this.flag = h('div', { class: 'tv-flag', hidden: true });
     this.results = h('div', { class: 'tv-results', hidden: true });
@@ -184,7 +184,6 @@ export class TvGraphics {
       && (sim.setup.duration !== null ? limit !== null && sim.t >= limit : laps !== null && sim.leaderLap >= laps);
     if (final && this.finalAt < 0) this.finalAt = f.time;
     this.lap.hidden = !(final && f.time - this.finalAt < FINAL_LAP_BANNER);
-    if (!this.lap.hidden) setText(this.lap, 'Final lap');
   }
 
   /** For a battle on screen once its caption has gone: the gap now, and at the line on the last few laps. */
@@ -217,15 +216,16 @@ export class TvGraphics {
     }
     const top = Math.max(0.1, ...last.map((g) => Math.abs(g.gap)), Math.abs(gapNow ?? 0));
     const trend = last.length >= 2 ? last[last.length - 1].gap - last[last.length - 2].gap : null;
-    setChildren(this.gap,
-      h('div', { class: 'tv-card-head' }, `Gap ${behind.entrant.code} to ${ahead.entrant.code}`),
-      h('div', { class: 'tv-gap-now' },
+    // In the look of the captions (styles: .fc): a tag, the gap on a bar, and the laps as columns under it.
+    setChildren(this.gap, h('div', { class: 'fc' },
+      h('div', { class: 'fc-tag fom' }, `Gap ${behind.entrant.code} to ${ahead.entrant.code}`),
+      h('div', { class: 'fc-line fom tv-gap-now' },
         h('span', { class: 'tv-gap-value' }, gapNow !== null ? gapNow.toFixed(3) : '—'),
         trend !== null ? h('span', { class: `tv-gap-trend ${trend < 0 ? 'closing' : 'growing'}` }, `${trend < 0 ? '▼' : '▲'} ${Math.abs(trend).toFixed(3)} last lap`) : null),
-      last.length ? h('div', { class: 'tv-gap-bars' }, ...last.map((g) =>
+      last.length ? h('div', { class: 'tv-gap-bars fom' }, ...last.map((g) =>
         h('div', { class: 'tv-gap-bar' },
           h('span', { class: 'tv-gap-fill', style: `height:${Math.round((Math.abs(g.gap) / top) * 100)}%` }),
-          h('span', { class: 'tv-gap-lap' }, `L${g.lap}`)))) : null);
+          h('span', { class: 'tv-gap-lap' }, `L${g.lap}`)))) : null));
     this.gap.hidden = false;
   }
 
