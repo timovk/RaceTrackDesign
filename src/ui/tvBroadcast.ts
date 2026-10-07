@@ -96,6 +96,8 @@ const REPLAY_KEEP = 40;
 /** The qualifying lap timer: screen seconds a split and a finished lap stay up. */
 const SPLIT_HOLD = 4.5;
 const LAP_HOLD = 7;
+/** Seconds a message from the stewards stays up. */
+const CONTROL_HOLD = 6;
 const VIEW_LABEL: Record<OnboardView, string> = { tcam: 'Onboard', nose: 'Nose camera', rear: 'Rear camera', chase: 'Chase camera' };
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -110,6 +112,10 @@ export class TvBroadcast {
   private readonly timer: HTMLElement;
   private readonly lapBox: HTMLElement;
   private readonly splitBox: HTMLElement;
+  /** The stewards' message, the ones waiting their turn, and until when the one on screen stays. */
+  private readonly control: HTMLElement;
+  private controlQueue: { tag: string; title: string; note: string; tone: 'yellow' | 'red' | '' }[] = [];
+  private controlUntil = 0;
   private readonly sting: HTMLElement;
   private readonly badge: HTMLElement;
   private readonly graphics: TvGraphics;
@@ -153,10 +159,11 @@ export class TvBroadcast {
     this.timer = h('div', { class: 'tv-timer', hidden: true });
     this.lapBox = h('div', { class: 'tv-laptimer', hidden: true });
     this.splitBox = h('div', { class: 'tv-split', hidden: true });
+    this.control = h('div', { class: 'tv-control', hidden: true });
     this.sting = h('div', { class: 'tv-sting', hidden: true }, h('span', null, 'Replay'));
     this.badge = h('div', { class: 'tv-replay', hidden: true }, 'Replay');
     this.graphics = new TvGraphics(host.track);
-    this.layer = h('div', { class: 'tv' }, this.drops, this.graphics.el, this.lower, this.timer, this.lapBox, this.splitBox, this.pops, this.badge, this.sting);
+    this.layer = h('div', { class: 'tv' }, this.drops, this.graphics.el, this.lower, this.timer, this.lapBox, this.splitBox, this.control, this.pops, this.badge, this.sting);
     host.overlay.append(this.layer);
     this.stopRecording = race.onStep((sim) => this.buffer.record(sim));
   }
@@ -210,8 +217,11 @@ export class TvBroadcast {
       this.buffer.clear();
       this.lapOn = null;
       this.splitUntil = 0;
+      this.controlQueue = [];
+      this.controlUntil = 0;
     }
     this.readEvents(sim);
+    this.showControl();
     if (sim.t === 0 && !r.playing && !sim.setup.session) {
       // Before the start: the grid.
       this.gridWalk(sim, dt);
@@ -715,6 +725,7 @@ export class TvBroadcast {
       // (Not a touch that cost the cars a little time and nothing else.)
       if ((e.kind === 'off' || e.kind === 'contact') && !e.minor) this.director.note('incident', e.car, { raceTime: e.t, u: at(e.car) });
       if (e.kind === 'retired') this.director.note('incident', e.car);
+      if (e.kind === 'steward') this.queueControl(e.text);
       if (['overtake', 'fastest', 'off', 'contact', 'retired', 'pit', 'flag', 'weather'].includes(e.kind)) {
         const car = sim.cars[e.car];
         // Only the front of the field's passes and stops, to keep the screen clear.
@@ -724,6 +735,42 @@ export class TvBroadcast {
     }
     this.seenEvents = events.length;
     for (const el of [...this.pops.children] as HTMLElement[]) if (Number(el.dataset.until) < this.time) el.remove();
+  }
+
+  /**
+   * A line from the stewards in the feed, for the screen: an investigation,
+   * a decision or a penalty (not what follows from one: served, or added to
+   * the race time). "10-second time penalty for VER: causing a collision
+   * with NOR at T4 (...); ..." becomes a red bar with the penalty and a line
+   * with the offence under it.
+   */
+  private queueControl(text: string): void {
+    const tone = /^Under investigation/.test(text) ? 'yellow' : /penalty for /.test(text) ? 'red' : /^(No further action|Warning)/.test(text) ? '' : null;
+    if (tone === null) return;
+    const colon = text.indexOf(': ');
+    const title = colon < 0 ? text : text.slice(0, colon);
+    const note = colon < 0 ? '' : text.slice(colon + 2).split(' (')[0].split(';')[0].split(', to be decided')[0];
+    this.controlQueue.push({ tag: 'Stewards', title, note, tone });
+    if (this.controlQueue.length > 4) this.controlQueue.shift();
+  }
+
+  /** The stewards' messages, one at a time. */
+  private showControl(): void {
+    if (this.time < this.controlUntil) return;
+    const next = this.controlQueue.shift();
+    if (!next) {
+      this.control.hidden = true;
+      return;
+    }
+    setChildren(this.control, h('div', { class: 'fc' },
+      h('div', { class: 'fc-tag fom' }, next.tag),
+      h('div', { class: `fc-line fom ${next.tone}` }, next.title),
+      next.note ? h('div', { class: 'fc-line fom note' }, next.note) : null));
+    this.control.hidden = false;
+    this.control.style.animation = 'none';
+    void this.control.offsetWidth;
+    this.control.style.animation = '';
+    this.controlUntil = this.time + CONTROL_HOLD;
   }
 
   /** Sector and lap times of the cars on screen, as they set them. */

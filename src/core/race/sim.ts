@@ -47,8 +47,9 @@ import type { Driver, Entrant } from './field.ts';
 import { gauss } from './field.ts';
 import { EDGE_GAP, LEFT, RIGHT, SIDE_GAP } from './lanes.ts';
 import { type PassingZone, type RaceModel, gripBlend, lapRatioAtGrip, launchSpeed } from './model.ts';
-import type { RaceRules, TyreType } from './rules.ts';
+import type { Penalty, RaceRules, TyreType } from './rules.ts';
 import type { RaceSetup } from './setup.ts';
+import { type StewardCase, formatSeconds, judge, offenceText, penaltyText } from './stewards.ts';
 import {
   COLD_TYRES, type StintPlan, compoundOfType, needsSecondCompound, pickCompound, planStrategy, stopCost, tyreLoss, tyreTypes, wearPerLap,
 } from './strategy.ts';
@@ -109,9 +110,11 @@ export interface PitStopRecord {
   /** Driver who took over, or null when the driver stayed in. */
   driver: number | null;
   reason: string;
+  /** Seconds of time penalties stood still before the work began. */
+  penalty?: number;
 }
 
-export type RaceEventKind = 'start' | 'overtake' | 'pit' | 'fastest' | 'off' | 'contact' | 'retired' | 'chequered' | 'finish' | 'flag' | 'weather';
+export type RaceEventKind = 'start' | 'overtake' | 'pit' | 'fastest' | 'off' | 'contact' | 'steward' | 'retired' | 'chequered' | 'finish' | 'flag' | 'weather';
 
 export interface RaceEvent {
   t: number;
@@ -122,7 +125,7 @@ export interface RaceEvent {
   /** The car involved, or -1 for race control and the weather. */
   car: number;
   other?: number;
-  /** A touch that cost the cars a little time and nothing else: in the feed, not worth a replay. */
+  /** A touch that cost the cars a little time and nothing else, or stewards' business short of a penalty: in the feed, not worth more. */
   minor?: boolean;
 }
 
@@ -191,6 +194,10 @@ export interface PitState {
   done: boolean;
   service: Service;
   record: PitStopRecord;
+  /** A drive-through penalty: the car does not stop. */
+  through?: boolean;
+  /** The time penalties it stands still for before the work begins. */
+  serving?: StewardCase[];
 }
 
 export interface Service {
@@ -393,6 +400,16 @@ export class RaceCar {
   damage: { kind: DamageKind; pace: number } | null = null;
   /** No contact before this race time: it has just had one. */
   shaken = 0;
+  /**
+   * The stewards (see stewards.ts): the investigations it is named in, the
+   * penalties it still has to serve, the seconds added to its race time, and
+   * whether it has to cross the line under green before it may come in for
+   * a drive-through.
+   */
+  investigations = 0;
+  toServe: StewardCase[] = [];
+  addedTime = 0;
+  lineFirst = false;
   /** No passing before this race progress (after a restart, until the line). */
   holdUntilU = -Infinity;
   stuckLaps = 0;
@@ -700,6 +717,13 @@ const WING_SHARE = 0.3;
 const BOTH_OUT = 0.4;
 const LIMP_HOME = 0.3;
 const DAMAGE_RANK: Record<DamageKind, number> = { body: 0, wing: 1, puncture: 2, terminal: 3 };
+
+/**
+ * The stewards' clock, seconds after a contact: when they say they are
+ * looking at it, and when they decide.
+ */
+const NOTE_AFTER = [20, 60];
+const DECIDE_AFTER = [120, 360];
 /** Dirty air in lanes: all of the downforce loss within WAKE_FULL seconds of the car ahead, none beyond WAKE_REACH, falling away with the square in between. */
 const WAKE_FULL = 0.2;
 const WAKE_REACH = 1;
@@ -764,6 +788,8 @@ export class RaceSim {
   stops: PitStopRecord[] = [];
   /** Every contact between two cars, in the order they happened. */
   contacts: ContactRecord[] = [];
+  /** Every contact that went to the stewards, with what they made of it. */
+  cases: StewardCase[] = [];
   /** Drivers' trouble so far, by what came of it (a race of cars; contact is counted once, whatever number of cars it took out). */
   readonly tally = { mistakes: 0, offs: 0, spins: 0, crashes: 0, touches: 0, forcedOff: 0, tapped: 0, damaged: 0, collisions: 0 };
   /** Race time at which the first car completed each lap (index = lap - 1). */
@@ -814,6 +840,10 @@ export class RaceSim {
   protected readonly rng: () => number;
   /** Race control's own random stream, so the flags do not change the cars' draws. */
   protected readonly controlRng: () => number;
+  /** The stewards' own, for how long they take; the cases they have not decided; and whether the race's last ones are dealt with. */
+  private readonly stewardRng: () => number;
+  private openCases: StewardCase[] = [];
+  private stewardsDone = false;
   private readonly baseLimit: number | null;
   /** Race progress where the cars left the pit lane after a red flag with no safety car to lead them. */
   private releaseU = NaN;
@@ -867,6 +897,7 @@ export class RaceSim {
     }
     this.rng = seededRandom(`${setup.settings.seed}:race`);
     this.controlRng = seededRandom(`${setup.settings.seed}:control`);
+    this.stewardRng = seededRandom(`${setup.settings.seed}:stewards`);
     this.baseLimit = setup.duration ?? setup.timeLimit;
     this.weather = setup.weather;
 
@@ -1034,8 +1065,10 @@ export class RaceSim {
       this.resolvePasses();
       this.updateLateral();
     }
+    this.runStewards();
     this.updateOrder();
     this.checkFinished();
+    if (this.finished) this.classify(this.t);
   }
 
   /** Over when every car has finished or retired; a race cannot run on for ever. */
@@ -1096,7 +1129,9 @@ export class RaceSim {
     const a = car.loopTimes[slot];
     const b = ref.loopTimes[slot];
     if (!Number.isFinite(a) || !Number.isFinite(b)) return { kind: 'none', value: 0 };
-    return { kind: 'time', value: Math.max(0, a - b) };
+    // At the flag, with the time the stewards added.
+    const added = car.status === 'finished' && ref.status === 'finished' ? car.addedTime - ref.addedTime : 0;
+    return { kind: 'time', value: Math.max(0, a - b + added) };
   }
 
   /** Time the driver in the car has been at the wheel in this stint, and each driver's total. */
@@ -1530,6 +1565,11 @@ export class RaceSim {
         ps.box = Math.max(ps.p, this.queueSlot(car));
         ps.done = false;
         ps.service = { compound: null, fuel: 0, time: Infinity, reason: 'red flag', driver: null };
+        // (A drive-through it was on is done with.)
+        if (ps.through) {
+          ps.through = false;
+          this.servedThrough(car, t);
+        }
       }
       if (ps.stopped) {
         const wait = Math.min(budget, ps.stoppedUntil - t);
@@ -1593,7 +1633,7 @@ export class RaceSim {
     else if (p <= pit.limitTo) v = lim;
     else v = launchSpeed(m.launch, lim, p - pit.limitTo);
     if (!ps.done) v = Math.min(v, Math.sqrt(2 * BOX_BRAKE * Math.max(0, ps.box - p)) + 0.6);
-    else if (p < pit.limitTo) v = Math.min(v, launchSpeed(m.launch, 0, Math.max(0, p - ps.box)) + 0.6);
+    else if (p < pit.limitTo && !ps.through) v = Math.min(v, launchSpeed(m.launch, 0, Math.max(0, p - ps.box)) + 0.6);
     // Under a full course yellow the limit holds all the way out.
     if (this.phase === 'fcy') v = Math.min(v, Math.max(lim, this.model.rules.flags.fcySpeed));
     return Math.min(v, m.vehicle.topSpeed);
@@ -1637,6 +1677,8 @@ export class RaceSim {
     if (m & TRAP && t > car.trapT0) car.trapV = this.trapBase / (t - car.trapT0);
     if (car.status !== 'running') return CONTINUE;
     if (m & DECIDE) this.decide(car, t);
+    // (A drive-through is not served once the race is neutralised.)
+    if (m & PIT_IN && car.pitRequest === 'drive-through' && this.phase !== 'green') car.pitRequest = null;
     if (m & PIT_IN && car.pitRequest) {
       this.enterPit(car, u, t);
       return PIT;
@@ -1716,6 +1758,7 @@ export class RaceSim {
     }
     car.lapStart = t;
     car.sectorStart = t;
+    if (this.phase === 'green') car.lineFirst = false;
     // Every lap lays down a little more rubber.
     this.rubber += (1 - this.rubber) / RUBBER_LAPS;
     return this.afterLap(car, lap, t);
@@ -1778,6 +1821,7 @@ export class RaceSim {
     car.pit = null;
     car.spin = null;
     car.wide = null;
+    this.settle(car, t);
     this.finishCount++;
     car.cls.finishers++;
     if (this.multiClass) {
@@ -2051,6 +2095,9 @@ export class RaceSim {
     car.beside = [];
     car.spin = null;
     car.wide = null;
+    // (Penalties it had not served come to nothing.)
+    for (const c of car.toServe) c.status = 'none';
+    car.toServe = [];
     car.retired = { reason, lap: car.lapsDone + 1, x: p?.x ?? 0, y: p?.y ?? 0, t, ...(heading === undefined ? {} : { heading }) };
     if (reason !== 'crash' && !reason.startsWith('collision')) this.log('retired', t, `${car.entrant.code} retires: ${reason}`, car.id, car.lapsDone + 1);
   }
@@ -2458,13 +2505,14 @@ export class RaceSim {
         car.pitRequest = null;
       }
     }
+    this.closeStewards(t);
     this.order.sort((a, b) => {
       const ra = a.status === 'retired' ? 1 : 0;
       const rb = b.status === 'retired' ? 1 : 0;
       if (ra !== rb) return ra - rb;
       const sa = score.get(a.id)!;
       const sb = score.get(b.id)!;
-      return sb.laps - sa.laps || sa.when - sb.when;
+      return sb.laps - sa.laps || sa.when + a.addedTime - (sb.when + b.addedTime);
     });
     this.order.forEach((c, i) => { c.position = i + 1; });
     this.updateClassOrder();
@@ -2651,7 +2699,13 @@ export class RaceSim {
   // ---- pit stops -------------------------------------------------------------------
 
   protected decide(car: RaceCar, t: number): void {
-    if (car.pitRequest || this.chequered) return;
+    if (this.chequered) return;
+    // A drive-through to serve, while the race is green (and no repairs to see to first).
+    if (!car.pitRequest && !car.lineFirst && this.phase === 'green' && car.model.pit && car.toServe.some((c) => c.penalty?.kind === 'driveThrough')) {
+      car.pitRequest = 'drive-through';
+      return;
+    }
+    if (car.pitRequest) return;
     // Damage that has not been seen to (the car came in for a red flag meanwhile).
     if (car.damage && this.needsPits(car)) {
       car.pitRequest = 'damage';
@@ -2753,15 +2807,24 @@ export class RaceSim {
     // The car ahead in the class, if close, now faces the undercut.
     const ahead = car.cls.order[car.classPosition - 2];
     const iv = ahead ? this.gapBetween(car, ahead) : null;
-    if (!queue && ahead && ahead.status === 'running' && iv?.kind === 'time' && iv.value < 3) ahead.threatLap = car.lapsDone + 1;
-    const service: Service = queue ? { compound: null, fuel: 0, time: Infinity, reason: 'red flag', driver: null } : this.repairs(car, this.planService(car, car.pitRequest ?? 'plan'));
+    // A drive-through: down the pit lane without stopping.
+    const through = !queue && car.pitRequest === 'drive-through';
+    if (!queue && !through && ahead && ahead.status === 'running' && iv?.kind === 'time' && iv.value < 3) ahead.threatLap = car.lapsDone + 1;
+    const work: Service = queue
+      ? { compound: null, fuel: 0, time: Infinity, reason: 'red flag', driver: null }
+      : through ? { compound: null, fuel: 0, time: 0, reason: 'drive-through', driver: null } : this.repairs(car, this.planService(car, car.pitRequest ?? 'plan'));
+    // Time penalties are stood still before the work begins.
+    const serving = queue || through || car.damage?.kind === 'terminal' ? [] : car.toServe.filter((c) => c.penalty?.kind === 'time');
+    const held = serving.reduce((s, c) => s + (c.penalty?.kind === 'time' ? c.penalty.seconds : 0), 0);
+    const service: Service = held > 0 ? { ...work, time: work.time + held } : work;
     const record: PitStopRecord = {
       car: car.id, lap: car.lapsDone + 1, entry: t, exit: NaN, stationary: NaN,
-      from: car.compound, to: service.compound, fuel: service.fuel, driver: service.driver, reason: service.reason,
+      from: car.compound, to: service.compound, fuel: service.fuel, driver: service.driver, reason: service.reason, ...(held > 0 ? { penalty: held } : {}),
     };
-    if (!queue && !this.setup.session) this.stops.push(record);
+    if (!queue && !through && !this.setup.session) this.stops.push(record);
     car.status = 'pit';
-    car.pit = { p: 0, prevP: 0, box, uEntry: u, stopped: false, stoppedUntil: 0, stopStart: t, done: false, service, record };
+    car.pit = { p: 0, prevP: 0, box, uEntry: u, stopped: false, stoppedUntil: 0, stopStart: t, done: through, service, record, through, serving };
+    if (through) car.pitRequest = null;
     car.pittedThisLap = true;
     car.drsUntilU = -Infinity;
     car.passing = null;
@@ -2884,6 +2947,10 @@ export class RaceSim {
     }
     const repaired = car.damage !== null && car.damage.kind !== 'body';
     if (repaired) car.damage = null;
+    const served = car.pit!.serving ?? [];
+    for (const c of served) c.status = 'served';
+    if (served.length) car.toServe = car.toServe.filter((c) => !served.includes(c));
+    const held = car.pit!.record.penalty ?? 0;
     const r = car.rules;
     const old = r.tyres.compounds[car.compound];
     if (s.compound !== null) {
@@ -2906,7 +2973,8 @@ export class RaceSim {
     car.pitRequest = null;
     const tyres = s.compound !== null ? `${old.name} → ${r.tyres.compounds[s.compound].name}` : 'no tyres';
     const fuel = s.fuel > 0 ? `, ${Math.round(s.fuel)} kg fuel` : '';
-    this.log('pit', t, `${car.entrant.code} pits: ${tyres}${fuel}${change}${repaired ? ', repairs' : ''}, ${s.time.toFixed(1)} s`, car.id, lap);
+    const penalty = held > 0 ? `, ${formatSeconds(held)} s penalty served` : '';
+    this.log('pit', t, `${car.entrant.code} pits: ${tyres}${fuel}${change}${repaired ? ', repairs' : ''}${penalty}, ${s.time.toFixed(1)} s`, car.id, lap);
     if (r.fuel.refuelRate <= 0 && r.pit.stops) {
       if (car.tyreType !== 'slick') {
         car.plan = [];
@@ -2924,13 +2992,15 @@ export class RaceSim {
   }
 
   protected exitPit(car: RaceCar, v: number, t: number): void {
+    const through = car.pit!.through === true;
     car.pit!.record.exit = t;
     car.status = 'running';
     car.pit = null;
     car.accruedU = car.u;
     car.launch = { u: car.u, from: v, factor: 1 };
     car.exitUntilU = car.u + EXIT_BLEND / this.ds;
-    car.cold = COLD_TYRES;
+    if (through) this.servedThrough(car, t);
+    else car.cold = COLD_TYRES;
     car.lapPace = this.lapPaceFor(car);
     car.lateral = this.pitSide * 4;
     car.prevLateral = car.lateral;
@@ -3539,6 +3609,8 @@ export class RaceSim {
       this.contacts.push({
         t, lap, u: a.u, ahead: a.id, behind: b.id, overlap, inside: other(outer).id, speed, lunging: lunging?.id ?? -1, squeezed: squeezed?.id ?? -1, outcome, hurt: hurt.map((c) => c.id),
       });
+      // What cost a car something is the stewards' business.
+      if (hurt.length) this.report(this.contacts.length - 1, where);
     };
     for (const c of [a, b]) this.lose(c, TOUCH_LOSS, TOUCH_SHARE);
     const both = `${b.entrant.code} and ${a.entrant.code}`;
@@ -3615,6 +3687,198 @@ export class RaceSim {
       return;
     }
     if (this.needsPits(car)) car.pitRequest = 'damage';
+  }
+
+  // ---- stewards --------------------------------------------------------------------
+
+  /**
+   * A contact that cost a car something goes to the stewards (see
+   * stewards.ts): they say they are looking at it, and decide a few minutes
+   * later; or after the race, where the series looks at incidents then
+   * unless the fault is completely clear (a car that dived in).
+   */
+  private report(contact: number, where: string): void {
+    const c = this.contacts[contact];
+    const r = this.stewardRng;
+    const noteAt = c.t + NOTE_AFTER[0] + (NOTE_AFTER[1] - NOTE_AFTER[0]) * r();
+    const decideAt = c.t + DECIDE_AFTER[0] + (DECIDE_AFTER[1] - DECIDE_AFTER[0]) * r();
+    const entry: StewardCase = {
+      contact, t: c.t, lap: c.lap, where, cars: [c.behind, c.ahead], noteAt, decideAt: this.model.rules.stewards.afterRace && c.lunging < 0 ? Infinity : decideAt,
+      state: 'noted', decidedAt: NaN, verdict: null, penalty: null, status: 'none', seconds: 0,
+    };
+    this.cases.push(entry);
+    this.openCases.push(entry);
+  }
+
+  /** The stewards' clock: the cases they announce and the cases they decide in this step. */
+  private runStewards(): void {
+    if (!this.openCases.length) return;
+    const t = this.t;
+    let decided = false;
+    for (const c of this.openCases) {
+      if (c.state === 'noted' && t >= c.noteAt) {
+        c.state = 'investigating';
+        for (const id of c.cars) this.cars[id].investigations++;
+        const [behind, ahead] = c.cars.map((id) => this.cars[id]);
+        const later = c.decideAt === Infinity ? ', to be decided after the race' : '';
+        this.log('steward', t, `Under investigation: contact between ${behind.entrant.code} and ${ahead.entrant.code}${c.where}${later}`, behind.id, this.lapOf(behind), ahead.id, true);
+      }
+      if (c.state === 'investigating' && t >= c.decideAt) {
+        this.rule(c, t, false);
+        decided = true;
+      }
+    }
+    if (decided) this.openCases = this.openCases.filter((c) => c.state !== 'decided');
+  }
+
+  /**
+   * The stewards decide a case: who is to blame (judge), and the penalty by
+   * the rules of the race's series (the fastest class's). `after`: the race
+   * is over, and whatever they give is added to the car's race time.
+   */
+  private rule(c: StewardCase, t: number, after: boolean): void {
+    const rec = this.contacts[c.contact];
+    const rules = this.model.rules.stewards;
+    if (c.state === 'investigating') for (const id of c.cars) this.cars[id].investigations--;
+    c.state = 'decided';
+    c.decidedAt = t;
+    const verdict = judge(rec, rules.firstLapLenient && rec.lap === 1);
+    c.verdict = verdict;
+    const code = (id: number) => this.cars[id].entrant.code;
+    const behind = this.cars[c.cars[0]];
+    if (verdict.blame < 0) {
+      this.log('steward', t, `No further action on ${code(c.cars[0])} and ${code(c.cars[1])}${c.where}: ${verdict.reason}`, behind.id, this.lapOf(behind), c.cars[1], true);
+      return;
+    }
+    const car = this.cars[verdict.blame];
+    const other = verdict.blame === rec.ahead ? rec.behind : rec.ahead;
+    const penalty = verdict.mitigated ? rules.lesser : rules.collision;
+    c.penalty = penalty;
+    const how = this.impose(car, c, penalty, after);
+    const text = `${penaltyText(penalty)} for ${code(car.id)}: ${offenceText(verdict.offence, code(other))}${c.where} (${verdict.reason})${how}`;
+    this.log('steward', t, text, car.id, this.lapOf(car), other, penalty.kind === 'warning');
+  }
+
+  /** The lap a car is on, or the last one it did once it is home. */
+  private lapOf(car: RaceCar): number {
+    return car.lapsDone + (car.status === 'finished' ? 0 : 1);
+  }
+
+  /**
+   * Gives a car its penalty, and says how it is dealt with: served at its
+   * next stop or through the pit lane, or added to its race time (always for
+   * a car that is not racing any more, for a series that adds its time
+   * penalties, and for a drive-through that comes too late to serve).
+   */
+  private impose(car: RaceCar, c: StewardCase, penalty: Penalty, after: boolean): string {
+    if (penalty.kind === 'warning') return '';
+    if (car.status === 'retired') return '; the car is out of the race';
+    const rules = this.model.rules.stewards;
+    const racing = !after && (car.status === 'running' || car.status === 'pit');
+    const add = (seconds: number): void => {
+      car.addedTime += seconds;
+      c.status = 'added';
+      c.seconds = seconds;
+    };
+    if (penalty.kind === 'time') {
+      if (racing && rules.timeAtStop && car.model.pit && car.rules.pit.stops) {
+        c.status = 'open';
+        car.toServe.push(c);
+        return '; to serve at its next stop';
+      }
+      add(penalty.seconds);
+      return '; added to its race time';
+    }
+    if (racing && car.model.pit && !this.tooLate(car)) {
+      c.status = 'open';
+      car.toServe.push(c);
+      car.lineFirst = rules.afterLine;
+      return `; to serve within ${rules.serveLaps} ${rules.serveLaps === 1 ? 'lap' : 'laps'}`;
+    }
+    const seconds = this.driveThroughTime(car);
+    add(seconds);
+    return `; ${formatSeconds(seconds)} s added to its race time instead`;
+  }
+
+  /** Whether a drive-through comes too late to be driven, by the series' rules: in the last laps, or the last minutes. */
+  private tooLate(car: RaceCar): boolean {
+    if (this.chequered) return true;
+    const rules = this.model.rules.stewards;
+    const left = this.lapsLeft(car);
+    return (rules.lateLaps > 0 && left <= rules.lateLaps) || (rules.lateTime > 0 && left * this.expectedLap(car) <= rules.lateTime);
+  }
+
+  /** The time added for a drive-through that is not driven: the series' figure, or what the pit lane costs here, to the next five seconds. */
+  private driveThroughTime(car: RaceCar): number {
+    const fixed = this.model.rules.stewards.driveThroughTime;
+    return fixed > 0 ? fixed : Math.ceil((car.model.pit?.driveThroughLoss ?? 20) / 5) * 5;
+  }
+
+  /** Out of the pit lane without stopping: one drive-through is served. */
+  private servedThrough(car: RaceCar, t: number): void {
+    const c = car.toServe.find((x) => x.penalty?.kind === 'driveThrough');
+    if (!c) return;
+    c.status = 'served';
+    car.toServe = car.toServe.filter((x) => x !== c);
+    this.log('steward', t, `${car.entrant.code} has served its drive-through`, car.id, this.lapOf(car), undefined, true);
+  }
+
+  /** A car's race is run: what it has not served is added to its race time. */
+  private settle(car: RaceCar, t: number): void {
+    for (const c of car.toServe) {
+      const p = c.penalty!;
+      const seconds = p.kind === 'time' ? p.seconds : this.driveThroughTime(car);
+      car.addedTime += seconds;
+      c.status = 'added';
+      c.seconds = seconds;
+      const what = p.kind === 'time' ? 'time penalty' : 'drive-through';
+      this.log('steward', t, `${car.entrant.code}: ${formatSeconds(seconds)} s added to its race time for the ${what} it did not serve`, car.id, car.lapsDone);
+    }
+    car.toServe = [];
+  }
+
+  /** The race is over: the stewards decide what they still have before them, and nothing is left to serve. */
+  private closeStewards(t: number): void {
+    if (this.stewardsDone) return;
+    this.stewardsDone = true;
+    for (const car of this.cars) if (car.status !== 'retired') this.settle(car, t);
+    for (const c of this.openCases) this.rule(c, t, true);
+    this.openCases = [];
+  }
+
+  /**
+   * The result, once every car is home: with the time the stewards added,
+   * which can change the order the cars crossed the line in. Says who lost
+   * places to it, and who wins where that changed.
+   */
+  private classify(t: number): void {
+    if (this.stewardsDone) return;
+    const penalised = () => this.cars.filter((c) => c.status === 'finished' && c.addedTime > 0);
+    // The order on the road: by distance, then by who got there first.
+    const road = [...this.order].sort((a, b) => {
+      const ra = a.status === 'retired' ? 1 : 0;
+      const rb = b.status === 'retired' ? 1 : 0;
+      if (ra !== rb) return ra - rb;
+      if (Math.abs(b.u - a.u) > 1e-9) return b.u - a.u;
+      return (a.finishTime ?? Infinity) - (b.finishTime ?? Infinity);
+    });
+    this.closeStewards(t);
+    this.updateOrder();
+    if (!penalised().length) return;
+    const place = (list: RaceCar[], car: RaceCar) => list.filter((c) => c.cls === car.cls).indexOf(car) + 1;
+    for (const cls of this.classes) {
+      const first = cls.order[0];
+      if (first && first.status === 'finished' && place(road, first) !== 1) {
+        const who = this.multiClass ? `${first.entrant.code} ${first.entrant.team} wins ${cls.index === 0 && first === this.order[0] ? 'overall' : `the ${cls.label} class`}` : `${first.entrant.name} wins`;
+        this.log('finish', t, `After penalties: ${who}`, first.id, first.lapsDone);
+      }
+    }
+    for (const car of penalised()) {
+      const was = place(road, car);
+      if (car.classPosition > was) {
+        this.log('finish', t, `${car.entrant.code} is classified P${car.classPosition}${this.multiClass ? ` in ${car.cls.label}` : ''} (P${was} on the road) with ${formatSeconds(car.addedTime)} s added`, car.id, car.lapsDone);
+      }
+    }
   }
 
   // ---- racing ----------------------------------------------------------------------
@@ -3807,7 +4071,8 @@ export class RaceSim {
       const rb = b.status === 'retired' ? 1 : 0;
       if (ra !== rb) return ra - rb;
       if (Math.abs(b.u - a.u) > 1e-9) return b.u - a.u;
-      return (a.finishTime ?? Infinity) - (b.finishTime ?? Infinity);
+      // (Home on the same lap: by the race time, with what the stewards added.)
+      return (a.finishTime === null ? Infinity : a.finishTime + a.addedTime) - (b.finishTime === null ? Infinity : b.finishTime + b.addedTime);
     });
     this.order.forEach((c, i) => { c.position = i + 1; });
     this.updateClassOrder();

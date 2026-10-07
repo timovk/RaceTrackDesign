@@ -14,6 +14,18 @@
     "motogp": "FIM Grand Prix World Championship Regulations 2025: https://www.fim-moto.com/fileadmin/user_upload/Documents/2025/FIM_2025_MotoGP__Moto2___Moto3_World_Championship_Regulations-uodate_12_Sept.pdf",
     "superbike": "FIM WorldSBK Regulations 2025: https://www.fim-moto.com/fileadmin/user_upload/Documents/2025/2025_WorldSBK_WorldSSP_WorldSSP300_WorldWCR_World_Championship_Regulations_update_01_07.pdf"
   },
+  "stewardsNotes": "stewards: what the stewards give a car that is wholly or predominantly to blame for a collision or for forcing another car off the road (collision), and what they give in mitigating circumstances (lesser): a number of seconds, driveThrough, or warning. timeAtStop: a time penalty is stood still in the box before the work of the car's next pit stop, and added to its race time when it makes none (false: always added to the race time). serveLaps: how often the car may cross the line before it comes in for a drive-through (laps under a safety car, a virtual safety car or a full course yellow do not count, and it is not served then); afterLine: the car has to cross the line under green before it comes in. lateLaps, lateMinutes: a drive-through given in the last laps or minutes of the race is not driven, and driveThroughS is added to the race time instead (0: the series sets it per event from the length of the pit lane; here what the pit lane costs at the circuit, to the next five seconds). firstLapLenient: contact on the first lap is judged more leniently. afterRace: incidents are looked at after the race, unless it is completely clear who was at fault. Who is to blame is decided the same way for every series, by the FIA driving standards guidelines (see ARCHITECTURE.md, Stewards). Figures from the regulations and stewards' decisions in stewardsSources, which says where one rests on a single decision or on another series of the same organiser. Bikes have no stewards yet.",
+  "stewardsSources": {
+    "guidelines": "FIA Formula 1 Driving Standards Guidelines v4.1 (20 February 2025): https://api.fia.com/sites/default/files/f1_driving_standards_guidelines_version_4.1_feb_20_2025.pdf",
+    "f1": "FIA 2026 F1 Sporting Regulations, B1.9 (the penalties and how they are served; 20 s for a drive-through in the last three laps): see weekendSources. The 10 s and 5 s from the FIA's 2025 Formula 1 Penalty and Point Guidelines (14 May 2025): https://www.fia.com/sites/default/files/2025_f1_guidelines_penalty_points_overview_-_14_may_clean_0.pdf. First-lap leniency is stewards' practice, not in either document",
+    "f2": "FIA 2026 F2 Sporting Regulations, Article 39 (the same penalties and procedure as Formula 1): see weekendSources. The 10 s from the 2026 decisions at Melbourne and Montreal; the 5 s and the first-lap leniency taken over from Formula 1",
+    "indycar": "2026 IndyCar rulebook, 7.2.3 (black flag penalties, served under green after crossing the line), 9.2.2 and 9.3.3 (avoidable contact): see weekendSources. A drive-through for avoidable contact from the 2026 box scores (Arlington, Sonsio Grand Prix); 30 s for one not served from Road America 2026",
+    "hypercar": "2026 FIA WEC Sporting Regulations, 7.4 (four crossings of the line, not under a neutralisation, the time for an unserved drive-through set per event) and clarification D03 of 3 February 2026 (the last 15 minutes): https://www.fia.com/sites/default/files/wec_2026_d03_all_sporting_clarifications_03022026.pdf. A drive-through for a collision is the practice of the ELMS stewards (same organiser); no WEC decision was looked up",
+    "lmp2": "ELMS 2026: decision no. 28 at Imola (a drive-through for a collision) and bulletin no. 1 at Spa (30 s for a drive-through notified in the last 15 minutes): https://elms.alkamelsystems.com. The procedure (four crossings of the line) taken over from the WEC regulations",
+    "gt3": "2026 GT World Challenge Europe Sporting Regulations, Article 15 (time at the next pit stop, two crossings of the line, the last 10 minutes, the time for an unserved drive-through set per event): see weekendSources. A drive-through for causing a collision from the 2026 decisions (Article 27.4)",
+    "gt4": "GT4 European Series Sporting Regulations 2026, Article 16.5 (30 s for a drive-through not served) and the 2026 decisions (a drive-through for causing a collision, Article 33.4): https://www.gt4europeanseries.com. The procedure taken over from GT World Challenge Europe (same organiser)",
+    "tcr": "2026 TCR Europe Sporting Regulations, Articles 39 to 41 (a time penalty is added to the race time; three crossings of the line; 30 s in the last three laps; incidents normally investigated after the race): see weekendSources. The 5 s from decision no. 13 at Mugello 2026 (causing a collision)"
+  },
   "classes": {
     "f1": {
       "label": "F1",
@@ -37,6 +49,7 @@
       "air": { "towDragCut": 0.12, "wakeDownforceLoss": 0.2 },
       "incidents": { "mistakePerLap": 0.02, "offPerLap": 0.003, "crashPerLap": 0.0004, "dnfPer1000Km": 0.15 },
       "flags": { "safetyCar": true, "virtual": "vsc", "vscPct": 35 },
+      "stewards": { "collision": 10, "lesser": 5, "timeAtStop": true, "serveLaps": 2, "lateLaps": 3, "driveThroughS": 20, "firstLapLenient": true },
       "reference": { "energyMJPerKm": 7.83, "tyreWork": 6.602 },
       "weekend": {
         "practice": [{ "name": "FP1", "minutes": 60, "day": 1 }, { "name": "FP2", "minutes": 60, "day": 1, "longRuns": true }, { "name": "FP3", "minutes": 60, "day": 2 }],
@@ -71,6 +84,7 @@
       "air": { "towDragCut": 0.12, "wakeDownforceLoss": 0.25 },
       "incidents": { "mistakePerLap": 0.025, "offPerLap": 0.004, "crashPerLap": 0.0006, "dnfPer1000Km": 0.25 },
       "flags": { "safetyCar": true, "virtual": "vsc", "vscPct": 35 },
+      "stewards": { "collision": 10, "lesser": 5, "timeAtStop": true, "serveLaps": 2, "lateLaps": 3, "driveThroughS": 20, "firstLapLenient": true },
       "reference": { "energyMJPerKm": 5.45, "tyreWork": 3.406 },
       "weekend": {
         "practice": [{ "name": "Practice", "minutes": 45, "day": 1, "longRuns": true }],
@@ -101,6 +115,7 @@
       "air": { "towDragCut": 0.12, "wakeDownforceLoss": 0.25 },
       "incidents": { "mistakePerLap": 0.02, "offPerLap": 0.003, "crashPerLap": 0.0005, "dnfPer1000Km": 0.2 },
       "flags": { "safetyCar": true, "virtual": null },
+      "stewards": { "collision": "driveThrough", "lesser": "warning", "timeAtStop": false, "serveLaps": 1, "afterLine": true, "lateLaps": 0, "driveThroughS": 30 },
       "reference": { "energyMJPerKm": 6.11, "tyreWork": 3.654 },
       "weekend": {
         "practice": [{ "name": "Practice 1", "minutes": 52, "day": 1 }, { "name": "Practice 2", "minutes": 52, "day": 2, "longRuns": true }],
@@ -133,6 +148,7 @@
       "air": { "towDragCut": 0.1, "wakeDownforceLoss": 0.15 },
       "incidents": { "mistakePerLap": 0.015, "offPerLap": 0.002, "crashPerLap": 0.0002, "dnfPer1000Km": 0.1 },
       "flags": { "safetyCar": true, "virtual": "fcy", "fcyKmh": 80 },
+      "stewards": { "collision": "driveThrough", "lesser": "warning", "timeAtStop": true, "serveLaps": 4, "lateLaps": 0, "lateMinutes": 15, "driveThroughS": 0 },
       "reference": { "energyMJPerKm": 5.92, "tyreWork": 2.446 },
       "weekend": {
         "practice": [{ "name": "FP1", "minutes": 90, "day": 1, "longRuns": true }, { "name": "FP2", "minutes": 90, "day": 1, "longRuns": true }, { "name": "FP3", "minutes": 60, "day": 2 }],
@@ -163,6 +179,7 @@
       "air": { "towDragCut": 0.1, "wakeDownforceLoss": 0.15 },
       "incidents": { "mistakePerLap": 0.02, "offPerLap": 0.003, "crashPerLap": 0.0003, "dnfPer1000Km": 0.08 },
       "flags": { "safetyCar": true, "virtual": "fcy", "fcyKmh": 80 },
+      "stewards": { "collision": "driveThrough", "lesser": "warning", "timeAtStop": true, "serveLaps": 4, "lateLaps": 0, "lateMinutes": 15, "driveThroughS": 0 },
       "reference": { "energyMJPerKm": 5.11, "tyreWork": 2.04 },
       "weekend": {
         "practice": [{ "name": "FP1", "minutes": 90, "day": 1, "longRuns": true }, { "name": "FP2", "minutes": 90, "day": 1, "longRuns": true }],
@@ -192,6 +209,7 @@
       "air": { "towDragCut": 0.1, "wakeDownforceLoss": 0.1 },
       "incidents": { "mistakePerLap": 0.02, "offPerLap": 0.003, "crashPerLap": 0.0003, "dnfPer1000Km": 0.06 },
       "flags": { "safetyCar": true, "virtual": "fcy", "fcyKmh": 80 },
+      "stewards": { "collision": "driveThrough", "lesser": "warning", "timeAtStop": true, "serveLaps": 2, "lateLaps": 0, "lateMinutes": 10, "driveThroughS": 0 },
       "reference": { "energyMJPerKm": 5.11, "tyreWork": 1.993 },
       "weekend": {
         "practice": [{ "name": "FP1", "minutes": 90, "day": 1 }, { "name": "FP2", "minutes": 90, "day": 1, "longRuns": true }],
@@ -224,6 +242,7 @@
       "air": { "towDragCut": 0.1, "wakeDownforceLoss": 0.1 },
       "incidents": { "mistakePerLap": 0.025, "offPerLap": 0.004, "crashPerLap": 0.0004, "dnfPer1000Km": 0.08 },
       "flags": { "safetyCar": true, "virtual": "fcy", "fcyKmh": 80 },
+      "stewards": { "collision": "driveThrough", "lesser": "warning", "timeAtStop": true, "serveLaps": 2, "lateLaps": 0, "lateMinutes": 10, "driveThroughS": 30 },
       "reference": { "energyMJPerKm": 4.66, "tyreWork": 1.417 },
       "weekend": {
         "practice": [{ "name": "FP1", "minutes": 60, "day": 1 }, { "name": "FP2", "minutes": 60, "day": 1, "longRuns": true }],
@@ -253,6 +272,7 @@
       "air": { "towDragCut": 0.12, "wakeDownforceLoss": 0.05 },
       "incidents": { "mistakePerLap": 0.03, "offPerLap": 0.005, "crashPerLap": 0.0008, "dnfPer1000Km": 0.2 },
       "flags": { "safetyCar": true, "virtual": null },
+      "stewards": { "collision": 5, "lesser": "warning", "timeAtStop": false, "serveLaps": 3, "lateLaps": 3, "driveThroughS": 30, "afterRace": true },
       "reference": { "energyMJPerKm": 3.78, "tyreWork": 1.199 },
       "weekend": {
         "practice": [{ "name": "FP1", "minutes": 30, "day": 1 }, { "name": "FP2", "minutes": 30, "day": 1, "longRuns": true }],

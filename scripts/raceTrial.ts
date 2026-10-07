@@ -51,16 +51,17 @@ function main(): void {
   if (!vehicle) throw new Error(`No class "${classId}".`);
   const seeds = Number(seedCount);
   console.log(`${vehicle.name}, ${seeds} race(s) per circuit; passes are overtakes for position after lap 1.`);
-  console.log('Per race: touches (contact that only costs time), trouble (trips off, spins, cars forced off and damage) and cars out by a crash or a collision.\n');
-  console.log('circuit            km  width  laps  passes  per car  touches  trouble   out  winner');
-  const all = { races: 0, passes: 0, carLaps: 0, mistakes: 0, touches: 0, trouble: 0, out: 0 };
+  console.log('Per race: touches (contact that only costs time), trouble (trips off, spins, cars forced off and damage), cars out by a crash or a collision,');
+  console.log('the contacts the stewards looked at (cases) and the penalties they gave (pens).\n');
+  console.log('circuit            km  width  laps  passes  per car  touches  trouble   out  cases   pens  winner');
+  const all = { races: 0, passes: 0, carLaps: 0, mistakes: 0, touches: 0, trouble: 0, out: 0, cases: 0, pens: 0 };
   let counted = false;
   const t0 = performance.now();
   for (const name of only.length ? only : circuitNames()) {
     const model = circuitRace(name, vehicle);
     let width = 0;
     for (let k = 0; k < model.n; k++) width += model.track.width[k] / model.n;
-    const sum = { passes: 0, carLaps: 0, mistakes: 0, touches: 0, trouble: 0, out: 0 };
+    const sum = { passes: 0, carLaps: 0, mistakes: 0, touches: 0, trouble: 0, out: 0, cases: 0, pens: 0 };
     let laps = 0;
     let cars = 0;
     let winner = 0;
@@ -76,6 +77,8 @@ function main(): void {
       // (Bikes race in one line and keep no tally: their trips off are in the feed, their mistakes are not counted.)
       sum.trouble += sim.lanes ? y.offs + y.spins + y.forcedOff + y.tapped + y.damaged : sim.events.filter((e) => e.kind === 'off').length;
       sum.out += sim.cars.filter((c) => c.status === 'retired' && /^(crash|collision|puncture)/.test(c.retired!.reason)).length;
+      sum.cases += sim.cases.length;
+      sum.pens += sim.cases.filter((c) => c.penalty && c.penalty.kind !== 'warning').length;
       laps = sim.order[0].lapsDone;
       cars = sim.cars.length;
       winner += sim.order[0].finishTime ?? sim.t;
@@ -84,12 +87,12 @@ function main(): void {
     for (const key of Object.keys(sum) as (keyof typeof sum)[]) all[key] += sum[key];
     const per = (v: number, w: number, digits = 1) => (v / seeds).toFixed(digits).padStart(w);
     console.log(
-      `${name.padEnd(16)} ${(model.line.length / 1000).toFixed(2).padStart(5)} ${width.toFixed(1).padStart(6)} ${String(laps).padStart(5)} ${per(sum.passes, 7)} ${per(sum.passes / cars, 8, 2)} ${per(sum.touches, 8)} ${per(sum.trouble, 8)} ${per(sum.out, 5)}  ${(winner / seeds / 60).toFixed(1)} min`,
+      `${name.padEnd(16)} ${(model.line.length / 1000).toFixed(2).padStart(5)} ${width.toFixed(1).padStart(6)} ${String(laps).padStart(5)} ${per(sum.passes, 7)} ${per(sum.passes / cars, 8, 2)} ${per(sum.touches, 8)} ${per(sum.trouble, 8)} ${per(sum.out, 5)} ${per(sum.cases, 6)} ${per(sum.pens, 6)}  ${(winner / seeds / 60).toFixed(1)} min`,
     );
   }
   const inc = raceRules(vehicle).incidents;
   const rate = (v: number) => (v / all.carLaps).toFixed(5);
-  console.log(`\nmean ${(all.passes / all.races).toFixed(1)} passes a race over ${all.races} races, in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+  console.log(`\nmean ${(all.passes / all.races).toFixed(1)} passes, ${(all.cases / all.races).toFixed(2)} cases and ${(all.pens / all.races).toFixed(2)} penalties a race over ${all.races} races, in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
   console.log(`per lap and car, against the class's figures: mistakes and touches ${counted ? rate(all.mistakes + all.touches) : 'not counted'} (${inc.mistake}), trouble ${rate(all.trouble)} (${inc.off}), cars out ${rate(all.out)} (${inc.crash})`);
 }
 

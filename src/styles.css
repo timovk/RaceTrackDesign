@@ -1408,6 +1408,35 @@ input[type='range'] {
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* The stewards' message: under investigation (yellow), a penalty (red), no further action. */
+.tv-control {
+  position: absolute;
+  left: var(--tv-centre, 50%);
+  bottom: 152px;
+  transform: translateX(-50%);
+  animation: tv-pop 0.3s ease-out;
+}
+
+.tv-control .fc {
+  align-items: center;
+}
+
+.tv-control .fc-line {
+  justify-content: center;
+  min-width: 300px;
+  height: 24px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.tv-control .fc-line.note {
+  height: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #e3e5e8;
+}
+
 /* The pit stop timer: the time standing in the box, green once the car is away. */
 .tv-timer {
   position: absolute;
@@ -2162,6 +2191,8 @@ input[type='range'] {
 .feed-item.off,
 .feed-item.contact { border-left-color: var(--warning); }
 .feed-item.retired { border-left-color: var(--error); }
+.feed-item.steward { border-left-color: #f0283c; color: #ffc2c2; }
+.feed-item.steward.minor { border-left-color: #b9a44a; color: inherit; }
 .feed-item.chequered,
 .feed-item.finish { border-left-color: #f4f4f4; }
 .feed-item.flag { border-left-color: #ffb020; color: #ffd27a; }
@@ -2267,6 +2298,11 @@ input[type='range'] {
 .crew {
   display: flex;
   flex-direction: column;
+}
+
+.table .penalty {
+  color: #ff8a8a;
+  font-size: 11px;
 }
 
 .table .up {
@@ -2622,6 +2658,23 @@ input[type='range'] {
   border-left: 8px solid #ff3a1c;
   border-top: 5px solid transparent;
   border-bottom: 5px solid transparent;
+}
+
+/* The stewards: a penalty to serve or on the race time (red), an investigation (yellow). */
+.tw-end.pen {
+  width: auto;
+  min-width: 24px;
+  margin-left: 2px;
+  padding: 0 5px;
+  transform: skewX(var(--fom-skew));
+  background: linear-gradient(180deg, #f0283c, #b3091c);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tw-end.pen.inv {
+  background: linear-gradient(180deg, #ffe42b, #f0c800);
+  color: #111;
 }
 
 .tw-class {

@@ -9,6 +9,7 @@ import { raceRules } from '../../core/race/rules.ts';
 import { SessionSim } from '../../core/race/session.ts';
 import { MAX_CARS, MAX_CLASSES, MAX_LAPS, MAX_MINUTES, totalCars } from '../../core/race/setup.ts';
 import type { Gap, RaceCar, RaceClass, RaceSim } from '../../core/race/sim.ts';
+import { formatSeconds } from '../../core/race/stewards.ts';
 import type { Weekend } from '../../core/race/weekend.ts';
 import { conditionName } from '../../core/race/weather.ts';
 import { randomSeedString } from '../../core/rng.ts';
@@ -464,6 +465,7 @@ export class RacePanel {
     const row = (label: string, value: string | Node) => [h('dt', null, label), h('dd', null, value)];
     const moved = car.classGrid - car.classPosition;
     const status = car.status === 'retired' ? `Out: ${car.retired?.reason ?? 'retired'}` : car.status === 'finished' ? 'Finished' : car.status === 'pit' ? 'In the pit lane' : car.pitRequest ? `Pitting this lap (${car.pitRequest})` : 'Racing';
+    const stewards = stewardText(car);
     const plan = car.status === 'running' && !car.pitRequest
       ? car.tyreType !== 'slick' ? 'when the track dries, or the tyres are worn'
         : rules.fuel.refuelRate > 0
@@ -497,6 +499,7 @@ export class RacePanel {
         ...(plan ? row('Next stop', plan) : []),
         ...row('Speed', car.status === 'running' || car.status === 'pit' ? fmt.speed(car.v) : '—'),
         ...row('Status', status),
+        ...(stewards ? row('Stewards', stewards) : []),
       )));
   }
 
@@ -537,7 +540,7 @@ export class RacePanel {
     this.feedCount = sim.events.length;
     const recent = sim.events.slice(-80).reverse();
     setChildren(this.feedEl, ...recent.map((ev) =>
-      h('li', { class: `feed-item ${ev.kind}${ev.car < 0 ? ' plain' : ''}`, onclick: () => ev.kind !== 'start' && ev.car >= 0 && this.race.select(ev.car) },
+      h('li', { class: `feed-item ${ev.kind}${ev.minor ? ' minor' : ''}${ev.car < 0 ? ' plain' : ''}`, onclick: () => ev.kind !== 'start' && ev.car >= 0 && this.race.select(ev.car) },
         h('span', { class: 'feed-lap' }, `L${ev.lap}`),
         h('span', { class: 'feed-text' }, ev.text))));
   }
@@ -554,6 +557,8 @@ export class RacePanel {
     const fast = sim.fastest;
     const overtakes = sim.events.filter((e) => e.kind === 'overtake').length;
     const stops = sim.events.filter((e) => e.kind === 'pit').length;
+    const given = sim.cases.filter((c) => c.penalty && c.penalty.kind !== 'warning').length;
+    const penalties = given ? ` ${given === 1 ? '1 penalty' : `${given} penalties`} from the stewards.` : '';
     const neutral = sim.neutral.length ? ` ${countText(sim.neutral.filter((p) => p.kind === 'sc').length, 'safety car')}${sim.neutral.some((p) => p.kind !== 'sc') ? `, ${countText(sim.neutral.filter((p) => p.kind !== 'sc').length, sim.model.rules.flags.virtual === 'fcy' ? 'full course yellow' : 'VSC')}` : ''}.` : '';
     if (!sim.multiClass) {
       const winner = sim.order[0];
@@ -562,19 +567,33 @@ export class RacePanel {
         h('p', { class: 'hint' },
           `${winner.entrant.name} (${winner.entrant.team}) wins.`,
           fast ? ` Fastest lap ${sim.cars[fast.car].entrant.code} ${formatLapTime(fast.time)} on lap ${fast.lap}.` : '',
-          ` ${overtakes} overtakes, ${stops} pit stops.${neutral}`),
+          ` ${overtakes} overtakes, ${stops} pit stops.${neutral}${penalties}`),
       ), gridSection(sim, this.race));
       return;
     }
     const overall = sim.order[0];
     setChildren(this.resultsEl, section('Result',
-      h('p', { class: 'hint' }, `${overall.entrant.code} ${overall.entrant.team} (${overall.cls.label}) wins overall. ${overtakes} overtakes in class, ${stops} pit stops.${neutral}`),
+      h('p', { class: 'hint' }, `${overall.entrant.code} ${overall.entrant.team} (${overall.cls.label}) wins overall. ${overtakes} overtakes in class, ${stops} pit stops.${neutral}${penalties}`),
       ...sim.classes.map((cls) => h('div', { class: 'class-result' },
         h('h4', null, classBadge(cls), ` ${cls.name}`,
           cls.fastest ? h('span', { class: 'muted small' }, ` · fastest lap ${sim.cars[cls.fastest.car].entrant.code} ${formatLapTime(cls.fastest.time)}`) : null),
         resultTable(sim, cls.order, this.race))),
     ), gridSection(sim, this.race));
   }
+}
+
+/** What the stewards have for a car, in words; '' for nothing. */
+function stewardText(car: RaceCar): string {
+  if (car.status === 'retired') return '';
+  const parts: string[] = [];
+  const through = car.toServe.filter((c) => c.penalty?.kind === 'driveThrough').length;
+  const atStop = car.toServe.reduce((s, c) => s + (c.penalty?.kind === 'time' ? c.penalty.seconds : 0), 0);
+  if (through) parts.push(through > 1 ? `${through} drive-throughs to serve` : 'a drive-through to serve');
+  if (atStop) parts.push(`${formatSeconds(atStop)} s to serve at the next stop`);
+  if (car.addedTime) parts.push(`${formatSeconds(car.addedTime)} s added to the race time`);
+  if (car.investigations) parts.push('under investigation');
+  const text = parts.join(', ');
+  return text ? text[0].toUpperCase() + text.slice(1) : '';
 }
 
 /** Classification of these cars (a whole race, or one class of it). */
@@ -585,8 +604,10 @@ function resultTable(sim: RaceSim, cars: RaceCar[], race: RaceController): HTMLE
     const e = car.entrant;
     let time: string;
     if (car.status === 'retired') time = `DNF (${car.retired?.reason ?? ''})`;
-    else if (car === winner) time = winner.finishTime !== null ? clock(winner.finishTime, true) : '';
+    else if (car === winner) time = winner.finishTime !== null ? clock(winner.finishTime + winner.addedTime, true) : '';
     else time = gapText(multi ? sim.classGap(car) : sim.gap(car), true);
+    // The time and the gaps are the classification's: with what the stewards added.
+    const added = car.status !== 'retired' && car.addedTime > 0 ? h('span', { class: 'penalty', title: 'Added to the race time by the stewards' }, ` (${formatSeconds(car.addedTime)} s pen.)`) : null;
     const pos = multi ? car.classPosition : car.position;
     const moved = (multi ? car.classGrid : car.gridPosition) - pos;
     const who = e.drivers.length > 1 ? h('span', { class: 'muted' }, ` ${e.drivers.map((d) => d.code).join('/')}`) : null;
@@ -594,7 +615,7 @@ function resultTable(sim: RaceSim, cars: RaceCar[], race: RaceController): HTMLE
       h('td', { class: 'num' }, car.status === 'retired' ? '—' : String(pos)),
       h('td', null, h('span', { class: 'dot', style: `background:${e.color}` }), e.code, who),
       h('td', { class: 'num' }, String(car.lapsDone)),
-      h('td', { class: 'num' }, time),
+      h('td', { class: 'num' }, time, added),
       h('td', { class: 'num' }, car.bestLap !== null ? formatLapTime(car.bestLap) : '—'),
       h('td', { class: 'num' }, String(car.stops)),
       h('td', { class: `num ${moved > 0 ? 'up' : moved < 0 ? 'down' : 'muted'}` }, car.status === 'retired' ? '' : moved > 0 ? `+${moved}` : moved < 0 ? String(moved) : '='));

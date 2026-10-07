@@ -1,10 +1,10 @@
 # Roadmap
 
-What is decided and waiting to be built, and what was proposed and never decided. The README's status table lists what is done. Last updated 2026-10-06.
+What is decided and waiting to be built, and what was proposed and never decided. The README's status table lists what is done. Last updated 2026-10-07.
 
 ## Next: side-by-side racing
 
-Decided on 2026-10-05. Steps 1 to 3 are built; steps 4 and 5 are waiting.
+Decided on 2026-10-05. Steps 1 to 4 are built; step 5 is waiting.
 
 Before step 1 the race was one-dimensional: a car was a position along the lap, and the sideways position that was drawn (passing, the grid, cars spread side by side in 3D) never affected the race. This makes the sideways position real. Bikes still race the old way.
 
@@ -25,7 +25,7 @@ Before step 1 the race was one-dimensional: a car was a position along the lap, 
 | 1 **done** | Sideways position and car width become real; a car is held up only by a car in its way; passing needs room; off-line costs time in corners. Also built here, because passing made no sense without them: braking later for the inside, and the car ahead shutting the inside | Passes on a stretch of road, cars side by side into corners, faster classes threading past slower ones where there is space |
 | 2 **done** | The start and lap 1 on the same rules. What it took: a hole to move over into, two abreast through a corner, following measured in metres of road, and one cost per corner for a lane | The grid fanning out and funnelling into the first corners by room, in place of the three-abreast cap |
 | 3 **done** | Contact and mistakes. A driver's own trouble at the corners: running wide, a trip off the road, a spin, a crash. Contact between cars side by side: a touch, a spin, a car forced off, damage that needs the pits, a car out | Incidents where cars were fighting, with yellows and safety cars through the race control there is |
-| 4 | Stewards: fault and penalties per series | Penalties in the timing tower and the feed |
+| 4 **done** | Stewards: who is to blame for a contact, by the FIA's driving standards guidelines, and each series' own penalty for it, served in the race or added to the race time | Investigations and penalties in the timing tower, the feed and on TV, and a result that can change after the flag |
 | 5 | Restarts and safety-car queues; the TV director using all of it | Replays of contact, cameras picking side-by-side fights |
 
 **Also agreed**
@@ -37,36 +37,36 @@ Before step 1 the race was one-dimensional: a car was a position along the lap, 
 
 How it works is in ARCHITECTURE.md under Lanes. Three things changed beside the passing itself, all for cars only: the slipstream is weaker (a car loses 10% to 12% of its drag 0.3 s behind another, where the classes had 20% to 25%) and thins out faster with distance, as does the wake; and in the race the wing opens over the last 450 m of a DRS zone at most. With the old values every car in a tow passed the one ahead on any long straight.
 
-Overtakes for position after lap 1, Formula 1, each circuit's default race. Before: the one-line model, two races per circuit. After: lanes, three races per circuit. The same seed no longer gives the same race, so the columns are different races, and a single race can be well off these means. The last column is with contact and mistakes.
+Overtakes for position after lap 1, Formula 1, each circuit's default race. Before: the one-line model, two races per circuit. After: lanes, three races per circuit. The same seed no longer gives the same race, so the columns are different races, and a single race can be well off these means. The last two columns are with contact and mistakes, and with the stewards.
 
-| Circuit | Width (m) | Before | After step 1 | After step 2 | After step 3 |
-|---|---|---|---|---|---|
-| Austin | 13.9 | 31.0 | 40.0 | 28.7 | 32.0 |
-| Brands Hatch | 9.2 | 9.0 | 5.3 | 3.7 | 5.0 |
-| Budapest | 10.0 | 27.0 | 9.0 | 9.0 | 11.7 |
-| Catalunya | 11.2 | 13.5 | 21.3 | 11.0 | 18.0 |
-| Hockenheim | 12.6 | 27.0 | 21.7 | 4.3 | 3.7 |
-| Indianapolis | 15.3 | 0.0 | 24.3 | 28.0 | 29.3 |
-| Melbourne | 12.3 | 30.0 | 9.7 | 15.3 | 11.0 |
-| Mexico City | 12.2 | 57.5 | 59.7 | 53.7 | 46.0 |
-| Montreal | 9.7 | 83.0 | 39.0 | 40.7 | 49.0 |
-| Monza | 9.4 | 161.5 | 114.0 | 122.7 | 108.3 |
-| Moscow Raceway | 11.7 | 17.5 | 35.0 | 32.0 | 17.7 |
-| Norisring | 15.9 | 92.5 | 94.3 | 104.3 | 92.0 |
-| Nürburgring | 11.8 | 30.0 | 40.0 | 35.0 | 19.3 |
-| Oschersleben | 10.6 | 43.5 | 45.3 | 11.0 | 7.0 |
-| Sakhir | 13.4 | 83.5 | 70.0 | 50.0 | 56.7 |
-| São Paulo | 11.9 | 64.0 | 49.3 | 35.7 | 56.3 |
-| Sepang | 14.6 | 47.5 | 50.7 | 43.3 | 52.0 |
-| Shanghai | 13.0 | 19.0 | 33.0 | 51.3 | 46.3 |
-| Silverstone | 13.8 | 36.5 | 34.7 | 35.3 | 23.3 |
-| Sochi | 12.6 | 71.5 | 36.7 | 27.0 | 46.7 |
-| Spa | 9.8 | 37.0 | 57.0 | 68.3 | 70.0 |
-| Spielberg | 11.0 | 96.0 | 39.3 | 90.0 | 94.7 |
-| Suzuka | 9.8 | 15.0 | 63.7 | 64.7 | 69.7 |
-| Yas Marina | 12.9 | 76.0 | 67.7 | 82.7 | 99.3 |
-| Zandvoort | 10.5 | 20.5 | 39.0 | 38.0 | 32.3 |
-| **Mean** | | **47.6** | **44.0** | **43.4** | **43.9** |
+| Circuit | Width (m) | Before | After step 1 | After step 2 | After step 3 | After step 4 |
+|---|---|---|---|---|---|---|
+| Austin | 13.9 | 31.0 | 40.0 | 28.7 | 32.0 | 33.0 |
+| Brands Hatch | 9.2 | 9.0 | 5.3 | 3.7 | 5.0 | 5.3 |
+| Budapest | 10.0 | 27.0 | 9.0 | 9.0 | 11.7 | 11.7 |
+| Catalunya | 11.2 | 13.5 | 21.3 | 11.0 | 18.0 | 18.0 |
+| Hockenheim | 12.6 | 27.0 | 21.7 | 4.3 | 3.7 | 3.7 |
+| Indianapolis | 15.3 | 0.0 | 24.3 | 28.0 | 29.3 | 29.3 |
+| Melbourne | 12.3 | 30.0 | 9.7 | 15.3 | 11.0 | 11.0 |
+| Mexico City | 12.2 | 57.5 | 59.7 | 53.7 | 46.0 | 45.3 |
+| Montreal | 9.7 | 83.0 | 39.0 | 40.7 | 49.0 | 49.0 |
+| Monza | 9.4 | 161.5 | 114.0 | 122.7 | 108.3 | 108.3 |
+| Moscow Raceway | 11.7 | 17.5 | 35.0 | 32.0 | 17.7 | 18.0 |
+| Norisring | 15.9 | 92.5 | 94.3 | 104.3 | 92.0 | 92.0 |
+| Nürburgring | 11.8 | 30.0 | 40.0 | 35.0 | 19.3 | 20.3 |
+| Oschersleben | 10.6 | 43.5 | 45.3 | 11.0 | 7.0 | 7.0 |
+| Sakhir | 13.4 | 83.5 | 70.0 | 50.0 | 56.7 | 55.3 |
+| São Paulo | 11.9 | 64.0 | 49.3 | 35.7 | 56.3 | 56.3 |
+| Sepang | 14.6 | 47.5 | 50.7 | 43.3 | 52.0 | 50.7 |
+| Shanghai | 13.0 | 19.0 | 33.0 | 51.3 | 46.3 | 46.3 |
+| Silverstone | 13.8 | 36.5 | 34.7 | 35.3 | 23.3 | 23.3 |
+| Sochi | 12.6 | 71.5 | 36.7 | 27.0 | 46.7 | 46.7 |
+| Spa | 9.8 | 37.0 | 57.0 | 68.3 | 70.0 | 69.7 |
+| Spielberg | 11.0 | 96.0 | 39.3 | 90.0 | 94.7 | 91.7 |
+| Suzuka | 9.8 | 15.0 | 63.7 | 64.7 | 69.7 | 69.7 |
+| Yas Marina | 12.9 | 76.0 | 67.7 | 82.7 | 99.3 | 102.3 |
+| Zandvoort | 10.5 | 20.5 | 39.0 | 38.0 | 32.3 | 32.3 |
+| **Mean** | | **47.6** | **44.0** | **43.4** | **43.9** | **43.9** |
 
 GT3, one three-hour race of 30 cars per circuit, before and after: Monza 179 and 129, Spa 169 and 76, Budapest 118 and 36, Suzuka 164 and 35, Silverstone 175 and 141, Brands Hatch 131 and 25, Sakhir 204 and 162; mean 163 and 86. In a 60-minute race of 52 cars in three classes on the test circuit, bodies overlapped for 742 pair-seconds before (755 pairs of cars drove through each other) and for 0.3 after.
 
@@ -76,7 +76,7 @@ Not right yet:
 - **Budapest and Melbourne** are low. A car has to be clearly quicker to get by there, and few races put such cars together. Budapest also has one DRS zone here and two in reality.
 - **GT3** has about half the passes it had. Nothing says which number is nearer the truth: there are no real pass counts for these races in the data.
 - **No contact.** A failed pass costs a quarter of a second and nothing else, so drivers risk nothing by trying. The one-line model's random contact after a failed pass is gone for cars. (Step 3 brought contact; drivers still do not weigh the risk of it.)
-- **Defending** is one move to the inside by a car that sees the attack coming. No defending on the exit, no forcing a car wide, no weaving rules: the rest belongs with the stewards in step 4.
+- **Defending** is one move to the inside by a car that sees the attack coming. No defending on the exit, no forcing a car wide, no weaving rules: the rest belongs with the stewards in step 4. (Step 4 judges contact only; nobody weaves or crowds, so there is nothing of that to judge.)
 
 ### Step 2 as built
 
@@ -142,11 +142,65 @@ Not right yet:
 - **Some classes make fewer mistakes than their figures**: LMP2 a quarter fewer, IndyCar a fifth, Hypercar an eighth, and Hypercar 40% fewer trips off (twelve races each). Their fields spread out more, so fewer drivers have a rival right behind.
 - **GT3 has more passes than after step 2** (73 a race against 63): a driver under pressure runs wide and the car behind is through.
 - **Drivers do not weigh the risk.** They go for the same passes as before; contact happens to them. Nobody backs out of a move because it might end in contact, or leaves more room on the first lap.
-- **Nobody is at fault.** The record says who was where; nothing is done with it until the stewards (step 4).
+- **Nobody is at fault.** The record says who was where; nothing is done with it until the stewards (step 4). (Built in step 4.)
 - **A contact is between two cars.** A car that spins in the middle of a pack is avoided by all the others (they drive round it, or through it where there is no room): no pile-ups.
 - **The race does not know the run-off.** A car that leaves the road stops half a metre clear of its edge wherever that is: on the verge, short of the gravel or asphalt the 3D view draws beyond it. A deeper trip through the gravel needs the race to know those areas.
 - **Nothing shows on the car** (see Graphics, phase 4), and a spin leaves no smoke or marks.
 - **Bikes** keep their one-line trouble: time lost on the racing line.
+
+### Step 4 as built
+
+How it works is in ARCHITECTURE.md under Stewards.
+
+- **Every contact that cost a car something goes to the stewards**: a spin, a car forced off the road, damage, a car out. A touch does not. They say they are looking at it within a minute and decide two to six minutes after the contact; what is still open at the flag is decided then. (These times are this project's own.)
+- **Who is to blame** is decided the same way for every series, by the FIA's driving standards guidelines (version 4.1 of February 2025). A car coming up the inside is entitled to room once its front axle is beside the other car's mirror (70% alongside here), unless it dived in. A car on the outside is entitled to room only when it is ahead. A car that hits one that was entitled to its place is to blame; where both were entitled to theirs, the one that left the other no room; and where it is not clear, nobody is. Formula 1 and Formula 2 judge the first lap more leniently.
+- **The penalty is the series' own**, looked up in its 2026 regulations and in decisions of its stewards (the sources are in `data/racing.json` under `stewardsSources`):
+
+| Series | Causing a collision, or forcing a car off | In mitigating circumstances | How it is served | Given too late to serve |
+|---|---|---|---|---|
+| Formula 1, Formula 2 | 10 s | 5 s | Stood still at the next pit stop before the work begins; added to the race time when the car makes no stop | |
+| IndyCar | Drive-through | Warning | Under green, on the next lap, after crossing the line | 30 s added |
+| WEC (Hypercar), ELMS (LMP2) | Drive-through | Warning | Within four crossings of the line, not under a neutralisation | In the last 15 minutes: the time the pit lane costs |
+| GT World Challenge (GT3) | Drive-through | Warning | Within two crossings of the line, not under a neutralisation | In the last 10 minutes: the time the pit lane costs |
+| GT4 European Series | Drive-through | Warning | As GT3 | In the last 10 minutes: 30 s |
+| TCR | 5 s | Warning | Added to the race time; decided after the race unless the fault is completely clear | |
+
+- **Serving.** A car with a drive-through comes in at the first chance under green and drives the pit lane at the limit without stopping; it is not a pit stop. What a car has not served when it finishes is added to its race time.
+- **The result** is by race time with what the stewards added, so the order can change after the flag; the feed says who lost places to a penalty, and who wins where that changed. The gaps, the results table and the CSV export are the classification's.
+- **On screen.** The tower has a box after the row of a car under investigation (INV) or with a penalty (DT, +10). The feed has every investigation, decision and penalty served. The TV broadcast shows a message for each investigation and decision.
+
+**Where a figure rests on little.** The mitigated penalty is written down only for Formula 1 (5 s); for the other series a warning is this project's reading of "a lower level of penalty", and Formula 2's 5 s is taken over from Formula 1. A drive-through for a collision in the WEC is taken over from the ELMS stewards (same organiser); no WEC decision was looked up. IndyCar's 30 s for a drive-through that is not served comes from one race report, and TCR's 5 s from one decision. The first-lap leniency is stewards' practice and in none of the documents. GT4's procedure is GT World Challenge's.
+
+**What the races give.** Per race, on the real circuits (Formula 1: four races on each of the 25; GT3: three on each of ten; the others: two on each of Sakhir, Monza, Budapest, Silverstone, Spa and Suzuka, which is too few for more than an impression):
+
+| Class | Races | Cases | No further action | Warnings | Penalties | Served | Added to the race time | Car already out | Cars classified lower |
+|---|---|---|---|---|---|---|---|---|---|
+| Formula 1 | 100 | 1.92 | 1.04 | | 0.88 (0.56 of 10 s, 0.32 of 5 s) | 0.46 | 0.34 | 0.08 | 0.19 |
+| GT3 | 30 | 2.13 | 1.03 | 0.33 | 0.77 | 0.70 | 0.07 | 0 | 0.07 |
+| Formula 2 | 12 | 1.75 | 1.00 | | 0.75 (0.58 of 10 s, 0.17 of 5 s) | 0.17 | 0.50 | 0.08 | 0.50 |
+| IndyCar | 12 | 1.67 | 1.00 | 0 | 0.67 | 0.58 | 0 | 0.08 | 0 |
+| Hypercar | 12 | 1.42 | 0.75 | 0.25 | 0.42 | 0.25 | 0 | 0.17 | 0 |
+| LMP2 | 12 | 1.50 | 0.58 | 0.25 | 0.67 | 0.42 | 0 | 0.25 | 0 |
+| GT4 | 12 | 2.25 | 1.33 | 0.25 | 0.67 | 0.42 | 0 | 0.25 | 0 |
+| TCR | 12 | 1.92 | 0.75 | 0.33 | 0.83 | 0 | 0.67 | 0.17 | 0.67 |
+
+In Formula 1 a quarter of the cases come from the first lap, and the verdicts over the 100 races are: a racing incident 20%, a car on the outside that was owed no room 19%, a car behind on the outside that turned in on the car ahead 16% (to blame), not far enough alongside on the inside 20% (to blame, half of them mitigated), a first-lap incident 12%, a car that dived in 10% (to blame), not clear 3%. The winner changed in none of the 100 races, and in one of the 12 Formula 2 races. No real counts of penalties per race were looked up to hold these against.
+
+The stewards draw from a random stream of their own, so the races are the same as after step 3 until a penalty is served. Passes for position after lap 1: Formula 1 43.9 a race as before over the 75 races of the table above, and 42.4 against 42.2 over the 100 races of step 3's table; GT3 72.6 against 72.7 over 30 races, and one race per circuit Monza 224, Spa 50, Budapest 45, Suzuka 44, Silverstone 121, Brands Hatch 83, Sakhir 73, mean 91 (96).
+
+Several classes together, three six-hour races of 52 cars at Spa: 10 cases a race, half of them between cars of two classes; 4.7 without further action, 2 warnings and 3.3 drive-throughs, of which 3 were served and the rest were for cars already out.
+
+Seen in the app, at Bremgarten: INV after the rows of two Formula 1 cars under investigation, and "no further action" in the feed; a car with +10 after its row from the second lap; a 5-second penalty with the stewards' message on the TV picture for the investigation and for the decision, and "5 s penalty served" in the feed at the car's stop; a car that finished ninth on the road classified eighteenth with 5 s added, in the tower, the results table and the feed; and a GT3 car with DT after its row driving through the pit lane at the limit, back out with no stop counted.
+
+Not right yet:
+
+- **The stewards see one moment.** Blame comes from where the two cars were when they touched, not from how they got there: no moving under braking, no weaving, no crowding a car off on a straight, which the guidelines also cover.
+- **Contact only.** No track limits, no gaining an advantage off the track or giving a place back, no unsafe rejoining, no jump starts, no pit-lane offences (speeding, unsafe release), and nothing in practice or qualifying.
+- **Two penalties per series.** No stop-and-go, no heavier penalty for putting a car out or for doing it again, no reprimands, penalty points or grid penalties for a next race. IndyCar's other penalties (to the back of the field at a restart, reordered in the result) are missing.
+- **Drivers do not mind.** Nobody races more carefully because a penalty might follow, or once a car is under investigation.
+- **A car always serves a drive-through at the first chance**, where a team may use the laps the rules allow.
+- **In a race of several classes the fastest class's rules** hold for every car.
+- **Bikes** have no stewards: they race in one line and keep no record of contact.
 
 ## Graphics, phase 4: the cars
 

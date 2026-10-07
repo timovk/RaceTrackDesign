@@ -8,7 +8,10 @@
  * latest sector times, coloured purple (best in the class), green (personal
  * best) or yellow. A banner shows the flags. In a multi-class race each row
  * carries its class, gaps are within the class, and tabs show one class at a
- * time. Rows are reused and refreshed a few times a second.
+ * time. Rows are reused and refreshed a few times a second. A box after a
+ * row says what the stewards have for the car: INV while they look at a
+ * contact it was in, DT for a drive-through to serve, +5 for a time penalty
+ * to serve or added to its race time.
  *
  * The lap counter belongs to it but sits in the top middle of the map: the
  * lap ("Lap 16 / 56") or the session and its clock ("Q2 4:31"), on black,
@@ -18,6 +21,7 @@
 import { formatLapTime } from '../core/calibration.ts';
 import { SessionSim } from '../core/race/session.ts';
 import type { RaceCar, RaceSim, SectorMark } from '../core/race/sim.ts';
+import { formatSeconds } from '../core/race/stewards.ts';
 import { h, setChildren, setText } from './dom.ts';
 import { clock, flagText, gapText } from './panels/racePanel.ts';
 import type { RaceController } from './raceController.ts';
@@ -319,7 +323,10 @@ export class TimingTower {
         row.pit.classList.toggle('damaged', damaged);
         if (car.status === 'finished') end = 'flag';
       }
-      row.end.className = `tw-end ${end}`;
+      // What the stewards have for the car, in place of the flag.
+      const mark = session ? null : stewardMark(car);
+      setText(row.end, mark?.text ?? '');
+      row.end.className = `tw-end ${mark ? `pen ${mark.kind}` : end}`;
     });
   }
 
@@ -354,6 +361,15 @@ export class TimingTower {
     this.rows.set(car.id, row);
     return row;
   }
+}
+
+/** The stewards' box after a car's row: a drive-through or time to serve (or added to its race time), or an investigation. */
+function stewardMark(car: RaceCar): { text: string; kind: 'serve' | 'inv' } | null {
+  if (car.status === 'retired') return null;
+  if (car.toServe.some((c) => c.penalty?.kind === 'driveThrough')) return { text: 'DT', kind: 'serve' };
+  const time = car.addedTime + car.toServe.reduce((s, c) => s + (c.penalty?.kind === 'time' ? c.penalty.seconds : 0), 0);
+  if (time > 0) return { text: `+${formatSeconds(time)}`, kind: 'serve' };
+  return car.investigations > 0 ? { text: 'INV', kind: 'inv' } : null;
 }
 
 function lapMark(car: RaceCar): SectorMark | '' {

@@ -1,4 +1,4 @@
-/** CSV exports of a race: the classification, every lap, and a telemetry trace. */
+/** CSV exports of a race: the classification (race times and gaps with what the stewards added), every lap, and a telemetry trace. */
 import type { RaceSim } from './sim.ts';
 import type { Telemetry } from './telemetry.ts';
 
@@ -20,7 +20,7 @@ const r1 = (v: number) => Math.round(v * 10) / 10;
 
 export function resultsCsv(sim: RaceSim): string {
   const winner = sim.order[0];
-  const rows: Cell[][] = [['Position', 'Number', 'Driver', 'Code', 'Team', 'Laps', 'Race time (s)', 'Gap (s)', 'Laps behind', 'Best lap (s)', 'Best lap on', 'Stops', 'Grid', 'Status', 'Class', 'Class position', 'Class gap (s)']];
+  const rows: Cell[][] = [['Position', 'Number', 'Driver', 'Code', 'Team', 'Laps', 'Race time (s)', 'Gap (s)', 'Laps behind', 'Best lap (s)', 'Best lap on', 'Stops', 'Grid', 'Status', 'Class', 'Class position', 'Class gap (s)', 'Penalty (s)']];
   for (const car of sim.order) {
     const e = car.entrant;
     const g = sim.gap(car);
@@ -30,11 +30,12 @@ export function resultsCsv(sim: RaceSim): string {
     const status = car.status === 'retired' ? `DNF: ${car.retired?.reason ?? ''}` : car.status === 'finished' ? 'Finished' : 'Running';
     rows.push([
       car.status === 'retired' ? null : car.position, e.number, e.name, e.code, e.team, car.lapsDone,
-      car.finishTime !== null ? r3(car.finishTime) : null,
+      car.finishTime !== null ? r3(car.finishTime + car.addedTime) : null,
       car === winner ? 0 : g.kind === 'time' ? r3(g.value) : null,
       g.kind === 'laps' ? g.value : car === winner || g.kind === 'time' ? 0 : null,
       best ? r3(best.time) : null, best?.lap ?? null, car.stops, car.gridPosition, status,
       car.cls.label, car.status === 'retired' ? null : car.classPosition, cg.kind === 'leader' ? 0 : cg.kind === 'time' ? r3(cg.value) : null,
+      car.addedTime > 0 ? car.addedTime : null,
     ]);
   }
   return toCsv(rows);

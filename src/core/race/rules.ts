@@ -1,9 +1,10 @@
 /**
  * Race rules per vehicle class from data/racing.json: grid size, crews and
  * pace spread, default race length and start, tyres (dry and wet), fuel, pit
- * stops and driver changes, DRS, slipstream, incident rates and how race
- * control neutralises the race. Percentages in the file become fractions
- * here. A class missing from the file gets generic defaults for its kind.
+ * stops and driver changes, DRS, slipstream, incident rates, how race
+ * control neutralises the race and what the stewards give for contact.
+ * Percentages in the file become fractions here. A class missing from the
+ * file gets generic defaults for its kind.
  */
 import data from '../../../data/racing.json' with { type: 'json' };
 import type { VehicleClass } from '../vehicles.ts';
@@ -50,8 +51,39 @@ export interface RaceRules {
   flags: { safetyCar: boolean; virtual: 'vsc' | 'fcy' | null; vscSlower: number; fcySpeed: number };
   /** Average wheel energy (J/m) and tyre work per metre on the reference circuits; 0 when unknown. */
   reference: { energy: number; tyreWork: number };
+  /** What the stewards give for contact, and how it is served. */
+  stewards: StewardRules;
   /** The race weekend: practice, qualifying, red flags, and how much quicker the track gets as it rubbers in. */
   weekend: WeekendRules;
+}
+
+/**
+ * A penalty: seconds (stood still at the next pit stop, or added to the
+ * race time), a drive through the pit lane without stopping, or a warning
+ * that costs nothing.
+ */
+export type Penalty = { kind: 'time'; seconds: number } | { kind: 'driveThrough' } | { kind: 'warning' };
+
+/** The series' penalties for causing a collision or forcing a car off the road. */
+export interface StewardRules {
+  /** The penalty, and the one given in mitigating circumstances. */
+  collision: Penalty;
+  lesser: Penalty;
+  /** A time penalty is stood still in the box before the work of the car's next pit stop (and added to its race time when it makes none); false: always added. */
+  timeAtStop: boolean;
+  /** How often a car may cross the line before it comes in for a drive-through. */
+  serveLaps: number;
+  /** The car has to cross the line under green before it comes in. */
+  afterLine: boolean;
+  /** A drive-through given in the last laps, or in the last seconds of the race, is not driven: time is added. */
+  lateLaps: number;
+  lateTime: number;
+  /** The time added for a drive-through that is not driven; 0: what the pit lane costs at this circuit, to the next five seconds (the series sets it per event). */
+  driveThroughTime: number;
+  /** Contact on the first lap is judged more leniently. */
+  firstLapLenient: boolean;
+  /** Incidents are looked at after the race, unless it is completely clear who was at fault. */
+  afterRace: boolean;
 }
 
 export interface PracticeSession {
@@ -156,6 +188,15 @@ export function parseRaceRules(raw: unknown, vehicle: Pick<VehicleClass, 'id' | 
   const inc = group('incidents');
   const flags = group('flags');
   const ref = group('reference');
+  const stewards = group('stewards');
+  const penalty = (key: string, fallback: Penalty): Penalty => {
+    const v = stewards[key];
+    if (v === undefined || v === null) return fallback;
+    if (v === 'driveThrough') return { kind: 'driveThrough' };
+    if (v === 'warning') return { kind: 'warning' };
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > 600) throw new Error(`${where}: "${key}" must be seconds (up to 600), "driveThrough" or "warning".`);
+    return { kind: 'time', seconds: v };
+  };
 
   const compoundsRaw = Array.isArray(tyres.compounds) && tyres.compounds.length ? [...tyres.compounds] : [{}];
   if (!compoundsRaw.some((c) => isObject(c) && (c.type === 'inter' || c.type === 'wet'))) compoundsRaw.push(DEFAULT_WET);
@@ -239,6 +280,18 @@ export function parseRaceRules(raw: unknown, vehicle: Pick<VehicleClass, 'id' | 
     reference: {
       energy: num(ref, 'energyMJPerKm', 0, 0, 1000) * 1000,
       tyreWork: num(ref, 'tyreWork', 0, 0, 1000),
+    },
+    stewards: {
+      collision: penalty('collision', { kind: 'time', seconds: 10 }),
+      lesser: penalty('lesser', { kind: 'time', seconds: 5 }),
+      timeAtStop: bool(stewards, 'timeAtStop', true),
+      serveLaps: Math.round(num(stewards, 'serveLaps', 2, 1, 10)),
+      afterLine: bool(stewards, 'afterLine', false),
+      lateLaps: Math.round(num(stewards, 'lateLaps', 3, 0, 20)),
+      lateTime: num(stewards, 'lateMinutes', 0, 0, 120) * 60,
+      driveThroughTime: num(stewards, 'driveThroughS', 20, 0, 300),
+      firstLapLenient: bool(stewards, 'firstLapLenient', false),
+      afterRace: bool(stewards, 'afterRace', false),
     },
     weekend: parseWeekend(group('weekend'), where, num, bool),
   };
