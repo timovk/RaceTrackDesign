@@ -436,7 +436,7 @@ export class RaceDock {
 
     // Race time along the bottom, in whole minutes or hours.
     const want = end / Math.max(2, w / 90);
-    const tick = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600].find((s) => s >= want) ?? 21600;
+    const tick = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400, 172800].find((s) => s >= want) ?? 172800;
     ctx.font = FONT;
     ctx.fillStyle = AXIS_TEXT;
     ctx.textAlign = 'center';

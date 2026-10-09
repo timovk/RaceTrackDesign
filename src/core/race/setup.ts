@@ -87,7 +87,8 @@ export interface RaceSetup {
 export const MAX_CARS = 60;
 export const MAX_CLASSES = 4;
 export const MAX_LAPS = 1000;
-export const MAX_MINUTES = 24 * 60;
+/** A race against the clock runs a week at most: 10,080 minutes. */
+export const MAX_MINUTES = 7 * 24 * 60;
 
 /** The class's usual race on a track of this length. */
 export function defaultRaceSettings(vehicle: VehicleClass, rules: RaceRules, lapLength: number, lapTime: number, seed: string): RaceSettings {

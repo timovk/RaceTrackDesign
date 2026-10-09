@@ -199,7 +199,15 @@ export class RacePanel {
         const limit = rules.race.timeLimit ? `, time limit ${Math.round(rules.race.timeLimit / 60)} min` : '';
         hint = `${fmt.km(set.laps * length, 0)}${lap ? `, about ${Math.round((set.laps * lap.time * 1.03) / 60)} min` : ''}${limit}.`;
       } else if (lap) {
-        hint = `About ${Math.round((set.minutes * 60) / (lap.time * 1.03))} laps of ${fmt.km(length)}${of}.`;
+        // A long race in hours or days as well: the field takes minutes.
+        const one = (v: number, unit: string) => `${Number(v.toFixed(1))} ${unit}${Number(v.toFixed(1)) === 1 ? '' : 's'}`;
+        const span = set.minutes >= 2880 ? one(set.minutes / 1440, 'day') : set.minutes >= 180 ? one(set.minutes / 60, 'hour') : '';
+        hint = `${span ? `${span}: about` : 'About'} ${Math.round((set.minutes * 60) / (lap.time * 1.03))} laps of ${fmt.km(length)}${of}.`;
+      }
+      // A class that does not refuel can save some fuel and no more: a race far beyond one tank ends with every car dry.
+      const raceLaps = set.kind === 'laps' ? set.laps : lap ? (set.minutes * 60) / (lap.time * 1.03) : 0;
+      if (rules.fuel.refuelRate <= 0 && raceLaps * rules.fuel.perMetre * length > 2.1 * rules.fuel.capacity) {
+        hint += ` ${lead.name} does not refuel: its cars will run out of fuel long before the end.`;
       }
       if (vehicles.length > 1) hint += ` The flag falls for the overall leader; the fastest class's rules (${lead.name}) set the start and the flags.`;
       // Each layout keeps its own race setup.

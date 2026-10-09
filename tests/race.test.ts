@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { generateField } from '../src/core/race/field.ts';
 import { launchCurve } from '../src/core/race/model.ts';
 import { parseRaceRules, raceRules } from '../src/core/race/rules.ts';
-import { createRaceSetup, defaultRaceSettings, parseRaceSettings } from '../src/core/race/setup.ts';
+import { MAX_MINUTES, createRaceSetup, defaultRaceSettings, parseRaceSettings } from '../src/core/race/setup.ts';
 import { RaceSim } from '../src/core/race/sim.ts';
 import { planStrategy, popcount, tyreLoss } from '../src/core/race/strategy.ts';
 import { seededRandom } from '../src/core/rng.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
-import { calm, car, model, multiClass, race, track } from './raceFixture.ts';
+import { calm, car, model, multiClass, race, start, track } from './raceFixture.ts';
 
 /** Finished, or out after contact in a failed pass (which calm rules do not switch off). */
 const finishedOrContact = (c: { status: string; retired: { reason: string } | null }) =>
@@ -134,6 +134,20 @@ describe('field and settings', () => {
     }, ids)!;
     expect(multi.classes).toEqual([{ vehicleId: 'hypercar', cars: 30 }, { vehicleId: 'lmp2', cars: 20 }, { vehicleId: 'gt3', cars: 10 }]);
     expect(multi.weather).toBe('changeable');
+  });
+
+  it('lets a race against the clock run a week', () => {
+    const ids = VEHICLES.map((v) => v.id);
+    expect(MAX_MINUTES).toBe(10080);
+    expect(parseRaceSettings({ vehicleId: 'hypercar', cars: 6, laps: 5, minutes: 10080, kind: 'time' }, ids)!.minutes).toBe(10080);
+    expect(parseRaceSettings({ vehicleId: 'hypercar', cars: 6, laps: 5, minutes: 99999, kind: 'time' }, ids)!.minutes).toBe(10080);
+    // A week on the clock, showers and all: it starts, and ten minutes in there is a week less ten minutes to go.
+    const sim = start(car('hypercar'), { kind: 'time', minutes: MAX_MINUTES, cars: 6, weather: 'changeable' }, calm(car('hypercar')));
+    expect(sim.limit).toBe(7 * 24 * 3600);
+    sim.advance(600);
+    expect(sim.finished).toBe(false);
+    expect(sim.limit! - sim.t).toBeGreaterThan(7 * 24 * 3600 - 700);
+    expect(Math.max(...sim.cars.map((c) => c.lapsDone))).toBeGreaterThan(2);
   });
 
   it('sets the grid by qualifying, reversed or at random', () => {
