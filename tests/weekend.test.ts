@@ -51,6 +51,8 @@ describe('sessions', () => {
     // Nobody races anybody in a session: a driver's own trouble at most, no contact.
     expect(sim.contacts).toHaveLength(0);
     expect(sim.tally.touches + sim.tally.tapped + sim.tally.forcedOff + sim.tally.damaged + sim.tally.collisions).toBe(0);
+    // And no tyre marks are kept of it: those are the race's.
+    expect(sim.marks).toHaveLength(0);
   });
 
   it('runs a qualifying push lap at the calibrated qualifying pace on a rubbered track', () => {

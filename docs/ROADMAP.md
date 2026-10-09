@@ -264,11 +264,34 @@ Agreed in the same plan; not started. Low to Ultra, so slower machines stay smoo
 In the original plan, and not built in those phases. Not decided either way; listed so they are not lost.
 
 - Motion blur for the TV cameras.
-- Skid marks on the asphalt.
 - Grass up close.
-- Advertising boards and gantries.
-- Crowds in the grandstands.
-- A more detailed pit building.
+
+Built since (2026-10-09): skid marks on the asphalt, advertising boards and gantries, crowds in the grandstands and a more detailed pit building. How they work is in ARCHITECTURE.md under 3D view (Scenery) and, for the marks a race leaves, under Contact and mistakes.
+
+### Trackside as built
+
+- **Advertising boards** stand in front of the guardrail along the start straight and round the outside of the corners, a metre high, each sign 4.2 m long. The signs are sixteen words from racing ("GRAND PRIX", "POLE POSITION", "APEX"), not real companies.
+- **Gantries**: one over the start line with the housings of the start lights, and a bridge with boards over up to two straights of 300 m or more, away from the line.
+- **The crowd** fills 84% of the seats of every grandstand, as seated figures in a dozen colours (4,663 people at Bremgarten).
+- **The pit building** has a number over every garage, a glazed upper floor, a parapet, a race control tower and a podium at the end nearer the line, the teams' timing stands on the pit wall and painted lines in the lane.
+- **Tyre marks**: rubber worn into the braking points of the lap, and what a race's cars leave (wheelspin off the grid, locked wheels at a mistake or a late lunge, the slide of a spin), which stays for the race and is left out of a replay of an earlier moment.
+
+Seen in the app, at Bremgarten: all of the above, the signs reading the right way round from the track and from both sides of a bridge, and a replay of a moment 13 s back drawn without a spin's marks made since.
+
+Found on the way and fixed: sunlight came through the front of the pit building onto the garage floors (only faces turned from the sun cast shadows; the building now casts from every face).
+
+Not right yet:
+
+- **The start lights do not light.** The housings hang under the gantry; the lights of the start are still only in the TV graphics.
+- **The crowd sits still**, and every stand is as full as the next whatever the session.
+- **No pit boxes are painted** in the lane, and the garages are empty when no car is in them.
+- **Marks only in 3D**: the 2D map shows none.
+- **Marks do not wear away** or get rained off, and they do not build up over a weekend: a race starts on a road with only the worn-in rubber. Practice and qualifying leave none.
+- **A mark is drawn from the middle of the car**: the locked wheels are the front ones, and in a spin the car's four wheels would each draw a line.
+- **Bridges were looked at on Bremgarten only**, which has none of its own at 400 m and gets two at the 300 m chosen; other circuits were not looked at.
+- **No bridge carries a road or people**, and the boards stand only at the line and the corners, not along every straight a camera sees.
+- **The worn-in rubber follows the GT3 car's braking points** for every class (the reference class, as for the sector lines); it was looked at in the app with the Formula 1 lap, before that was settled.
+- **Bikes** leave no marks.
 
 ## Proposed, not decided
 

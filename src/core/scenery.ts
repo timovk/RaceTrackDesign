@@ -29,6 +29,7 @@ import { seededRandom } from './rng.ts';
 import { type Earthworks, type FaceCorner, type MeshData, MeshBuilder, type Road, SINK, VERGE } from './scene3d.ts';
 import type { MarshalPost } from './marshals.ts';
 import type { GridSlot } from './startFinish.ts';
+import { PODIUM_SIGN, PanelBuilder, cellUv, numberCell, signCell } from './signs.ts';
 import type { Track } from './track.ts';
 
 type Vec3 = [number, number, number];
@@ -451,14 +452,28 @@ const PIT_DEPTH = 16;
 const PIT_HEIGHT = 8;
 const DOOR = 7;
 const PILLAR = 1.5;
+/** The race control tower at one end of the pit building: this long, and this high. */
+const TOWER_LENGTH = 13;
+const TOWER_HEIGHT = 15.5;
+/** A timing stand on the pit wall for every this many garages. */
+const STAND_EVERY = 2;
+/** The fast lane's line lies this far from the lane's centre towards the garages; paint is this wide. */
+const FAST_LANE = 1.5;
+const PAINT = 0.15;
 
 /**
  * The pit building along the pit boxes, on the far side of the lane from
- * the track: open garages facing the lane under a lighter upper floor, a
- * flat roof over the front, and the pit wall between the lane and the track.
+ * the track: open garages facing the lane, each with its number over the
+ * door, under a glazed upper floor and a flat roof with a parapet; a race
+ * control tower at the end nearer `line` (the start line; the pit exit's end
+ * without one), a podium beside it over the lane, the pit wall between the
+ * lane and the track with the teams' timing stands on it, and the lane's
+ * painted lines. `signs` is textured from the sign atlas (core/trackside.ts).
  */
-export function buildPitBuilding(pit: PitLane, road: Road): { mesh: MeshData; footprint: Footprint } {
+export function buildPitBuilding(pit: PitLane, road: Road, line?: { x: number; y: number }): { mesh: MeshData; signs: MeshData; markings: MeshData; footprint: Footprint } {
   const mb = new MeshBuilder();
+  const signs = new PanelBuilder();
+  const paint = new MeshBuilder();
   const halfLane = pit.width / 2;
   const [s0, s1] = pathLength(pit.x, pit.y, pit.boxStart, pit.boxEnd);
   // Doors and pillars in turn along the boxes.
@@ -478,6 +493,9 @@ export function buildPitBuilding(pit: PitLane, road: Road): { mesh: MeshData; fo
   const garageWall = [0.55, 0.57, 0.6];
   const back = [0.74, 0.76, 0.79];
   const roof = [0.52, 0.55, 0.6];
+  const fascia = [0.13, 0.15, 0.19];
+  const glass = [0.17, 0.26, 0.36];
+  const steel = [0.28, 0.3, 0.34];
   const front = halfLane + 1.5;
   const rear = front + PIT_DEPTH;
   // A point `d` metres out from the lane's centre and `h` metres above the floor there.
@@ -485,9 +503,32 @@ export function buildPitBuilding(pit: PitLane, road: Road): { mesh: MeshData; fo
     const [x, y] = out(f, d);
     return [x, f.z + h, y, f.z];
   };
+  /** A box in a frame's own terms: from `a0` to `a1` metres along the lane from it, `d0` to `d1` out, `h0` to `h1` up. */
+  const box = (f: Frame, a0: number, a1: number, d0: number, d1: number, h0: number, h1: number, color: readonly number[]) => {
+    const c = (a: number, d: number, h: number): FaceCorner => {
+      const [x, y] = out(f, d);
+      return [x + f.tx * a, f.z + h, y + f.ty * a, f.z];
+    };
+    const o: Vec3 = [f.lx * pit.side, 0, f.ly * pit.side];
+    mb.face([c(a0, d0, h0), c(a1, d0, h0), c(a1, d0, h1), c(a0, d0, h1)], [-o[0], 0, -o[2]], color);
+    mb.face([c(a0, d1, h0), c(a1, d1, h0), c(a1, d1, h1), c(a0, d1, h1)], o, color);
+    mb.face([c(a0, d0, h1), c(a1, d0, h1), c(a1, d1, h1), c(a0, d1, h1)], UP, color);
+    mb.face([c(a0, d0, h0), c(a1, d0, h0), c(a1, d1, h0), c(a0, d1, h0)], [0, -1, 0], color);
+    mb.face([c(a0, d0, h0), c(a0, d1, h0), c(a0, d1, h1), c(a0, d0, h1)], [-f.tx, 0, -f.ty], color);
+    mb.face([c(a1, d0, h0), c(a1, d1, h0), c(a1, d1, h1), c(a1, d0, h1)], [f.tx, 0, f.ty], color);
+  };
   const doorTop = 4.5;
   const top = PIT_HEIGHT + 0.6;
   const eave = front - 1.5;
+  const first = frames[0];
+  const last = frames[frames.length - 1];
+  // The tower stands at the end nearer the start line.
+  const atStart = line ? Math.hypot(first.x - line.x, first.y - line.y) < Math.hypot(last.x - line.x, last.y - line.y) : false;
+  const fromEnd = (i: number) => (atStart ? cuts[i] - cuts[0] : cuts[cuts.length - 1] - cuts[i]);
+  const tall = frames.map((_, i) => i + 1 < frames.length && Math.max(fromEnd(i), fromEnd(i + 1)) <= TOWER_LENGTH + 0.01);
+  const towerTop = TOWER_HEIGHT + 0.6;
+  let number = 0;
+  let podium = -1;
   for (let i = 0; i + 1 < frames.length; i++) {
     const a = frames[i];
     const b = frames[i + 1];
@@ -496,6 +537,7 @@ export function buildPitBuilding(pit: PitLane, road: Road): { mesh: MeshData; fo
     const foot = (f: Frame, d: number) => at(f, d, base - f.z);
     const o: Vec3 = [a.lx * pit.side, 0, a.ly * pit.side];
     const facing: Vec3 = [-o[0], 0, -o[2]];
+    const wall = (d: number, h0: number, h1: number, normal: Vec3, color: readonly number[]) => mb.face([at(a, d, h0), at(b, d, h0), at(b, d, h1), at(a, d, h1)], normal, color);
     if (doors[i]) {
       // An open garage: a dim room behind the opening, where a car waits between runs.
       const inner = rear - 0.3;
@@ -504,19 +546,75 @@ export function buildPitBuilding(pit: PitLane, road: Road): { mesh: MeshData; fo
       mb.face([at(a, front, 0.012), at(b, front, 0.012), at(b, inner, 0.012), at(a, inner, 0.012)], UP, garageFloor);
       mb.face([at(a, front, 0), at(a, inner, 0), at(a, inner, doorTop), at(a, front, doorTop)], [a.tx, 0, a.ty], garageWall);
       mb.face([at(b, front, 0), at(b, inner, 0), at(b, inner, doorTop), at(b, front, doorTop)], [-b.tx, 0, -b.ty], garageWall);
+      // Its number on the dark band over the door, as the lane sees it.
+      number++;
+      const mid: Frame = { ...a, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 };
+      const [mx, my] = out(mid, front - 0.04);
+      const side = 0.36;
+      // (Looking at the building from the lane, the lane's direction of travel runs to the right with the pits on the left, and the other way round.)
+      const dir = pit.side > 0 ? 1 : -1;
+      const l: [number, number] = [mx - mid.tx * side * dir, my - mid.ty * side * dir];
+      const r: [number, number] = [mx + mid.tx * side * dir, my + mid.ty * side * dir];
+      signs.face([
+        [l[0], mid.z + doorTop + 0.09, l[1], mid.z], [r[0], mid.z + doorTop + 0.09, r[1], mid.z], [r[0], mid.z + doorTop + 0.81, r[1], mid.z], [l[0], mid.z + doorTop + 0.81, l[1], mid.z],
+      ], facing, cellUv(numberCell(number)));
+      if (!tall[i] && podium < 0 && (atStart ? tall[i - 1] || tall[i - 2] : tall[i + 1] || tall[i + 2])) podium = i;
     } else {
       mb.face([foot(a, front), foot(b, front), at(b, front, doorTop), at(a, front, doorTop)], facing, light);
     }
-    mb.face([at(a, front, doorTop), at(b, front, doorTop), at(b, front, PIT_HEIGHT), at(a, front, PIT_HEIGHT)], facing, light);
-    mb.face([foot(a, rear), foot(b, rear), at(b, rear, PIT_HEIGHT), at(a, rear, PIT_HEIGHT)], o, back);
-    // Roof, reaching out over the lane edge.
-    mb.face([at(a, eave, top), at(b, eave, top), at(b, rear, top), at(a, rear, top)], UP, roof);
-    mb.face([at(a, eave, PIT_HEIGHT), at(b, eave, PIT_HEIGHT), at(b, eave, top), at(a, eave, top)], facing, light);
-    mb.face([at(a, eave, PIT_HEIGHT), at(b, eave, PIT_HEIGHT), at(b, front, PIT_HEIGHT), at(a, front, PIT_HEIGHT)], [0, -1, 0], back);
+    // Over the doors: a dark band, then the upper floor, glazed between the pillars.
+    wall(front, doorTop, doorTop + 0.9, facing, fascia);
+    wall(front, doorTop + 0.9, doorTop + 1.3, facing, light);
+    wall(front, doorTop + 1.3, PIT_HEIGHT - 0.5, facing, doors[i] ? glass : light);
+    wall(front, PIT_HEIGHT - 0.5, PIT_HEIGHT, facing, light);
+    const height = tall[i] ? TOWER_HEIGHT : PIT_HEIGHT;
+    if (tall[i]) {
+      // The tower: two more floors over the lane, race control behind glass at the top.
+      wall(front, PIT_HEIGHT, TOWER_HEIGHT - 4.2, facing, light);
+      wall(front, TOWER_HEIGHT - 4.2, TOWER_HEIGHT - 0.9, facing, glass);
+      wall(front, TOWER_HEIGHT - 0.9, towerTop, facing, light);
+      mb.face([at(a, front, towerTop), at(b, front, towerTop), at(b, rear, towerTop), at(a, rear, towerTop)], UP, roof);
+    } else {
+      // Roof, reaching out over the lane edge, with a parapet along its front.
+      mb.face([at(a, eave, top), at(b, eave, top), at(b, rear, top), at(a, rear, top)], UP, roof);
+      mb.face([at(a, eave, PIT_HEIGHT), at(b, eave, PIT_HEIGHT), at(b, eave, top + 0.9), at(a, eave, top + 0.9)], facing, light);
+      mb.face([at(a, eave + 0.15, top), at(b, eave + 0.15, top), at(b, eave + 0.15, top + 0.9), at(a, eave + 0.15, top + 0.9)], o, light);
+      mb.face([at(a, eave, top + 0.9), at(b, eave, top + 0.9), at(b, eave + 0.15, top + 0.9), at(a, eave + 0.15, top + 0.9)], UP, light);
+      mb.face([at(a, eave, PIT_HEIGHT), at(b, eave, PIT_HEIGHT), at(b, front, PIT_HEIGHT), at(a, front, PIT_HEIGHT)], [0, -1, 0], back);
+    }
+    mb.face([foot(a, rear), foot(b, rear), at(b, rear, height), at(a, rear, height)], o, back);
+    if (tall[i]) wall(rear, TOWER_HEIGHT, towerTop, o, back);
+    // Where the tower rises over the rest: its side wall.
+    for (const [f, other, dir] of [[a, tall[i - 1], -1], [b, tall[i + 1], 1]] as const) {
+      if (tall[i] && other === false) mb.face([at(f, front, top), at(f, rear, top), at(f, rear, towerTop), at(f, front, towerTop)], [f.tx * dir, 0, f.ty * dir], back);
+    }
   }
   // End walls.
-  for (const [f, dir] of [[frames[0], -1], [frames[frames.length - 1], 1]] as const) {
-    mb.face([at(f, front, -3), at(f, rear, -3), at(f, rear, top), at(f, front, top)], [f.tx * dir, 0, f.ty * dir], back);
+  for (const [f, dir, high] of [[first, -1, tall[0]], [last, 1, tall[frames.length - 2]]] as const) {
+    mb.face([at(f, front, -3), at(f, rear, -3), at(f, rear, high ? towerTop : top), at(f, front, high ? towerTop : top)], [f.tx * dir, 0, f.ty * dir], back);
+  }
+  // The podium: a balcony over the lane beside the tower, three steps on it and a board behind.
+  if (podium >= 0) {
+    const a = frames[podium];
+    const len = cuts[podium + 1] - cuts[podium];
+    const deck = doorTop + 0.35;
+    box(a, 0.3, len - 0.3, front - 3, front, deck - 0.25, deck, steel);
+    // (A rail along its front and ends.)
+    box(a, 0.3, len - 0.3, front - 3, front - 2.92, deck, deck + 1.0, light);
+    const mid = len / 2;
+    for (const [from, height] of [[-0.7, 0.55], [-2.2, 0.38], [0.8, 0.24]] as const) box(a, mid + from, mid + from + 1.4, front - 1.9, front - 0.7, deck, deck + height, light);
+    const b = frames[podium + 1];
+    const facing: Vec3 = [-a.lx * pit.side, 0, -a.ly * pit.side];
+    const [l, r] = pit.side > 0 ? [a, b] : [b, a];
+    const corner = (f: Frame, h: number): [number, number, number, number] => {
+      const [x, y] = out(f, front - 0.06);
+      return [x, f.z + h, y, f.z];
+    };
+    // (Two signs side by side fill the width of a garage.)
+    const midFrame: Frame = { ...a, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 };
+    const uv = cellUv(signCell(PODIUM_SIGN));
+    signs.face([corner(l, deck + 0.25), corner(midFrame, deck + 0.25), corner(midFrame, deck + 1.1), corner(l, deck + 1.1)], facing, uv);
+    signs.face([corner(midFrame, deck + 0.25), corner(r, deck + 0.25), corner(r, deck + 1.1), corner(midFrame, deck + 1.1)], facing, uv);
   }
   // The pit wall: concrete, a little over a metre high, between the lane and the track.
   const wallCuts: number[] = [];
@@ -543,10 +641,32 @@ export function buildPitBuilding(pit: PitLane, road: Road): { mesh: MeshData; fo
     mb.face([at(a, inner, -0.5), at(b, inner, -0.5), at(b, inner, 1.1), at(a, inner, 1.1)], o, concrete);
     mb.face([at(a, outer, -0.5), at(b, outer, -0.5), at(b, outer, 1.1), at(a, outer, 1.1)], [-o[0], 0, -o[2]], concrete);
   }
-  const first = frames[0];
-  const last = frames[frames.length - 1];
+  // The teams' timing stands on the wall: a desk under a roof on four posts, one for every other garage.
+  let garage = 0;
+  for (let i = 0; i + 1 < frames.length; i++) {
+    if (!doors[i] || garage++ % STAND_EVERY !== 0) continue;
+    const a = frames[i];
+    const from = (cuts[i + 1] - cuts[i]) / 2 - 1.5;
+    box(a, from, from + 3, outer + 0.02, inner - 0.02, 1.1, 1.42, steel);
+    box(a, from - 0.15, from + 3.15, outer - 0.55, inner + 0.55, 2.55, 2.67, light);
+    for (const along0 of [from, from + 2.92]) for (const d of [outer - 0.45, inner + 0.37]) box(a, along0, along0 + 0.08, d, d + 0.08, 1.1, 2.55, steel);
+  }
+  // The lane's paint: its edges, the line that keeps the fast lane from the garages' side, and a line across it at either end.
+  const white = WHITE;
+  const lift = 0.02;
+  const stripe = (a: Frame, b: Frame, d: number) => paint.face([at(a, d - PAINT / 2, lift), at(b, d - PAINT / 2, lift), at(b, d + PAINT / 2, lift), at(a, d + PAINT / 2, lift)], UP, white);
+  for (let i = 0; i + 1 < wall.length; i++) {
+    for (const d of [-(halfLane - 0.35), FAST_LANE, halfLane - 0.35]) stripe(wall[i], wall[i + 1], d);
+  }
+  for (const f of [wall[0], wall[wall.length - 1]]) {
+    const c = (a: number, d: number): FaceCorner => {
+      const [x, y] = out(f, d);
+      return [x + f.tx * a, f.z + lift, y + f.ty * a, f.z];
+    };
+    paint.face([c(-0.2, -(halfLane - 0.35)), c(0.2, -(halfLane - 0.35)), c(0.2, halfLane - 0.35), c(-0.2, halfLane - 0.35)], UP, white);
+  }
   const corners = [out(first, front - 2), out(last, front - 2), out(last, rear + 2), out(first, rear + 2)];
-  return { mesh: mb.build(), footprint: { x: corners.map((c) => c[0]), y: corners.map((c) => c[1]) } };
+  return { mesh: mb.build(), signs: signs.build(), markings: paint.build(), footprint: { x: corners.map((c) => c[0]), y: corners.map((c) => c[1]) } };
 }
 
 // ---- grandstands -----------------------------------------------------------------
@@ -560,9 +680,9 @@ export interface Stand {
   footprint: Footprint;
 }
 
-const STAND_DEPTH = 15;
-const STAND_ROWS = 7;
-const STAND_RISE = 1.1;
+export const STAND_DEPTH = 15;
+export const STAND_ROWS = 7;
+export const STAND_RISE = 1.1;
 
 /**
  * A grandstand along stations `from`..`to` on one side, `offset` metres from

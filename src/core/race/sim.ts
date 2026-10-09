@@ -156,6 +156,21 @@ export interface ContactRecord {
   hurt: number[];
 }
 
+/**
+ * Tyre marks a car left on the road: where it was, step by step (map
+ * coordinates, and the way it pointed), from race time `t` on. A lock-up
+ * into a corner it got wrong, a spin or a slide off the road, and wheelspin
+ * off the grid.
+ */
+export interface SkidMark {
+  t: number;
+  car: number;
+  kind: 'lock' | 'spin' | 'start';
+  /** Half the distance between the car's wheels across it, metres. */
+  half: number;
+  points: { x: number; y: number; heading: number }[];
+}
+
 /** A period under a safety car, virtual safety car or full course yellow, or stopped by a red flag. */
 export interface Neutralisation {
   kind: 'sc' | 'vsc' | 'fcy' | 'red';
@@ -733,6 +748,19 @@ const WING_SHARE = 0.3;
 const BOTH_OUT = 0.4;
 const LIMP_HOME = 0.3;
 const DAMAGE_RANK: Record<DamageKind, number> = { body: 0, wing: 1, puncture: 2, terminal: 3 };
+/**
+ * Tyre marks: metres of locked wheels into a corner a driver got wrong
+ * (shortest and longest, by the car), metres when it goes on off the road
+ * or brakes too late for a pass, metres of wheelspin off the grid (the best
+ * and the worst starter), and how far the wheels are in from the car's side.
+ */
+const LOCK_UP = [16, 30];
+const LOCK_OFF = 34;
+const LOCK_LUNGE = 22;
+const WHEELSPIN = [3, 9];
+const WHEEL_INSET = 0.22;
+/** The rear axle lies this share of a car's length behind its middle. */
+const REAR_AXLE = 0.3;
 
 /**
  * The stewards' clock, seconds after a contact: when they say they are
@@ -845,6 +873,8 @@ export class RaceSim {
   contacts: ContactRecord[] = [];
   /** Every contact that went to the stewards, with what they made of it. */
   cases: StewardCase[] = [];
+  /** The tyre marks left on the road so far (a race of cars), in the order they began. */
+  marks: SkidMark[] = [];
   /** Drivers' trouble so far, by what came of it (a race of cars; contact is counted once, whatever number of cars it took out). */
   readonly tally = { mistakes: 0, offs: 0, spins: 0, crashes: 0, touches: 0, forcedOff: 0, tapped: 0, damaged: 0, collisions: 0 };
   /** Race time at which the first car completed each lap (index = lap - 1). */
@@ -899,6 +929,8 @@ export class RaceSim {
   private readonly stewardRng: () => number;
   private openCases: StewardCase[] = [];
   private stewardsDone = false;
+  /** Cars leaving a tyre mark now: the mark, and for a lock-up the race progress it ends at. */
+  private skidding: { car: RaceCar; mark: SkidMark; untilU: number }[] = [];
   private readonly baseLimit: number | null;
   /** Race progress where the cars left the pit lane after a red flag with no safety car to lead them. */
   private releaseU = NaN;
@@ -1041,6 +1073,7 @@ export class RaceSim {
     this.order = [...this.cars].sort((a, b) => a.gridPosition - b.gridPosition);
     this.updateClassOrder();
     this.updateConditions(0);
+    if (!rolling) for (const car of this.cars) this.wheelspin(car, car.startDelay);
     for (const car of this.cars) this.startLap(car, 0);
     this.log('start', 0, rolling ? 'Green flag: rolling start' : 'Lights out', this.order[0].id);
     if (this.raining || this.wetness > 0.08) this.log('weather', 0, `${conditionName(this.wetness)} track${this.raining ? ', raining' : ''}`, -1);
@@ -1134,6 +1167,7 @@ export class RaceSim {
       this.resolvePasses();
       this.updateLateral();
     }
+    if (this.skidding.length) this.traceMarks();
     this.runStewards();
     this.updateOrder();
     this.checkFinished();
@@ -2015,6 +2049,7 @@ export class RaceSim {
       this.tally.mistakes++;
       car.wide = { side, reach: WIDE_LEAST + (WIDE_MOST - WIDE_LEAST) * car.rng(), beyond: 0, untilU, back: false };
       this.lose(car, MISTAKE_LOSS, MISTAKE_SHARE);
+      this.skid(car, 'lock', LOCK_UP[0] + ((LOCK_UP[1] - LOCK_UP[0]) * ((car.id * 7 + lap * 3) % 10)) / 9);
       return;
     }
     if (kind === 'crash') {
@@ -2042,8 +2077,46 @@ export class RaceSim {
     car.delayShare = share;
   }
 
+  /**
+   * Begins a tyre mark where the car is: for `metres` of road (a lock-up),
+   * or for as long as it slides (a spin). In a race of cars, not a session.
+   */
+  private skid(car: RaceCar, kind: 'lock' | 'spin', metres = 0): void {
+    if (!this.lanes || this.setup.session) return;
+    const p = this.pose(car, 1);
+    if (!p) return;
+    const mark: SkidMark = { t: this.t, car: car.id, kind, half: Math.max(0.3, car.cls.half - WHEEL_INSET), points: [p] };
+    this.marks.push(mark);
+    this.skidding = this.skidding.filter((s) => s.car !== car);
+    this.skidding.push({ car, mark, untilU: kind === 'lock' ? car.u + metres / this.ds : Infinity });
+  }
+
+  /** Wheelspin off the grid, from the moment the car gets away (race time `t`), laid by the driven wheels at the back: longer for a poor start. */
+  private wheelspin(car: RaceCar, t: number): void {
+    if (!this.lanes || this.setup.session) return;
+    const metres = WHEELSPIN[0] + (WHEELSPIN[1] - WHEELSPIN[0]) * (1 - car.driver.launch);
+    const back = -REAR_AXLE * car.cls.length;
+    const points = [back, back + metres].map((d) => this.linePoint(car.u + d / this.ds, car.lateral));
+    this.marks.push({ t, car: car.id, kind: 'start', half: Math.max(0.3, car.cls.half - WHEEL_INSET), points });
+  }
+
+  /** Every car leaving a tyre mark: where it is now, until the lock-up has run its length or the slide is over. */
+  private traceMarks(): void {
+    const t = this.t;
+    this.skidding = this.skidding.filter((s) => {
+      const car = s.car;
+      if (car.status !== 'running') return false;
+      const sliding = car.spin !== null && t - car.spin.from < car.spin.slide;
+      if (s.mark.kind === 'spin' ? !sliding : car.u >= s.untilU) return false;
+      const p = this.pose(car, 1);
+      if (p) s.mark.points.push(p);
+      return true;
+    });
+  }
+
   /** Off the road on `side` and back: a trip across the grass or the run-off. */
   private leaveRoad(car: RaceCar, side: 1 | -1, untilU: number): void {
+    this.skid(car, 'lock', LOCK_OFF);
     car.wide = { side, reach: 1e3, beyond: this.offBy(car, mod(Math.floor(car.u), this.n), side), untilU, back: false };
     car.offTrack = true;
     car.attack = null;
@@ -2078,6 +2151,7 @@ export class RaceSim {
     car.giveWayTo = null;
     car.heldBy = null;
     car.drsUntilU = -Infinity;
+    this.skid(car, 'spin');
   }
 
   /** Whether the pit lane runs beside the track on `side` at station `k` (its wall is there, not grass). */
@@ -2728,6 +2802,7 @@ export class RaceSim {
       car.startDelay = t + 0.15 + 0.3 * (1 - car.driver.launch) * car.rng();
       // As at the start: the field fans out to the first corner, and places change hands as the starts go.
       car.gridUntilU = Math.ceil(car.u / this.n - 1e-9) * this.n + this.firstZoneU;
+      this.wheelspin(car, car.startDelay);
     }
     this.log('start', t, 'Lights out: the race restarts', this.order[0]?.id ?? -1);
   }
@@ -3611,6 +3686,7 @@ export class RaceSim {
               // Braked too late for nothing: it runs deep and falls back in line.
               car.delay += LUNGE_MISSED;
               car.delayShare = Math.max(car.delayShare, 0.35);
+              this.skid(car, 'lock', LOCK_LUNGE);
             }
           }
           car.lungeUntilU = -Infinity;

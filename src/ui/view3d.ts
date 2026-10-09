@@ -51,6 +51,8 @@ import {
 } from '../core/scenery.ts';
 import { type Pose, type Shot, type ShotInput, type Vec3, flyoverDuration, flyoverPose, hotLapPose, trackShots } from '../core/shots.ts';
 import { type BarrierRun, barrierRuns, buildBarriers, buildFences, insideBarriers } from '../core/barriers.ts';
+import { type Crowd, type SkidMesh, brakingMarks, buildBoards, buildGantries, buildSkidMarks, placeBoards, placeGantries, roadHeight, seatCrowd } from '../core/trackside.ts';
+import type { RaceSim } from '../core/race/sim.ts';
 import { RAMP_MIN_RANGE, ROCK, contourInterval } from '../core/terrainImage.ts';
 import type { Track } from '../core/track.ts';
 import { buckets, stationBuckets } from './colors.ts';
@@ -62,6 +64,8 @@ import { flagState, lineFlag, postSignals } from '../core/flags.ts';
 import { DT } from '../core/race/sim.ts';
 import { cloudCover, lineWetness, standingWater } from '../core/weatherFx.ts';
 import { CarLayer } from './carLayer.ts';
+import { CrowdLayer } from './crowdLayer.ts';
+import { signAtlas } from './signAtlas.ts';
 import { FlagLayer } from './flagLayer.ts';
 import { type Grade, type Lens, PostFx } from './postFx.ts';
 import { TreeLayer } from './treeLayer.ts';
@@ -84,8 +88,13 @@ const LABEL_LIFT = 8;
 /** Towards the sun: from the north-west, as the flat map's hillshade, as high as in the photographed sky. */
 const SUN = sunDirection();
 /** What receives the sun's shadows, and what casts them. */
-const SHADOW_RECEIVERS = new Set(['terrain', 'track', 'trackVerges', 'pit', 'pitVerges', 'otherRoads', 'otherVerges', 'start', 'kerbs', 'runoff', 'grid', 'pitBuilding', 'stands', 'posts', 'sides', 'barriers', 'tyres', 'fences']);
-const SHADOW_CASTERS = new Set(['pitBuilding', 'stands', 'posts', 'terrain', 'barriers', 'tyres', 'fences']);
+const SHADOW_RECEIVERS = new Set([
+  'terrain', 'track', 'trackVerges', 'pit', 'pitVerges', 'otherRoads', 'otherVerges', 'start', 'kerbs', 'runoff', 'grid', 'pitBuilding', 'stands', 'posts', 'sides', 'barriers', 'tyres',
+  'fences', 'pitSigns', 'pitMarkings', 'boards', 'boardFrames', 'gantries', 'gantryBoards',
+]);
+/** How dark the rubber worn into the braking points is, of a fresh tyre mark. */
+const WORN_IN = 0.7;
+const SHADOW_CASTERS = new Set(['pitBuilding', 'stands', 'posts', 'terrain', 'barriers', 'tyres', 'fences', 'boards', 'boardFrames', 'gantries', 'gantryBoards']);
 /** The graphics setting, kept per browser. */
 const GRAPHICS_KEY = 'racetrackdesign.graphics';
 /** The finish on the picture: a light one when looking round, a broadcast's on TV. */
@@ -177,6 +186,19 @@ export class View3D {
   private readonly waterTime = { value: 0 };
   /** The trees, card trees in tiles (ui/treeLayer.ts). */
   private readonly treeLayer = new TreeLayer();
+  /** The crowd on the grandstands (ui/crowdLayer.ts), and who sits where. */
+  private readonly crowdLayer = new CrowdLayer();
+  private crowd: Crowd | null = null;
+  /** The picture of all signs (ui/signAtlas.ts), drawn when first needed. */
+  private signs: THREE.CanvasTexture | null = null;
+  /** Tyre marks: black, as dark as each vertex says, lying on the road. */
+  private readonly skidMaterial = new THREE.MeshBasicMaterial({
+    color: 0x0b0b0c, vertexColors: true, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6,
+  });
+  /** The race's own marks as drawn: for which race, how much of them, and when each began with where its triangles end. */
+  private skids: { sim: RaceSim; points: number; mesh: SkidMesh } | null = null;
+  /** The height of the road the marks lie on (the ground beside it), for the track as built. */
+  private roadAt: ((x: number, y: number) => number) | null = null;
   /** Catch fencing: wire mesh, see-through. */
   private readonly fenceMaterial = new THREE.MeshStandardMaterial({
     map: chainLink(), color: 0xc4c8cc, alphaTest: 0.3, alphaToCoverage: true, side: THREE.DoubleSide, metalness: 0.6, roughness: 0.5,
@@ -287,6 +309,7 @@ export class View3D {
     this.terrainMaterial.onBeforeCompile = (shader) => terrainShader(shader, this.terrainUniforms, this.surfaces);
     this.terrainMaterial.customProgramCacheKey = () => 'terrain';
     this.world.add(this.treeLayer.group);
+    this.world.add(this.crowdLayer.group);
 
     this.marker = new THREE.Group();
     const pinMaterial = new THREE.MeshStandardMaterial({ color: MARKER, emissive: MARKER, emissiveIntensity: 0.35, roughness: 0.5 });
@@ -666,6 +689,10 @@ export class View3D {
     const hm = s.terrain?.heightmap;
     for (const key of [...this.meshes.keys()]) this.remove(key);
     this.treeLayer.clear();
+    this.crowdLayer.clear();
+    this.crowd = null;
+    this.skids = null;
+    this.roadAt = null;
     this.earth = null;
     this.trees = null;
     this.shotInput = null;
@@ -738,13 +765,18 @@ export class View3D {
       // Run-off lies beyond the verges and never overlaps a road, so it can win over the ground by a wide margin.
       if (areas.length) this.add('runoff', new THREE.Mesh(geometry(buildRunoff(t, areas, earth)), this.surfaceMaterial(-4, surfaceDetail(this.surfaces, 'asphalt', { amount: 1.2, normal: 1.2, gravel: true, patches: true }), 0.5)));
       if (pitLane && pit) {
-        const building = buildPitBuilding(pitLane, pit);
+        const building = buildPitBuilding(pitLane, pit, { x: t.x[0], y: t.y[0] });
         footprints.push(building.footprint);
-        this.add('pitBuilding', new THREE.Mesh(geometry(building.mesh), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75 })));
+        // (Every face casts a shadow, lit or not: the building is no closed shell, and the sun would leak through its front into the garages.)
+        this.add('pitBuilding', new THREE.Mesh(geometry(building.mesh), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, shadowSide: THREE.DoubleSide })));
+        this.add('pitSigns', new THREE.Mesh(geometry(building.signs), this.signMaterial()));
+        this.add('pitMarkings', new THREE.Mesh(geometry(building.markings), this.surfaceMaterial(-4, this.asphalt(0.6))));
       }
       const stands = placeGrandstands(t, metrics.corners, s.facilities!.overtaking, pitLane, areas, earth, footprints);
       footprints.push(...stands.map((x) => x.footprint));
       if (stands.length) this.add('stands', new THREE.Mesh(geometry(buildGrandstands(stands)), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 })));
+      this.crowd = stands.length ? seatCrowd(stands, s.project.terrain.seed) : null;
+      this.crowdLayer.build(this.crowd, s.view.relief);
       // Barriers round the track, behind the run-off: steel rails, tyre walls at the gravel traps, catch fencing by the stands.
       barriers = barrierRuns({ track: t, index, earth, runoff: areas, pit: pitLane, stands, avoid: footprints, blocked });
       const built = buildBarriers(t, barriers, earth);
@@ -757,6 +789,27 @@ export class View3D {
         this.add('fences', mesh);
       }
       this.add('grid', new THREE.Mesh(geometry(buildGridMarks(t, s.facilities!.grid, index)), this.surfaceMaterial(-4, this.asphalt(0.6))));
+      // Advertising boards behind the barriers, and the gantries over the road.
+      const boards = buildBoards(placeBoards(t, barriers, metrics.corners, earth));
+      if (boards.faces.indices.length) {
+        this.add('boards', new THREE.Mesh(geometry(boards.faces), this.signMaterial()));
+        this.add('boardFrames', new THREE.Mesh(geometry(boards.frames), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, side: THREE.DoubleSide })));
+      }
+      const gantries = placeGantries(t, metrics.straights, pitLane, earth, footprints, blocked);
+      if (gantries.length) {
+        const built2 = buildGantries(t, gantries);
+        this.add('gantries', new THREE.Mesh(geometry(built2.structure), new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.4, roughness: 0.55 })));
+        this.add('gantryBoards', new THREE.Mesh(geometry(built2.faces), this.signMaterial()));
+        // (Nothing grows round their posts.)
+        for (const g of gantries) for (const e of g.ends) if (e.post) footprints.push({ x: [e.x - 1, e.x + 1, e.x + 1, e.x - 1], y: [e.y - 1, e.y - 1, e.y + 1, e.y + 1] });
+      }
+      // The rubber worn into the asphalt where a lap brakes hardest: the reference class's, whichever class is picked.
+      this.roadAt = roadHeight(index, (x, y) => earth.height(x, y));
+      const reference = s.performance!.laps.find((l) => l.vehicleId === s.performance!.sectorReference);
+      if (reference) {
+        const worn = buildSkidMarks(brakingMarks(t, s.performance!.line, reference, s.project.terrain.seed), this.roadAt, WORN_IN);
+        if (worn.indices.length) this.add('rubber', new THREE.Mesh(skidGeometry(worn), this.skidMaterial));
+      }
     }
     const onRunoff = t && index && areas.length ? runoffTest(t, areas, index) : null;
     const behindBarrier = t && index && barriers.length ? insideBarriers(t, barriers, index) : null;
@@ -951,6 +1004,8 @@ export class View3D {
     this.remove(key);
     this.meshes.set(key, obj);
     this.world.add(obj);
+    // (Tyre marks are drawn after the road they lie on.)
+    if (key === 'rubber' || key === 'skids') obj.renderOrder = 2;
     obj.receiveShadow = SHADOW_RECEIVERS.has(key);
     obj.castShadow = SHADOW_CASTERS.has(key);
     reanchor(obj, this.store.view.relief);
@@ -969,7 +1024,7 @@ export class View3D {
       }
       mesh.geometry?.dispose();
       const mat = mesh.material as THREE.Material | undefined;
-      if (mat && mat !== this.terrainMaterial && mat !== this.fenceMaterial) mat.dispose();
+      if (mat && mat !== this.terrainMaterial && mat !== this.fenceMaterial && mat !== this.skidMaterial) mat.dispose();
     });
   }
 
@@ -980,8 +1035,9 @@ export class View3D {
     this.world.position.set(0, -this.zRef * r, 0);
     this.world.updateMatrixWorld(true);
     if (!changed) return;
-    // Trees, buildings, kerbs, the racing line, labels and camera heights over the ground keep their real size.
+    // Trees, the crowd, buildings, kerbs, the racing line, labels and camera heights over the ground keep their real size.
     if (this.trees) this.buildTrees();
+    this.crowdLayer.build(this.crowd, r);
     for (const obj of this.meshes.values()) reanchor(obj, r);
     for (const l of this.labels) l.p.y = l.base + LABEL_LIFT / r;
     this.placeMarshals();
@@ -1156,6 +1212,7 @@ export class View3D {
     if (this.race?.playing && this.raceActive && this.lastClock) this.clock += Math.min(0.1, (now - this.lastClock) / 1000);
     this.lastClock = now;
     this.updateCars();
+    this.updateSkids();
     if (this.needsRoads) {
       this.needsRoads = false;
       const t = this.store.track;
@@ -1257,6 +1314,40 @@ export class View3D {
         this.camera.position.add(delta);
       }
     }
+  }
+
+  /** The material of everything that shows a sign: the one picture of them all. */
+  private signMaterial(): THREE.MeshStandardMaterial {
+    this.signs ??= signAtlas();
+    return new THREE.MeshStandardMaterial({ map: this.signs, roughness: 0.62, metalness: 0 });
+  }
+
+  /**
+   * The tyre marks the race has left (`RaceSim.marks`): built again when
+   * there are more of them, and drawn up to the time shown, so a replay has
+   * the road as it was.
+   */
+  private updateSkids(): void {
+    const sim = this.raceActive && this.roadAt ? this.race?.sim ?? null : null;
+    if (!sim || !sim.marks.length) {
+      if (this.skids) {
+        this.remove('skids');
+        this.skids = null;
+      }
+      return;
+    }
+    let points = 0;
+    for (const m of sim.marks) points += m.points.length;
+    if (!this.skids || this.skids.sim !== sim || this.skids.points !== points || !this.meshes.has('skids')) {
+      const mesh = buildSkidMarks([...sim.marks].sort((a, b) => a.t - b.t), this.roadAt!);
+      this.skids = { sim, points, mesh };
+      this.add('skids', new THREE.Mesh(skidGeometry(mesh), this.skidMaterial));
+    }
+    const t = this.tv?.replay?.view.t ?? sim.t;
+    const { times, ends } = this.skids.mesh;
+    let count = 0;
+    for (let i = 0; i < times.length && times[i] <= t; i++) count = ends[i];
+    (this.meshes.get('skids') as THREE.Mesh).geometry.setDrawRange(0, count);
   }
 
   private pickCar(clientX: number, clientY: number): void {
@@ -1483,6 +1574,20 @@ function geometry(m: MeshData): THREE.BufferGeometry {
   if (m.uvs) g.setAttribute('uv', new THREE.BufferAttribute(m.uvs, 2));
   g.setIndex(new THREE.BufferAttribute(m.indices, 1));
   if (m.anchors) anchor(g, m.anchors);
+  g.computeBoundingSphere();
+  return g;
+}
+
+/** Tyre marks as geometry: black with each vertex's darkness as its alpha. */
+function skidGeometry(m: SkidMesh): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(m.positions, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(m.normals, 3));
+  const colors = new Float32Array(m.alphas.length * 4).fill(1);
+  for (let i = 0; i < m.alphas.length; i++) colors[i * 4 + 3] = m.alphas[i];
+  g.setAttribute('color', new THREE.BufferAttribute(colors, 4));
+  g.setIndex(new THREE.BufferAttribute(m.indices, 1));
+  anchor(g, m.anchors);
   g.computeBoundingSphere();
   return g;
 }

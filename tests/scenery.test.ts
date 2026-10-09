@@ -216,11 +216,14 @@ describe('buildings', () => {
     expectAnchoredTo(building.mesh, () => 100);
     const stands = placeGrandstands(t, metrics.corners, facilities.overtaking, pit, areas, earth, [building.footprint]);
     for (const s of stands) expectAnchoredTo(buildGrandstands([s]), () => s.base);
-    // Drawn three times as tall (around sea level), the roof is still 8.6 m over the pit lane.
+    // Drawn three times as tall (around sea level), the roof of the tower is still 16.1 m over the pit lane.
     const m = building.mesh;
     let top = -Infinity;
     for (let i = 0; i < m.anchors!.length; i++) top = Math.max(top, anchoredHeight(m.positions[i * 3 + 1], m.anchors![i], 3));
-    expect(top * 3 - 300).toBeCloseTo(8.6, 3);
+    expect(top * 3 - 300).toBeCloseTo(16.1, 3);
+    // So are the numbers over the garages and the paint on the lane.
+    expectAnchoredTo(building.signs, () => 100);
+    expectAnchoredTo(building.markings, () => 100);
   });
 
   it('marks the grid boxes on the track', () => {
