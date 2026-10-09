@@ -241,19 +241,28 @@ Not right yet:
 
 ## Graphics, phase 4: the cars
 
-Agreed in the graphics plan of 2026-10-02 as the phase after the surroundings; not started. The look agreed for all phases: stylised but polished; downloaded CC0 assets are fine; heavy effects are fine on the target machine.
+Built 2026-10-09, on the generated models (no hand-made ones, nothing downloaded). How it works is in ARCHITECTURE.md under Cars.
 
-A car has 4,000 to 10,000 triangles, which is enough. What makes it look plain is the surface:
+### Phase 4 as built
 
-- smoother geometry up close;
-- more aero detail and panel lines;
-- carbon, rubber and glass materials;
-- baked shading in the crevices, and contact shadows under the car.
+- **Smoother geometry up close.** A fourth level of detail for a car longer than 420 pixels on screen, with twice the segments: 25,000 to 35,000 triangles in a body where the full level has 7,000 to 11,000.
+- **Aero detail and panel lines.** Vents, louvres, pillars over the glass, exhausts, a wiper, dive planes, tow hooks, diffuser strakes, floor fences and brake drums on a single-seater, dished spoked wheels with a brake disc; and on the level for close-ups the shut lines between the panels.
+- **Materials.** Carbon with its weave, tyre rubber with a scuffed tread and lettering on the sidewall, glass that is no longer flat black.
+- **Baked shading and contact shadows.** Ambient occlusion per vertex, worked out when a model is built; and under each car a shadow of its own shape in place of the oval.
+- **Visible damage** (it was open whether this belonged here; built as the last part). A broken front wing or splitter is gone, a car that was hit is scratched, a punctured tyre is flat, a car that crashed out is a wreck. A replay shows the car as it was.
 
-To decide when it starts:
+Seen in the app, at Bremgarten on the grid: Formula 1, Hypercar, LMP2, GT3 and TCR cars and a MotoGP bike close up, in High and in Basic graphics; a Formula 1 car without its front wing, a wrecked Formula 1 car and a wrecked GT3 car, and a flat tyre by its numbers (the wheel 6 cm lower, the car leaning towards it).
 
-- **Generated or hand-made models.** Hand-made models look better, but need licence-checked generic models, and one per class is a lot of work. The plan so far keeps the generated ones.
-- **Visible damage.** Side-by-side racing gives cars damage since step 3 (a broken front wing, a puncture, bodywork), and none of it shows on the car: whether it should (a missing front wing, say) belongs here. A car that has crashed also looks whole.
+Not right yet:
+
+- **The frame time was not measured.** The timer in the browser pane read 1.5 ms a frame, which cannot be right. By the counts it should cost little: with 52 cars on the grid 2 took the close-up level, 6 the full, 18 the medium and 26 the far one, some 350,000 triangles for all cars in a scene of three million.
+- **A model takes 0.1 to 0.2 s to build** where it took a few milliseconds: half a second at the first start of a race of three classes, then never again in that session.
+- **Glass is not see-through.** There is no cabin, no driver and no roll cage in a closed car.
+- **The shut lines show only close up**, and the carbon weave only from a metre or two.
+- **Damage is rough.** The sun's shadow and the shading of the picture's finish still show a wing that is gone; a flat tyre is a wheel sunk into the road, not a tyre off its rim; which wheel is flat goes by the car's number and where the scratches are by chance, not by where the car was hit; no parts lie on the road.
+- **The shapes are the same.** Proportions, headlights and tail lights are as they were; there are no sponsors' logos; bikes got the finer level, the shading and the shadow, and no new parts.
+- **Tyres** show no wear, and wet tyres no grooves.
+- **Not looked at**: Formula 2, IndyCar, GT4, the superbike and the safety car close up; cars in the rain; a race played through with real damage (the damage seen was set by hand).
 
 ## Graphics, phase 5: a quality setting
 

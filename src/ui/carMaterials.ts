@@ -3,20 +3,33 @@
  * (per-vertex finish, liveries drawn in the shader from per-car colours and
  * a pattern, the DRS flap turning about its hinge), one for decals (number
  * panels and team names from an atlas, a cell per car), the sky reflected
- * in the paint, and a soft shadow under each car.
+ * in the paint, and the shadow each model lays on the road under it.
  *
- * Per-car (instanced) attributes: livA, livB, livC (linear rgb) and
- * livStyle (pattern, variation, DRS flap open 0..1, lights); wheels use livA
- * for the tyre compound's colour. Decals take decalCell (the cell's column
- * and row in the atlas). The lights are bits (LIGHTS): the rear (rain)
- * light, bright headlights, each of the safety car's beacons, and running
- * lights (a closed car's tail lights glow when the rear light is off).
+ * The body material also gives each kind of trim its look (the weave of
+ * carbon, the tread and sidewall of a tyre, glass one sees a little way
+ * into), darkens what sees little of the sky (the occlusion baked into the
+ * model), and shows a car's damage: a broken nose part gone, scuffed paint.
+ *
+ * Per-vertex: finish, tags (how it is coloured, which light it is, what it
+ * is made of, its occlusion) and hinge (with the part it belongs to).
+ * Per-car (instanced) attributes: livA, livB, livC (linear rgb), livStyle
+ * (pattern, variation, DRS flap open 0..1, lights) and carState (damage
+ * bits, a number of the car's own); wheels use livA for the tyre compound's
+ * colour. Decals take decalCell (the cell's column and row in the atlas).
+ * The lights are bits (LIGHTS): the rear (rain) light, bright headlights,
+ * each of the safety car's beacons, and running lights (a closed car's tail
+ * lights glow when the rear light is off). With the instance matrix that is
+ * sixteen attributes, as many as WebGL promises: another needs one packed.
  */
 import * as THREE from 'three';
 import type { CarMeshData } from '../core/carMesh.ts';
+import type { GroundShadow } from '../core/carShade.ts';
 
 /** Bits of livStyle.w: which of a car's lights are on. */
 export const LIGHTS = { rear: 1, head: 2, beaconA: 4, beaconB: 8, running: 16 } as const;
+
+/** Bits of carState.x: the nose part (front wing, splitter) is gone; the paint is scuffed; the car is wrecked. */
+export const DAMAGE = { nose: 1, scuffed: 2, wrecked: 4 } as const;
 
 /** Cells per row and column of the decal atlas. */
 export const DECAL_GRID = 8;
@@ -28,7 +41,19 @@ float liveryEdge(float d) {
   return smoothstep(-w, w, d);
 }
 
+float carHash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float carNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(carHash(i), carHash(i + vec2(1.0, 0.0)), f.x), mix(carHash(i + vec2(0.0, 1.0)), carHash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+
 vec3 livery() {
+  float vZone = vTags.x;
   if (vZone > 3.5) return vLivC;
   if (vZone > 2.5) return vLivB;
   if (vZone > 1.5) return vLivA;
@@ -85,67 +110,139 @@ export function carMaterial(envMap: THREE.Texture | null): THREE.MeshPhysicalMat
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
 attribute vec4 finish;
-attribute float zone;
+attribute vec4 tags;
 attribute vec3 hinge;
 attribute vec3 livA;
 attribute vec3 livB;
 attribute vec3 livC;
 attribute vec4 livStyle;
-attribute float lamp;
-varying float vLamp;
+attribute vec4 carState;
+varying vec4 vTags;
 varying vec4 vFinish;
-varying float vZone;
-varying vec2 vLivUv;
-varying vec3 vLivA;
-varying vec3 vLivB;
-varying vec3 vLivC;
-varying vec4 vLivStyle;`)
-      .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
-// The DRS flap turns about its hinge (lifting its leading edge) by up to half a radian.
-float flapTurn = hinge.z * livStyle.z * 0.5;
-float flapC = cos(flapTurn);
-float flapS = sin(flapTurn);
-objectNormal.xy = vec2(flapC * objectNormal.x - flapS * objectNormal.y, flapS * objectNormal.x + flapC * objectNormal.y);`)
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-vec2 flapD = transformed.xy - hinge.xy;
-if (hinge.z > 0.5) transformed.xy = hinge.xy + vec2(flapC * flapD.x - flapS * flapD.y, flapS * flapD.x + flapC * flapD.y);
-vFinish = finish;
-vLamp = lamp;
-vZone = zone;
-vLivUv = uv;
-vLivA = livA;
-vLivB = livB;
-vLivC = livC;
-vLivStyle = livStyle;`);
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>
-varying float vLamp;
-varying vec4 vFinish;
-varying float vZone;
 varying vec2 vLivUv;
 varying vec3 vLivA;
 varying vec3 vLivB;
 varying vec3 vLivC;
 varying vec4 vLivStyle;
+varying vec4 vCarState;
+varying vec3 vObjPos;
+varying vec3 vObjNormal;`)
+      .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+// The DRS flap (part 1) turns about its hinge (lifting its leading edge) by up to half a radian.
+float isFlap = hinge.z > 0.5 && hinge.z < 1.5 ? 1.0 : 0.0;
+float flapTurn = isFlap * livStyle.z * 0.5;
+float flapC = cos(flapTurn);
+float flapS = sin(flapTurn);
+vObjNormal = objectNormal;
+objectNormal.xy = vec2(flapC * objectNormal.x - flapS * objectNormal.y, flapS * objectNormal.x + flapC * objectNormal.y);`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+vObjPos = transformed;
+vec2 flapD = transformed.xy - hinge.xy;
+if (isFlap > 0.5) transformed.xy = hinge.xy + vec2(flapC * flapD.x - flapS * flapD.y, flapS * flapD.x + flapC * flapD.y);
+vFinish = finish;
+vTags = tags;
+vLivUv = uv;
+vLivA = livA;
+vLivB = livB;
+vLivC = livC;
+vLivStyle = livStyle;
+vCarState = carState;`)
+      .replace('#include <project_vertex>', `#include <project_vertex>
+// A broken nose part (part 2) is gone: its vertices leave the picture.
+if (hinge.z > 1.5 && mod(carState.x, 2.0) > 0.5) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec4 vTags;
+varying vec4 vFinish;
+varying vec2 vLivUv;
+varying vec3 vLivA;
+varying vec3 vLivB;
+varying vec3 vLivC;
+varying vec4 vLivStyle;
+varying vec4 vCarState;
+varying vec3 vObjPos;
+varying vec3 vObjNormal;
 ${LIVERY_GLSL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
-if (vZone > -0.5) diffuseColor.rgb = livery();
-else if (vZone < -1.5) diffuseColor.rgb = vLivA;`)
+float carZone = vTags.x;
+float carKind = vTags.z;
+vec3 objN = normalize(vObjNormal);
+float carRough = vFinish.x;
+float carCoat = vFinish.z;
+if (carZone > -0.5) {
+  diffuseColor.rgb = livery();
+  // Scuffed paint: patches of fine scratches along the car through to the primer, low on its sides, more of them on a wreck.
+  int damage = int(vCarState.x + 0.5);
+  if ((damage & ${DAMAGE.scuffed | DAMAGE.wrecked}) != 0) {
+    float seed = vCarState.y * 31.0;
+    float wreck = (damage & ${DAMAGE.wrecked}) != 0 ? 1.0 : 0.0;
+    float streak = carNoise(vec2(vObjPos.x * 9.0 + seed, vObjPos.y * 190.0 + abs(vObjPos.z) * 80.0));
+    float blotch = carNoise(vec2(vObjPos.x * 2.2 + seed * 3.0, vObjPos.y * 3.0 + vObjPos.z * 2.0));
+    float where = (1.0 - smoothstep(0.3, 0.8, objN.y)) * (1.0 - smoothstep(0.35, 1.0, vObjPos.y));
+    float worn = smoothstep(mix(0.6, 0.42, wreck), mix(0.75, 0.62, wreck), blotch) * where;
+    float scuff = worn * smoothstep(0.38, 0.6, streak);
+    diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.05, 0.052), scuff * 0.8);
+    carRough = mix(carRough, 0.85, max(scuff, worn * 0.5));
+    carCoat *= 1.0 - max(scuff, worn * 0.6);
+  }
+} else if (carZone < -1.5) {
+  // The compound's band round the sidewall, broken twice a turn by the maker's lettering.
+  float turn = fract(vLivUv.x * 2.0);
+  float letters = step(0.5, fract(vLivUv.x * 46.0)) * step(0.02, turn) * step(turn, 0.12);
+  diffuseColor.rgb = mix(vec3(0.02), vLivA, smoothstep(0.14, 0.15, turn));
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.7), letters);
+} else if (carKind > 0.5 && carKind < 1.5) {
+  // Carbon: a twill of tows 6 mm wide, each over two and under two, drawn in the plane the surface faces most.
+  // The tows that run one way catch the light, the others do not; it fades out where a tow is under two pixels.
+  vec3 an = abs(objN);
+  vec2 q = (an.y > an.x && an.y > an.z ? vObjPos.xz : an.x > an.z ? vObjPos.zy : vObjPos.xy) / 0.006;
+  float fade = 1.0 - smoothstep(0.2, 0.5, max(fwidth(q.x), fwidth(q.y)));
+  vec2 cell = floor(q);
+  float warp = step(mod(cell.x - cell.y, 4.0), 1.5);
+  vec2 f = fract(q) - 0.5;
+  float across = warp > 0.5 ? f.x : f.y;
+  float ridge = 1.0 - 4.0 * across * across;
+  diffuseColor.rgb *= mix(1.0, mix(0.45, 2.3, ridge) * mix(0.55, 1.5, warp), fade);
+  carRough = mix(carRough, mix(0.62, 0.26, warp), fade);
+} else if (carKind > 1.5 && carKind < 2.5) {
+  // Rubber: the tread scuffed grey and dull, the sidewall darker with a sheen and fine rings moulded round it.
+  float tread = 1.0 - smoothstep(0.35, 0.8, abs(objN.z));
+  float radius = length(vObjPos.xy) * 480.0;
+  float rings = (0.5 + 0.5 * sin(radius)) * (1.0 - smoothstep(0.6, 1.6, fwidth(radius)));
+  diffuseColor.rgb *= mix(1.0 - 0.3 * rings, 1.7, tread);
+  carRough = mix(0.72, 0.96, tread);
+} else if (carKind > 2.5) {
+  // Glass: looking straight in one sees a little of the cabin, lighter higher up where the far windows are; at a glancing angle only the sky in it.
+  float into = clamp(dot(normalize(vNormal), normalize(vViewPosition)), 0.0, 1.0);
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.09, 0.115, 0.14), 0.75 * into * into * smoothstep(0.6, 1.25, vObjPos.y));
+}`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-roughnessFactor = vFinish.x;`)
+roughnessFactor = carRough;`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
 metalnessFactor = vFinish.y;`)
       .replace('#include <lights_physical_fragment>', THREE.ShaderChunk.lights_physical_fragment
-        .replace('material.clearcoat = clearcoat;', 'material.clearcoat = vFinish.z;')
+        .replace('material.clearcoat = clearcoat;', 'material.clearcoat = carCoat;')
         // Rough trim (rubber, satin carbon) reflects the sky less, even at grazing angles.
         .replace('#ifdef USE_CLEARCOAT', `float trimSpecular = mix(1.0, 0.2, smoothstep(0.3, 0.9, roughnessFactor));
 material.specularColor *= trimSpecular;
 material.specularColorBlended = mix(material.specularColor, diffuseColor.rgb, metalnessFactor);
 material.specularF90 = mix(material.specularF90 * trimSpecular, 1.0, metalnessFactor);
 #ifdef USE_CLEARCOAT`))
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+// The shading baked into the model: what sees little of the sky gets little of its light, and deep in a crevice less of the sun as well.
+float carAo = vTags.w;
+reflectedLight.indirectDiffuse *= mix(0.12, 1.0, carAo);
+reflectedLight.indirectSpecular *= mix(0.2, 1.0, carAo);
+reflectedLight.directDiffuse *= mix(0.68, 1.0, carAo);
+reflectedLight.directSpecular *= mix(0.5, 1.0, carAo);
+#ifdef USE_CLEARCOAT
+clearcoatSpecularIndirect *= mix(0.2, 1.0, carAo);
+clearcoatSpecularDirect *= mix(0.5, 1.0, carAo);
+#endif`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
 // Lights glow brighter when switched on, and the rear light of a single-seater or bike is dark when off.
 float lampGain = 1.0;
+float vLamp = vTags.y;
 if (vLamp > 0.5) {
   int lights = int(vLivStyle.w + 0.5);
   if (vLamp < 1.5) lampGain = (lights & ${LIGHTS.head}) != 0 ? 4.0 : 1.0;
@@ -155,7 +252,7 @@ if (vLamp > 0.5) {
 }
 totalEmissiveRadiance += vColor.rgb * vFinish.w * lampGain;`);
   };
-  m.customProgramCacheKey = () => 'car-body';
+  m.customProgramCacheKey = () => 'car-body-4';
   return m;
 }
 
@@ -187,11 +284,19 @@ export function carGeometry(m: CarMeshData, count: number, decals = false): THRE
   } else {
     g.setAttribute('color', new THREE.BufferAttribute(m.colors, 3));
     g.setAttribute('finish', new THREE.BufferAttribute(m.finish, 4));
-    g.setAttribute('zone', new THREE.BufferAttribute(m.zone, 1));
+    // How it is coloured, which light it is, what it is made of and its occlusion, in one attribute.
+    const tags = new Float32Array(m.zone.length * 4);
+    for (let i = 0; i < m.zone.length; i++) {
+      tags[i * 4] = m.zone[i];
+      tags[i * 4 + 1] = m.lamp[i];
+      tags[i * 4 + 2] = m.material[i];
+      tags[i * 4 + 3] = m.ao[i];
+    }
+    g.setAttribute('tags', new THREE.BufferAttribute(tags, 4));
     g.setAttribute('hinge', new THREE.BufferAttribute(m.hinge, 3));
-    g.setAttribute('lamp', new THREE.BufferAttribute(m.lamp, 1));
     for (const name of ['livA', 'livB', 'livC']) g.setAttribute(name, new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3));
     g.setAttribute('livStyle', new THREE.InstancedBufferAttribute(new Float32Array(count * 4), 4));
+    g.setAttribute('carState', new THREE.InstancedBufferAttribute(new Float32Array(count * 4), 4));
   }
   g.setIndex(new THREE.BufferAttribute(m.indices, 1));
   g.computeBoundingSphere();
@@ -236,21 +341,36 @@ export function skyEnvironment(renderer: THREE.WebGLRenderer, cover = 0): THREE.
   return texture;
 }
 
-/** A soft dark oval, for the shadow under a car. */
-export function shadowTexture(): THREE.Texture {
-  const c = document.createElement('canvas');
-  c.width = 128;
-  c.height = 128;
-  const ctx = c.getContext('2d')!;
-  const g = ctx.createRadialGradient(64, 64, 8, 64, 64, 64);
-  g.addColorStop(0, 'rgba(0,0,0,0.85)');
-  g.addColorStop(0.55, 'rgba(0,0,0,0.6)');
-  g.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 128, 128);
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
+/**
+ * The shadow a model lays on the road under it (core/carShade.ts), as a
+ * mesh to instance per car: a quad over the shadow's grid in car
+ * coordinates, flat on the road, black and as dark as the grid says.
+ */
+export function groundShadowMesh(shadow: GroundShadow, capacity: number): THREE.InstancedMesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> {
+  const pixels = new Uint8Array(shadow.data.length * 4);
+  for (let i = 0; i < shadow.data.length; i++) pixels[i * 4 + 3] = shadow.data[i];
+  // A row of the grid runs across the car: the picture is as wide as the car is, and as high as it is long.
+  const map = new THREE.DataTexture(pixels, shadow.nz, shadow.nx, THREE.RGBAFormat);
+  map.magFilter = THREE.LinearFilter;
+  map.minFilter = THREE.LinearFilter;
+  map.needsUpdate = true;
+  const x1 = shadow.x0 + shadow.nx * shadow.cell;
+  const z1 = shadow.z0 + shadow.nz * shadow.cell;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute([shadow.x0, 0, shadow.z0, shadow.x0, 0, z1, x1, 0, shadow.z0, x1, 0, z1], 3));
+  // (Facing up: the picture's finish reads the normals of everything drawn, and takes a surface without one for a hole.)
+  g.setAttribute('normal', new THREE.Float32BufferAttribute([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0], 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 1, 1], 2));
+  g.setIndex([0, 1, 3, 0, 3, 2]);
+  const material = new THREE.MeshBasicMaterial({
+    map, transparent: true, depthWrite: false, color: 0x000000, opacity: 0.8, polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6,
+  });
+  const mesh = new THREE.InstancedMesh(g, material, capacity);
+  mesh.frustumCulled = false;
+  mesh.count = 0;
+  mesh.renderOrder = 1;
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  return mesh;
 }
 
 export interface DecalCar {

@@ -2,7 +2,10 @@
  * The 3D cars: single-seaters (Formula 1, Formula 2, IndyCar), prototypes
  * (Hypercar, LMP2), GT and touring cars, the safety car, and bikes with
  * their riders, each built from smooth swept bodies, airfoil wings, tubes
- * and plates (core/carMesh.ts), at three levels of detail.
+ * and plates (core/carMesh.ts), at four levels of detail: one for close-ups
+ * (finer, with the shut lines between the panels), then full, medium and far.
+ * The shading in the crevices and the shadow on the road are baked into each
+ * model when it is built (core/carShade.ts).
  *
  * A car is a body mesh (paint and trim; the DRS flap marked to turn about
  * its hinge), a decal mesh (number panels and team names, coordinates in a
@@ -13,9 +16,10 @@
  * midway between the axles.
  */
 import {
-  CARBON, type CarMeshData, CarMeshBuilder, DARK_METAL, GLASS, LAMP, Loft, RUBBER, SATIN_BLACK, SectionPath, type Surface, TINT, type V3, ZONE,
-  box, curve, decal, ellipsoid, flatDecal, paint, pipe, plate, revolve, smoothstep, stations, trim, tube, wing,
+  CARBON, type CarMeshData, CarMeshBuilder, DARK_METAL, GLASS, LAMP, Loft, PART, RUBBER, SATIN_BLACK, SEAM, SectionPath, type Surface, TINT, type V3, ZONE,
+  add, box, curve, decal, ellipsoid, flatDecal, paint, patch, pipe, plate, revolve, smoothstep, stations, trim, tube, wing,
 } from './carMesh.ts';
+import { type GroundShadow, type Occluder, bakeOcclusion, groundShadow, transferOcclusion } from './carShade.ts';
 
 export type BodyKind = 'single-seater' | 'prototype' | 'gt' | 'touring' | 'bike';
 
@@ -44,8 +48,10 @@ export interface CarModel {
   height: number;
   wheelbase: number;
   wheels: WheelPlace[];
-  /** Full detail first. */
+  /** Closest first: the level for close-ups, then full, medium and far. */
   lods: CarLod[];
+  /** The shadow it lays on the road right under it. */
+  shadow: GroundShadow;
   /** The driver's eye, for an onboard view. */
   eye: V3;
   /** Onboard cameras for television, in car coordinates (x forward, y up). */
@@ -125,9 +131,44 @@ export const DECAL_NUMBER: readonly [number, number, number, number] = [0, 0.5, 
 export const DECAL_NUMBER_SQUARE: readonly [number, number, number, number] = [0.25, 0.5, 0.75, 1];
 export const DECAL_TEAM: readonly [number, number, number, number] = [0, 0.05, 1, 0.45];
 
-/** Segment counts for a level of detail (0 full, 1 medium, 2 far). */
+/** Segment counts for a level of detail (-1 close up, 0 full, 1 medium, 2 far). */
 function steps(n: number, lod: number): number {
-  return Math.max(1, Math.round(n / [1, 2, 4][lod]));
+  return Math.max(1, Math.round(n / [0.5, 1, 2, 4][lod + 1]));
+}
+
+/** A mirror's glass, a tail pipe, and how wide a shut line is drawn (metres). */
+const MIRROR = trim([0.62, 0.66, 0.7], { roughness: 0.04, metalness: 1 });
+const PIPE = trim([0.38, 0.36, 0.34], { roughness: 0.3, metalness: 1 });
+const SEAM_WIDTH = 0.009;
+
+/**
+ * Bakes a model's shading: the occlusion of its body among its wheels over
+ * the road and of a wheel on its own, at full detail and handed on to the
+ * other levels; and the shadow on the road.
+ */
+function shade(lods: readonly CarLod[], wheels: readonly WheelPlace[], wheelRadius: number, wheelWidth: number): GroundShadow {
+  const full = lods[1];
+  const far = lods[lods.length - 1];
+  // The wheels where they stand (a left wheel is the right one turned round), as the far level has them.
+  const placed: Occluder[] = wheels.map((w) => {
+    const from = far.wheel.positions;
+    const positions = new Float32Array(from.length);
+    const flip = w.z < 0 ? -1 : 1;
+    for (let i = 0; i < from.length; i += 3) {
+      positions[i] = w.x + from[i] * flip * (w.radius / wheelRadius);
+      positions[i + 1] = w.y + from[i + 1] * (w.radius / wheelRadius);
+      positions[i + 2] = w.z + from[i + 2] * flip * (w.width / wheelWidth);
+    }
+    return { positions, indices: far.wheel.indices };
+  });
+  bakeOcclusion(full.body, [full.body, ...placed]);
+  bakeOcclusion(full.wheel, [full.wheel], { ground: null, reach: 0.22 });
+  for (const lod of lods) {
+    if (lod === full) continue;
+    transferOcclusion(full.body, lod.body);
+    transferOcclusion(full.wheel, lod.wheel);
+  }
+  return groundShadow([lods[2].body, ...placed]);
 }
 
 const RIGHT: V3 = [1, 0, 0];
@@ -160,10 +201,12 @@ function buildWheel(radius: number, width: number, rimRadius: number, lod: numbe
   const cover = trim([0.06, 0.062, 0.066], { roughness: 0.3, metalness: 1 });
   const rim = trim(spokes ? [0.42, 0.43, 0.45] : [0.09, 0.09, 0.1], { roughness: 0.3, metalness: 1 });
   const seg = steps(48, lod);
+  // A covered wheel has a nearly flat face; a spoked one is dished, its spokes standing off the brake disc behind them.
+  const dish = spokes ? 0.07 : 0;
   const profile: { r: number; z: number; surface: Surface; hard?: boolean }[] = [
-    { r: 0.001, z: w - 0.045, surface: cover },
-    { r: r * 0.35, z: w - 0.04, surface: cover },
-    { r: r - 0.025, z: w - 0.03, surface: cover, hard: true },
+    { r: 0.001, z: w - 0.045 - dish, surface: cover },
+    { r: r * 0.35, z: w - 0.04 - dish, surface: cover },
+    { r: r - 0.025, z: w - 0.03 - dish, surface: cover, hard: true },
     { r: r - 0.01, z: w - 0.012, surface: rim },
     { r, z: w - 0.004, surface: rim, hard: true },
     { r: r + 0.012, z: w + 0.004, surface: RUBBER, hard: true },
@@ -192,8 +235,12 @@ function buildWheel(radius: number, width: number, rimRadius: number, lod: numbe
       for (let i = 0; i < n; i++) {
         const a = (2 * Math.PI * i) / n;
         const d: V3 = [Math.cos(a), Math.sin(a), 0];
-        tube(mb, [d[0] * 0.05, d[1] * 0.05, w - 0.04], [d[0] * (r - 0.02), d[1] * (r - 0.02), w - 0.025], 0.014, 0.01, 5, rim, 0.5);
+        tube(mb, [d[0] * 0.05, d[1] * 0.05, w - 0.04], [d[0] * (r - 0.02), d[1] * (r - 0.02), w - 0.025], 0.014, 0.01, steps(5, lod), rim, 0.5);
       }
+      // The hub the spokes meet on, and the brake disc behind them.
+      tube(mb, [0, 0, w - 0.04 - dish], [0, 0, w - 0.035], 0.075, 0.055, steps(14, lod), rim, 1, undefined, false);
+      const steel = trim([0.3, 0.3, 0.31], { roughness: 0.4, metalness: 1 });
+      revolve(mb, [0, 0, 0], [{ r: r * 0.42, z: w - 0.028 - dish, surface: steel, hard: true }, { r: r * 0.86, z: w - 0.028 - dish, surface: steel }], steps(32, lod));
     }
   }
   return mb.build();
@@ -274,15 +321,15 @@ function singleSeater(s: SingleSeaterSpec, lod: number): { body: CarMeshData; de
       const behind = rx <= cockpitRear + 0.05;
       const at = behind ? Math.max(t, airTop(x)) : t;
       const aw = behind ? Math.min(airHalf(x), w * 0.7) : w * 0.6;
-      const p = new SectionPath(0, b, body);
-      p.line(w * 0.55, b, n(2)).round(w, b + (t - b) * 0.3, n(4), 2.6, 'across').line(w, t - (t - b) * 0.22, n(2)).round(w * 0.62, t, n(5), 2.4, 'up');
+      const p = new SectionPath(0, b, body).mark('keel');
+      p.line(w * 0.55, b, n(2)).round(w, b + (t - b) * 0.3, n(4), 2.6, 'across').line(w, t - (t - b) * 0.22, n(2)).mark('shoulder').round(w * 0.62, t, n(5), 2.4, 'up');
       if (inCockpit) {
         // The cockpit: down into the opening round the driver.
         p.line(0.27, t, 1).use(SATIN_BLACK).round(0.2, t - 0.26, n(4), 2, 'up').line(0, t - 0.28, 1);
       } else {
         p.line(aw, t, 1).round(aw * 0.45, at, n(4), 2.2, 'up').line(0, at, 1);
       }
-      return p;
+      return p.mark('spine');
     },
   });
   // Sidepods.
@@ -296,7 +343,7 @@ function singleSeater(s: SingleSeaterSpec, lod: number): { body: CarMeshData; de
     : [[podFront, 0.15], [podFront - 0.4, 0.18], [podRear + 0.5, 0.13], [podRear, 0.05]]);
   const podZ = k([[podFront, s.width / 2 - 0.42], [podFront - 0.8, s.width / 2 - 0.45], [podRear + 0.3, 0.36], [podRear, 0.26]]);
   const podStart = mb.vertexCount;
-  new Loft(mb, {
+  const pod = new Loft(mb, {
     stations: stations(podFront, podRear, n(22), (x) => 1 + 2 * Math.exp(-(((x - podFront) / 0.3) ** 2))),
     u,
     offsetZ: podZ,
@@ -308,6 +355,13 @@ function singleSeater(s: SingleSeaterSpec, lod: number): { body: CarMeshData; de
       return new SectionPath(0, b, paint(ZONE.side)).line(w * 0.7, b, n(2)).round(w, b + (t - b) * 0.35, n(3), 2.4, 'across').line(w, t - (t - b) * 0.3, n(2)).round(0, t, n(6), 2.2, 'up');
     },
   });
+  // Cooling louvres across the top of each sidepod.
+  if (lod <= 0) {
+    for (let i = 0; i < 5; i++) {
+      const x = podFront - 0.5 - i * 0.055;
+      patch(mb, pod, 'top', x, podZ(x), 0.026, podHalf(x) * 1.1, SATIN_BLACK, 1, n(3));
+    }
+  }
   mb.mirror(podStart);
   // Floor, with the diffuser rising behind the rear axle.
   const floorPts: [number, number][] = [
@@ -323,7 +377,29 @@ function singleSeater(s: SingleSeaterSpec, lod: number): { body: CarMeshData; de
   if (lod < 2) {
     for (const side of [1, -1]) plate(mb, [[ra - 0.05, 0.05], [ra - 0.67, 0.31], [ra - 0.67, 0.36], [ra - 0.05, 0.12]], side * 0.48, 0.012, CARBON);
   }
-  // Front wing: elements rising and steepening towards the back, with endplates.
+  if (lod <= 0) {
+    for (const side of [1, -1]) {
+      // Fences under the leading edge of the floor, and the strakes of the diffuser.
+      for (let i = 0; i < 3; i++) {
+        plate(mb, [[fa - 0.66 - i * 0.07, 0.05], [fa - 0.98 - i * 0.05, 0.05], [fa - 1.0 - i * 0.05, 0.19 - i * 0.02], [fa - 0.74 - i * 0.07, 0.16 - i * 0.02]], side * (0.5 + i * 0.1), 0.008, CARBON);
+      }
+      for (const z of [0.16, 0.32]) plate(mb, [[ra - 0.05, 0.045], [ra - 0.66, 0.3], [ra - 0.66, 0.06]], side * z, 0.008, CARBON);
+      // Brake drums inboard of the wheels, each with the scoop of its duct ahead of it.
+      for (const [ax, wz, ww] of [[fa, fz, s.frontW], [ra, rz, s.rearW]] as const) {
+        const face = wz - ww / 2;
+        tube(mb, [ax, s.tyreR, side * (face - 0.008)], [ax, s.tyreR, side * (face - 0.1)], s.rimR * 0.97, s.rimR * 0.85, n(20), CARBON);
+        box(mb, [ax + 0.04, s.tyreR - 0.1, side * (face - 0.02)], [ax + s.rimR * 0.95, s.tyreR + 0.1, side * (face - 0.1)], CARBON);
+      }
+      // A camera pod each side of the nose.
+      const cx = tip - 0.8;
+      box(mb, [cx - 0.05, top(cx) - 0.07, side * (half(cx) - 0.01)], [cx + 0.05, top(cx) - 0.035, side * (half(cx) + 0.045)], paint(ZONE.solidC));
+    }
+    // The exhaust out of the back of the engine cover, under the rain light.
+    tube(mb, [tail + 0.68, 0.26, 0], [tail + 0.5, 0.275, 0], 0.045, 0.048, n(12), PIPE);
+    tube(mb, [tail + 0.4995, 0.275, 0], [tail + 0.497, 0.275, 0], 0.038, 0.038, n(12), SATIN_BLACK);
+  }
+  // Front wing: elements rising and steepening towards the back, with endplates (the part that comes off when it is broken).
+  mb.part = PART.nose;
   const wingLE = tip + 0.06;
   const elements = lod === 2 ? 1 : lod === 1 ? Math.min(2, s.frontWingElements) : s.frontWingElements;
   const span = s.width / 2 - 0.01;
@@ -336,18 +412,19 @@ function singleSeater(s: SingleSeaterSpec, lod: number): { body: CarMeshData; de
     for (const side of [1, -1]) {
       wing(mb, {
         from: [le, y, side * (e === 0 ? 0 : 0.16)], to: [le - 0.05 * e, y + 0.035 * e, side * span], chord, tipChord: chord * 0.9,
-        angle, thickness: 0.09, n: steps(10, lod), spanSteps: lod === 0 ? 3 : 1, surface: surf, u: u(le), caps: true,
+        angle, thickness: 0.09, n: steps(10, lod), spanSteps: lod <= 0 ? 3 : 1, surface: surf, u: u(le), caps: true,
       });
     }
   }
   for (const side of [1, -1]) {
     plate(mb, [[wingLE + 0.03, 0.03], [wingLE + 0.03, 0.22], [wingLE - 0.4, 0.33], [wingLE - 0.55, 0.25], [wingLE - 0.55, 0.03]], side * (span + 0.008), 0.016, paint(ZONE.solidA), false, u(wingLE));
   }
+  mb.part = PART.none;
   if (lod < 2) for (const side of [1, -1]) plate(mb, [[tip - 0.02, 0.1], [tip - 0.32, 0.1], [tip - 0.36, 0.2], [tip - 0.05, 0.2]], side * 0.07, 0.014, CARBON);
   // Rear wing: main plane and the DRS flap between endplates, the beam wing below, on a central pylon.
   const rwSpan = 0.48;
   const rwLE = tail + 0.5;
-  wing(mb, { from: [rwLE, H - 0.17, -rwSpan], to: [rwLE, H - 0.17, rwSpan], chord: 0.3, angle: 0.22, camber: 0.08, n: steps(12, lod), spanSteps: lod === 0 ? 2 : 1, surface: CARBON, u: u(rwLE), caps: false });
+  wing(mb, { from: [rwLE, H - 0.17, -rwSpan], to: [rwLE, H - 0.17, rwSpan], chord: 0.3, angle: 0.22, camber: 0.08, n: steps(12, lod), spanSteps: lod <= 0 ? 2 : 1, surface: CARBON, u: u(rwLE), caps: false });
   const flapLE = rwLE - 0.2;
   const flapChord = 0.2;
   const flapAngle = 0.55;
@@ -359,7 +436,11 @@ function singleSeater(s: SingleSeaterSpec, lod: number): { body: CarMeshData; de
     plate(mb, [[rwLE + 0.08, 0.42], [rwLE + 0.05, H + 0.04], [tail - 0.02, H + 0.06], [tail - 0.04, 0.72], [tail + 0.2, 0.42]], side * (rwSpan + 0.01), 0.02, paint(ZONE.solidA), false, u(rwLE));
     // Team name on the outer face of each endplate.
     if (lod < 2) flatDecal(dm, [rwLE - 0.22, H - 0.22, side * (rwSpan + 0.021)], side > 0 ? SIDE_R.right : SIDE_L.right, UP, 0.5, 0.2, DECAL_TEAM);
+    // Louvres in the top corner of the endplate.
+    if (lod < 0) for (let i = 0; i < 3; i++) flatDecal(mb, [rwLE - 0.1, H - 0.01 - i * 0.03, side * (rwSpan + 0.021)], side > 0 ? SIDE_R.right : SIDE_L.right, UP, 0.2, 0.012, undefined, SATIN_BLACK);
   }
+  // The pod of the DRS actuator over the middle of the wing.
+  if (lod <= 0) ellipsoid(mb, [rwLE - 0.14, H - 0.105, 0], [0.11, 0.022, 0.028], n(10), n(5), () => CARBON);
   if (lod < 2) {
     wing(mb, { from: [ra - 0.18, 0.42, -0.38], to: [ra - 0.18, 0.42, 0.38], chord: 0.16, angle: 0.15, n: steps(8, lod), surface: CARBON, u: u(ra), caps: true });
     plate(mb, [[ra - 0.1, 0.3], [ra - 0.1, 0.42], [rwLE - 0.1, H - 0.16], [rwLE - 0.25, H - 0.16], [ra - 0.3, 0.3]], 0, 0.03, CARBON);
@@ -400,11 +481,12 @@ function singleSeater(s: SingleSeaterSpec, lod: number): { body: CarMeshData; de
       const mx = cockpitFront + 0.15;
       tube(mb, [mx, 0.6, side * 0.3], [mx, 0.69, side * 0.43], 0.012, 0.012, 6, CARBON);
       box(mb, [mx - 0.05, 0.66, side > 0 ? 0.42 : -0.56], [mx + 0.03, 0.73, side > 0 ? 0.56 : -0.42], paint(ZONE.solidB));
+      if (lod <= 0) flatDecal(mb, [mx - 0.05, 0.695, side * 0.49], [0, 0, 1], [0, 1, 0], 0.12, 0.05, undefined, MIRROR);
     }
     box(mb, [cockpitRear - 0.28, H - 0.04, -0.045], [cockpitRear - 0.14, H + 0.005, 0.045], paint(ZONE.solidC));
   }
   // Suspension: wishbones, push or pull rods and track rods, flattened like aero fairings.
-  if (lod === 0) {
+  if (lod <= 0) {
     const arms = (ax: number, wz: number, wR: number, front: boolean) => {
       const inner = (dx: number, y: number) => [ax + dx, y, Math.max(0.12, half(ax + dx) - 0.02)] as V3;
       const upTop: V3 = [ax, wR + 0.12, wz - 0.12];
@@ -421,6 +503,16 @@ function singleSeater(s: SingleSeaterSpec, lod: number): { body: CarMeshData; de
     arms(fa, fz, s.tyreR, true);
     arms(ra, rz, s.tyreR, false);
   }
+  // Close up: the pitot tube ahead of the cockpit, and the joints between the nose, the chassis and the engine cover.
+  if (lod < 0) {
+    tube(mb, [fa - 0.6, top(fa - 0.6) - 0.01, 0], [fa - 0.6, top(fa - 0.6) + 0.1, 0], 0.005, 0.004, 5, SATIN_BLACK);
+    for (const sgn of [1, -1] as const) {
+      chassis.seamRound(mb, fa + 0.3, 'keel', 'spine', SEAM_WIDTH, SEAM, sgn);
+      chassis.seamRound(mb, fa - 0.35, 'shoulder', 'spine', SEAM_WIDTH, SEAM, sgn);
+      chassis.seamRound(mb, cockpitRear - 0.6, 'shoulder', 'spine', SEAM_WIDTH, SEAM, sgn);
+      chassis.seamAlong(mb, 'shoulder', cockpitRear - 0.6, ra + 0.2, SEAM_WIDTH, SEAM, sgn);
+    }
+  }
   // Decals: the car number on the nose, and on each side of the engine cover; the team name on the sidepods.
   const noseX = tip - 0.5;
   decal(dm, chassis, [noseX, top(noseX) + 0.05, 0], TOP.right, TOP.up, 0.38, 0.19, DECAL_NUMBER, steps(6, lod), steps(3, lod));
@@ -432,11 +524,11 @@ function singleSeater(s: SingleSeaterSpec, lod: number): { body: CarMeshData; de
   return { body: mb.build(), decals: dm.build() };
 }
 
-function singleSeaterModel(s: SingleSeaterSpec): CarModel {
+function singleSeaterModel(s: SingleSeaterSpec): Unshaded {
   const fz = s.width / 2 - s.frontW / 2;
   const rz = s.width / 2 - s.rearW / 2;
   const fa = s.wheelbase / 2;
-  const lods = [0, 1, 2].map((lod) => ({ ...singleSeater(s, lod), wheel: buildWheel(s.tyreR, s.rearW, s.rimR, lod, !s.wheelCovers) }));
+  const lods = [-1, 0, 1, 2].map((lod) => ({ ...singleSeater(s, lod), wheel: buildWheel(s.tyreR, s.rearW, s.rimR, lod, !s.wheelCovers) }));
   return {
     id: s.id, kind: 'single-seater', length: s.wheelbase + s.front + s.rear, width: s.width, height: s.height, wheelbase: s.wheelbase,
     wheels: [
@@ -484,6 +576,8 @@ interface ClosedSpec {
   wing: { x: number; y: number; span: number; chord: number; angle: number; plate: number } | null;
   fin: boolean;
   splitter: number;
+  /** Dive planes on each front corner. */
+  canards?: number;
   lightBar?: boolean;
   spokes: boolean;
 }
@@ -496,7 +590,7 @@ const HYPERCAR: ClosedSpec = {
   flare: 0.02,
   cabin: { screenBase: 1.35, roofFront: 0.35, roofRear: -0.45, rearBase: -1.45, roof: 1.06, baseHalf: 0.42, roofHalf: 0.3, windowFront: 0.3, windowRear: -0.4, rearWindow: false },
   wing: { x: -2.05, y: 1.0, span: 0.82, chord: 0.36, angle: 0.2, plate: 0.38 },
-  fin: true, splitter: 0.08, spokes: false,
+  fin: true, splitter: 0.08, canards: 1, spokes: false,
 };
 
 const LMP2: ClosedSpec = {
@@ -516,12 +610,12 @@ const GT3: ClosedSpec = {
   flare: 0.08,
   cabin: { screenBase: 0.85, roofFront: 0.05, roofRear: -0.75, rearBase: -1.55, roof: 1.25, baseHalf: 0.74, roofHalf: 0.56, windowFront: 0.0, windowRear: -1.05, rearWindow: true },
   wing: { x: -1.88, y: 1.26, span: 0.86, chord: 0.34, angle: 0.2, plate: 0.3 },
-  fin: false, splitter: 0.1, spokes: true,
+  fin: false, splitter: 0.1, canards: 2, spokes: true,
 };
 
 const GT4: ClosedSpec = {
   ...GT3, id: 'gt4', tyreR: 0.34, frontW: 0.28, rearW: 0.3, width: 1.96, flare: 0.04,
-  wing: { x: -1.95, y: 1.1, span: 0.75, chord: 0.26, angle: 0.15, plate: 0.2 }, splitter: 0.06,
+  wing: { x: -1.95, y: 1.1, span: 0.75, chord: 0.26, angle: 0.15, plate: 0.2 }, splitter: 0.06, canards: 1,
 };
 
 const TCR: ClosedSpec = {
@@ -535,7 +629,7 @@ const TCR: ClosedSpec = {
   fin: false, splitter: 0.06, spokes: true,
 };
 
-const SAFETY_CAR: ClosedSpec = { ...GT3, id: 'safety-car', flare: 0.03, wing: { x: -2.0, y: 1.0, span: 0.7, chord: 0.2, angle: 0.08, plate: 0.08 }, splitter: 0.04, lightBar: true };
+const SAFETY_CAR: ClosedSpec = { ...GT3, id: 'safety-car', flare: 0.03, wing: { x: -2.0, y: 1.0, span: 0.7, chord: 0.2, angle: 0.08, plate: 0.08 }, splitter: 0.04, canards: 0, lightBar: true };
 
 function closedCar(s: ClosedSpec, lod: number): { body: CarMeshData; decals: CarMeshData } {
   const mb = new CarMeshBuilder();
@@ -603,22 +697,33 @@ function closedCar(s: ClosedSpec, lod: number): { body: CarMeshData; decals: Car
       // Glass down the sides from the windscreen to the end of the side windows (the pillars are the rounded roof edge).
       const windows = rx < c.screenBase && rx > c.windowRear && cabinUp > 0.15;
       const screen = (rx < c.screenBase && rx > c.roofFront) || (c.rearWindow && rx < c.roofRear && rx > c.rearBase);
-      const p = new SectionPath(0, fl, SATIN_BLACK);
+      const p = new SectionPath(0, fl, SATIN_BLACK).mark('keel');
       p.line(low * 0.8, fl, 1).round(low, fl + 0.04, n(2), 2, 'across')
         // Under the arch: the inner wall up to the arch's edge, then the lip out to the body side.
-        .line(low, Math.max(fl + 0.04, archY), 1).line(sideZ, Math.max(fl + 0.05, archY), 1)
+        .line(low, Math.max(fl + 0.04, archY), 1).line(sideZ, Math.max(fl + 0.05, archY), 1).mark('sill')
         .use(body).line(sideZ, Math.max(archY + 0.02, b - 0.3), n(2))
         // Tumblehome: the side leans in towards the shoulder.
-        .round(sideZ - 0.035, Math.max(archY + 0.04, b - 0.12), n(2), 2, 'up').round(shoulderZ, b, n(3), 2.4, 'up')
-        .line(baseZ, d, n(3))
-        .use(windows ? glass : body).line(roofZ, top - Math.min(0.06, cabinUp * 0.4), n(3))
+        .round(sideZ - 0.035, Math.max(archY + 0.04, b - 0.12), n(2), 2, 'up').round(shoulderZ, b, n(3), 2.4, 'up').mark('belt')
+        .line(baseZ, d, n(3)).mark('base')
+        .use(windows ? glass : body).line(roofZ, top - Math.min(0.06, cabinUp * 0.4), n(3)).mark('eave')
         .use(screen ? glass : body).round(roofZ * 0.55, top, n(3), 2.2, 'up')
-        .use(screen ? glass : body).line(0, top, n(2));
+        .use(screen ? glass : body).line(0, top, n(2)).mark('spine');
       return p;
     },
   });
-  // Splitter, diffuser.
+  // Splitter and dive planes (the part that comes off when the front is broken), diffuser.
+  mb.part = PART.nose;
   if (s.splitter > 0) plate(mb, [[tip + s.splitter, -s.width / 2 + 0.2], [tip + s.splitter, s.width / 2 - 0.2], [tip - 0.4, s.width / 2 - 0.08], [tip - 0.4, -s.width / 2 + 0.08]], s.floor - 0.01, 0.02, CARBON, true);
+  if (lod <= 0) {
+    for (let i = 0; i < (s.canards ?? 0); i++) {
+      for (const sgn of [1, -1]) {
+        const a = side(tip - 0.1) - 0.02;
+        const b = outer(tip - 0.5) - 0.02;
+        plate(mb, [[tip - 0.1, sgn * a], [tip - 0.5, sgn * b], [tip - 0.5, sgn * (b + 0.09)], [tip - 0.22, sgn * (a + 0.1)]], s.floor + 0.2 + i * 0.13, 0.008, CARBON, true);
+      }
+    }
+  }
+  mb.part = PART.none;
   if (lod < 2) {
     const diffStart = mb.vertexCount;
     plate(mb, [[0, -0.7], [0, 0.7], [-0.45, 0.72], [-0.45, -0.72]], 0, 0.015, CARBON, true);
@@ -642,7 +747,7 @@ function closedCar(s: ClosedSpec, lod: number): { body: CarMeshData; decals: Car
   // Rear wing on swan necks, with endplates; the fin of a prototype.
   if (s.wing) {
     const w = s.wing;
-    wing(mb, { from: [w.x, w.y, -w.span], to: [w.x, w.y, w.span], chord: w.chord, angle: w.angle, camber: 0.08, n: n(12), spanSteps: lod === 0 ? 2 : 1, surface: CARBON, u: u(w.x), caps: false });
+    wing(mb, { from: [w.x, w.y, -w.span], to: [w.x, w.y, w.span], chord: w.chord, angle: w.angle, camber: 0.08, n: n(12), spanSteps: lod <= 0 ? 2 : 1, surface: CARBON, u: u(w.x), caps: false });
     for (const sgn of [1, -1]) {
       plate(mb, [[w.x + 0.04, w.y - w.plate * 0.6], [w.x + 0.04, w.y + 0.06], [w.x - w.chord - 0.06, w.y + 0.12], [w.x - w.chord - 0.06, w.y - w.plate]], sgn * (w.span + 0.008), 0.016, paint(ZONE.solidA), false, u(w.x));
       if (lod < 2) flatDecal(dm, [w.x - w.chord / 2 - 0.01, w.y - w.plate * 0.25, sgn * (w.span + 0.017)], sgn > 0 ? SIDE_R.right : SIDE_L.right, UP, Math.min(0.42, w.chord + 0.08), Math.min(0.16, w.plate * 0.5), DECAL_TEAM);
@@ -660,6 +765,58 @@ function closedCar(s: ClosedSpec, lod: number): { body: CarMeshData; decals: Car
     for (const sgn of [1, -1]) {
       box(mb, [mx - 0.06, my, sgn > 0 ? mz : -mz - 0.16], [mx + 0.05, my + 0.08, sgn > 0 ? mz + 0.16 : -mz], paint(ZONE.solidB));
       tube(mb, [mx, my - 0.05, sgn * (mz - 0.08)], [mx, my + 0.02, sgn * (mz + 0.04)], 0.012, 0.012, 6, CARBON);
+      if (lod <= 0) flatDecal(mb, [mx - 0.06, my + 0.04, sgn * (mz + 0.08)], [0, 0, 1], [0, 1, 0], 0.13, 0.06, undefined, MIRROR);
+    }
+  }
+  // Details: pillars, vents, the exhausts, a wiper; close up the shut lines between the panels.
+  const proto = s.kind === 'prototype';
+  const fl = s.floor;
+  const doorFront = Math.min(c.screenBase - 0.2, fa - R - 0.08);
+  const doorRear = Math.max(c.windowRear + 0.1, ra + R + 0.1);
+  if (lod <= 0) {
+    const pillar = paint(ZONE.solidA);
+    for (const sgn of [1, -1] as const) {
+      // Pillars over the glass: where the windscreen and the rear window meet the side windows, and between the side windows.
+      loft.seamAlong(mb, 'eave', c.screenBase - 0.04, c.roofFront, 0.07, pillar, sgn, 0.004);
+      if (c.rearWindow) loft.seamAlong(mb, 'eave', c.roofRear, Math.max(c.windowRear, c.rearBase + 0.04), 0.07, pillar, sgn, 0.004);
+      if (!proto) loft.seamRound(mb, doorRear, 'base', 'eave', 0.06, SATIN_BLACK, sgn, 0.004);
+      if (s.kind === 'touring') loft.seamRound(mb, (doorFront + doorRear) / 2, 'base', 'eave', 0.06, SATIN_BLACK, sgn, 0.004);
+      // Louvres behind the front wheel; outlets in the bonnet either side of the number, or over the wheels of a prototype.
+      for (let i = 0; i < 3; i++) patch(mb, loft, sgn > 0 ? 'right' : 'left', fa - R - 0.16, fl + 0.3 + i * 0.07, 0.16, 0.035, SATIN_BLACK, n(3), 1);
+      if (proto) for (let i = 0; i < 4; i++) patch(mb, loft, 'top', fa + 0.14 - i * 0.09, sgn * fwz, 0.035, 0.2, SATIN_BLACK, 1, n(3));
+      else patch(mb, loft, 'top', tip - 0.82, sgn * 0.43, 0.3, 0.2, SATIN_BLACK, n(4), n(2));
+      // The strakes of the diffuser.
+      for (const z of [0.24, 0.5]) plate(mb, [[tail + 0.42, fl - 0.005], [tail - 0.005, fl + 0.135], [tail - 0.005, fl - 0.005]], sgn * z, 0.008, CARBON);
+      // Tail pipes.
+      if (!proto) {
+        tube(mb, [tail + 0.06, fl + 0.13, sgn * 0.28], [tail - 0.04, fl + 0.13, sgn * 0.28], 0.042, 0.046, n(12), PIPE);
+        tube(mb, [tail - 0.0405, fl + 0.13, sgn * 0.28], [tail - 0.043, fl + 0.13, sgn * 0.28], 0.037, 0.037, n(12), SATIN_BLACK);
+      }
+    }
+    // A dark panel across the back under the lights, and tow hooks: at the front on the right, at the back on the left.
+    flatDecal(mb, [tail - 0.003, belt(tail) - (proto ? 0.27 : 0.3), 0], [0, 0, 1], [0, 1, 0], outer(tail) * 1.1, proto ? 0.2 : 0.14, undefined, SATIN_BLACK);
+    const hook = trim([0.55, 0.03, 0.02], { roughness: 0.5 });
+    plate(mb, [[tip - 0.01, fl + 0.2], [tip + 0.07, fl + 0.2], [tip + 0.07, fl + 0.26], [tip - 0.01, fl + 0.26]], 0.5, 0.014, hook);
+    plate(mb, [[tail + 0.01, fl + 0.22], [tail - 0.07, fl + 0.22], [tail - 0.07, fl + 0.28], [tail + 0.01, fl + 0.28]], -0.5, 0.014, hook);
+    // The wiper, parked across the foot of the windscreen.
+    const w0 = loft.drop(c.screenBase - 0.06, 0.02);
+    const w1 = loft.drop(c.screenBase - 0.2, 0.42);
+    if (w0 && w1) tube(mb, add(w0.point, w0.normal, 0.012), add(w1.point, w1.normal, 0.012), 0.008, 0.006, 6, SATIN_BLACK);
+  }
+  if (lod < 0) {
+    // Two aerials on the roof.
+    for (const z of [0.16, -0.12]) tube(mb, [c.roofRear + 0.12, c.roof - 0.02, z], [c.roofRear + 0.05, c.roof + 0.12, z], 0.004, 0.003, 5, SATIN_BLACK);
+    for (const sgn of [1, -1] as const) {
+      // Shut lines: the doors, the bumpers, the bonnet, and the boot or the engine cover.
+      for (const x of proto ? [c.roofFront + 0.12, c.windowRear] : s.kind === 'touring' ? [doorFront, (doorFront + doorRear) / 2, doorRear] : [doorFront, doorRear]) {
+        loft.seamRound(mb, x, 'sill', 'base', SEAM_WIDTH, SEAM, sgn);
+      }
+      if (!proto) loft.seamAlong(mb, 'base', doorFront, doorRear, SEAM_WIDTH, SEAM, sgn);
+      loft.seamRound(mb, fa + R + 0.07, 'sill', 'belt', SEAM_WIDTH, SEAM, sgn);
+      loft.seamRound(mb, ra - R - 0.07, 'sill', 'belt', SEAM_WIDTH, SEAM, sgn);
+      loft.seamRound(mb, c.screenBase + 0.1, 'belt', 'spine', SEAM_WIDTH, SEAM, sgn);
+      loft.seamAlong(mb, 'belt', fa + R + 0.07, c.screenBase + 0.1, SEAM_WIDTH, SEAM, sgn);
+      loft.seamRound(mb, c.rearBase - 0.1, 'belt', 'spine', SEAM_WIDTH, SEAM, sgn);
     }
   }
   if (s.lightBar) {
@@ -683,12 +840,12 @@ function closedCar(s: ClosedSpec, lod: number): { body: CarMeshData; decals: Car
   return { body: mb.build(), decals: dm.build() };
 }
 
-function closedModel(s: ClosedSpec): CarModel {
+function closedModel(s: ClosedSpec): Unshaded {
   const fa = s.wheelbase / 2;
   const deck = curve(s.deck);
   const fwz = s.width / 2 - 0.012 - s.frontW / 2;
   const rwz = s.width / 2 - 0.012 - s.rearW / 2;
-  const lods = [0, 1, 2].map((lod) => ({ ...closedCar(s, lod), wheel: buildWheel(s.tyreR, s.rearW, s.rimR, lod, s.spokes) }));
+  const lods = [-1, 0, 1, 2].map((lod) => ({ ...closedCar(s, lod), wheel: buildWheel(s.tyreR, s.rearW, s.rimR, lod, s.spokes) }));
   return {
     id: s.id, kind: s.kind, length: s.wheelbase + s.front + s.rear, width: s.width, height: s.cabin.roof, wheelbase: s.wheelbase,
     wheels: [
@@ -850,9 +1007,9 @@ function bike(s: BikeSpec, lod: number): { body: CarMeshData; decals: CarMeshDat
   return { body: mb.build(), decals: dm.build() };
 }
 
-function bikeModel(s: BikeSpec): CarModel {
+function bikeModel(s: BikeSpec): Unshaded {
   const fa = s.wheelbase / 2;
-  const lods = [0, 1, 2].map((lod) => ({ ...bike(s, lod), wheel: buildBikeWheel(s.rearR, s.rearW, s.rimR, lod) }));
+  const lods = [-1, 0, 1, 2].map((lod) => ({ ...bike(s, lod), wheel: buildBikeWheel(s.rearR, s.rearW, s.rimR, lod) }));
   return {
     id: s.id, kind: 'bike', length: s.wheelbase + 0.4, width: 0.66, height: 1.16, wheelbase: s.wheelbase,
     wheels: [
@@ -869,7 +1026,10 @@ function bikeModel(s: BikeSpec): CarModel {
   };
 }
 
-const MODELS: Record<string, () => CarModel> = {
+/** A model before its shading is baked. */
+type Unshaded = Omit<CarModel, 'shadow'>;
+
+const MODELS: Record<string, () => Unshaded> = {
   f1: () => singleSeaterModel(F1),
   f2: () => singleSeaterModel(F2),
   indycar: () => singleSeaterModel(INDYCAR),
@@ -889,7 +1049,8 @@ const cache = new Map<string, CarModel>();
 export function buildCar(body: string): CarModel {
   let m = cache.get(body);
   if (!m) {
-    m = (MODELS[body] ?? MODELS.f1)();
+    const raw = (MODELS[body] ?? MODELS.f1)();
+    m = { ...raw, shadow: shade(raw.lods, raw.wheels, raw.wheelRadius, raw.wheelWidth) };
     cache.set(body, m);
   }
   return m;

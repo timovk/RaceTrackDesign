@@ -11,7 +11,7 @@
  * that time, just as the live race is drawn between its last two steps.
  */
 import type { TyreType } from './rules.ts';
-import { type CarStatus, DT, type RaceCar, type RaceSim } from './sim.ts';
+import { type CarStatus, DT, type RaceCar, type RaceSim, type DamageKind } from './sim.ts';
 
 /** What the 3D view needs to draw a race at a moment: the cars, the safety car, the time, and where a car stands. */
 export interface RaceView {
@@ -26,9 +26,11 @@ const STATUS: readonly CarStatus[] = ['running', 'pit', 'finished', 'retired'];
 const TYRES: readonly TyreType[] = ['slick', 'inter', 'wet'];
 /**
  * Per car per step: u, speed, lateral, status, pit progress, stopped in the box, compound, tyre type, DRS until,
- * where it retired (x, y), how far into its garage, how far it is turned round (a spin), whether it is off the road.
+ * where it retired (x, y), how far into its garage, how far it is turned round (a spin), whether it is off the road,
+ * its damage.
  */
-const FIELDS = 14;
+const FIELDS = 15;
+const DAMAGE: readonly (DamageKind | null)[] = [null, 'wing', 'puncture', 'body', 'terminal'];
 
 interface Step {
   t: number;
@@ -152,6 +154,7 @@ export class ReplayBuffer {
       d[o + 11] = car.garage;
       d[o + 12] = car.yaw;
       d[o + 13] = car.offTrack ? 1 : 0;
+      d[o + 14] = DAMAGE.indexOf(car.damage?.kind ?? null);
     }
     const sc = sim.safetyCar;
     step.scU = sc ? sc.u : NaN;
@@ -203,6 +206,7 @@ export class ReplayBuffer {
         prevYaw: Math.abs(now[o + 12] - before[o + 12]) > Math.PI ? now[o + 12] : before[o + 12],
         yaw: now[o + 12],
         offTrack: now[o + 13] === 1,
+        damage: DAMAGE[now[o + 14]] ? { kind: DAMAGE[now[o + 14]]!, pace: car.damage?.pace ?? 0 } : null,
       });
       return stand;
     });

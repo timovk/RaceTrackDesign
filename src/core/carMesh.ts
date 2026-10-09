@@ -2,7 +2,8 @@
  * Geometry toolkit for the 3D cars: a mesh builder carrying the car
  * material's attributes, cross-section paths, lofts (smooth bodies swept
  * along the car), airfoils, plates, tubes, surfaces of revolution and
- * decal patches.
+ * decal patches, and strips and patches laid on a loft (shut lines, pillars,
+ * vents).
  *
  * Car coordinates: x forward, y up, z to the right, in metres, with the
  * origin on the ground midway between the axles.
@@ -39,6 +40,21 @@ export const LAMP = {
   beaconB: 4,
 } as const;
 
+/** What a trim surface is made of, for the look the shader gives it: woven carbon, tyre rubber, glass. */
+export const MATERIAL = {
+  plain: 0,
+  carbon: 1,
+  rubber: 2,
+  glass: 3,
+} as const;
+
+/** Parts that move or come off: the DRS flap turns about its hinge; the nose part (a single-seater's front wing, a closed car's splitter) is gone once it is broken. */
+export const PART = {
+  none: 0,
+  flap: 1,
+  nose: 2,
+} as const;
+
 export interface Finish {
   roughness: number;
   metalness: number;
@@ -54,6 +70,8 @@ export interface Surface {
   finish: Finish;
   /** Which light it is (LAMP); none when absent. */
   lamp?: number;
+  /** What it is made of (MATERIAL); plain when absent. */
+  material?: number;
 }
 
 const WHITE = [1, 1, 1];
@@ -67,12 +85,14 @@ export function trim(color: readonly number[], finish: Partial<Finish> = {}): Su
   return { zone: ZONE.trim, color, finish: { roughness: 0.5, metalness: 0, clearcoat: 0, emissive: 0, ...finish } };
 }
 
-export const CARBON = trim([0.016, 0.017, 0.019], { roughness: 0.72, clearcoat: 0.12 });
+export const CARBON: Surface = { ...trim([0.02, 0.021, 0.024], { roughness: 0.42, clearcoat: 0.55 }), material: MATERIAL.carbon };
 export const SATIN_BLACK = trim([0.012, 0.012, 0.014], { roughness: 0.55 });
-export const RUBBER = trim([0.018, 0.018, 0.019], { roughness: 0.92 });
+export const RUBBER: Surface = { ...trim([0.02, 0.02, 0.021], { roughness: 0.9 }), material: MATERIAL.rubber };
+/** The gap between two panels: dark and dull. */
+export const SEAM = trim([0.004, 0.004, 0.005], { roughness: 0.95 });
 export const METAL = trim([0.55, 0.56, 0.58], { roughness: 0.28, metalness: 1 });
 export const DARK_METAL = trim([0.12, 0.125, 0.13], { roughness: 0.35, metalness: 1 });
-export const GLASS = trim([0.012, 0.016, 0.02], { roughness: 0.04, clearcoat: 1 });
+export const GLASS: Surface = { ...trim([0.02, 0.028, 0.034], { roughness: 0.04, clearcoat: 1 }), material: MATERIAL.glass };
 export const TINT: Surface = { zone: ZONE.tint, color: WHITE, finish: { roughness: 0.7, metalness: 0, clearcoat: 0, emissive: 0 } };
 
 export interface CarMeshData {
@@ -84,10 +104,14 @@ export interface CarMeshData {
   /** Per vertex: roughness, metalness, clearcoat, glow. */
   finish: Float32Array;
   zone: Float32Array;
-  /** Per vertex: the hinge (x, y) it turns about when the DRS flap opens, and 1 on the flap (0 elsewhere). */
+  /** Per vertex: the hinge (x, y) it turns about when the DRS flap opens, and the part it belongs to (PART: 1 on the flap, 0 on the car itself). */
   hinge: Float32Array;
   /** Per vertex: which light it belongs to (LAMP). */
   lamp: Float32Array;
+  /** Per vertex: what it is made of (MATERIAL). */
+  material: Float32Array;
+  /** Per vertex: how much of the sky it sees, 0 to 1 (1 until it is baked, see core/carShade.ts). */
+  ao: Float32Array;
   indices: Uint32Array;
 }
 
@@ -100,9 +124,12 @@ export class CarMeshBuilder {
   private zon: number[] = [];
   private hin: number[] = [];
   private lmp: number[] = [];
+  private mat: number[] = [];
   private idx: number[] = [];
   /** Vertices added from now on turn with the DRS flap about this hinge (x, y), when set. */
   flapHinge: [number, number] | null = null;
+  /** Vertices added from now on belong to this part (PART); the flap's hinge makes them the flap's. */
+  part: number = PART.none;
 
   get vertexCount(): number {
     return this.pos.length / 3;
@@ -121,8 +148,9 @@ export class CarMeshBuilder {
     this.fin.push(s.finish.roughness, s.finish.metalness, s.finish.clearcoat, s.finish.emissive);
     this.zon.push(s.zone);
     const h = this.flapHinge;
-    this.hin.push(h ? h[0] : 0, h ? h[1] : 0, h ? 1 : 0);
+    this.hin.push(h ? h[0] : 0, h ? h[1] : 0, h ? PART.flap : this.part);
     this.lmp.push(s.lamp ?? LAMP.none);
+    this.mat.push(s.material ?? MATERIAL.plain);
     return this.pos.length / 3 - 1;
   }
 
@@ -161,6 +189,7 @@ export class CarMeshBuilder {
       this.zon.push(this.zon[i]);
       this.hin.push(this.hin[i * 3], this.hin[i * 3 + 1], this.hin[i * 3 + 2]);
       this.lmp.push(this.lmp[i]);
+      this.mat.push(this.mat[i]);
     }
     const tris = this.idx.length;
     for (let t = fromTri * 3; t < tris; t += 3) {
@@ -197,6 +226,8 @@ export class CarMeshBuilder {
       zone: Float32Array.from(this.zon),
       hinge: Float32Array.from(this.hin),
       lamp: Float32Array.from(this.lmp),
+      material: Float32Array.from(this.mat),
+      ao: new Float32Array(this.lmp.length).fill(1),
       indices: Uint32Array.from(this.idx),
     };
   }
@@ -324,6 +355,8 @@ export class SectionPath {
   /** The surface of the segment ending at each point (the first point: the first segment's). */
   readonly surface: Surface[] = [];
   readonly hard: boolean[] = [];
+  /** Named points of the section (see `mark`), by their index. */
+  readonly marks = new Map<string, number>();
   private current: Surface;
 
   constructor(z: number, y: number, surface: Surface) {
@@ -348,6 +381,12 @@ export class SectionPath {
   /** Marks the current point as a crease. */
   crease(): this {
     this.hard[this.hard.length - 1] = true;
+    return this;
+  }
+
+  /** Names the current point, so that a strip can be laid along it or between two of them (Loft.seamAlong, seamRound). */
+  mark(name: string): this {
+    this.marks.set(name, this.z.length - 1);
     return this;
   }
 
@@ -408,6 +447,11 @@ export interface LoftOptions {
 export class Loft {
   /** Per ring: x, and the full ring's points (z, y) and outward normals in the section plane. */
   readonly rings: { x: number; z: number[]; y: number[] }[] = [];
+  /** The grid of the body: per ring the point and the unit normal of every column, and which point of the section a column is (on which side). */
+  private readonly grid: { p: V3; n: V3 }[][] = [];
+  private readonly columns: { src: number; side: 1 | -1 }[];
+  private readonly marks: ReadonlyMap<string, number>;
+  private readonly points: number;
 
   constructor(mb: CarMeshBuilder, o: LoftOptions) {
     const mirror = o.mirror ?? true;
@@ -442,6 +486,9 @@ export class Loft {
     }
     const nc = cols.length;
     const nr = paths.length;
+    this.columns = cols;
+    this.marks = paths[0].marks;
+    this.points = count;
     // Positions and livery v (arc length round each ring).
     const P: V3[][] = [];
     const V: number[][] = [];
@@ -505,6 +552,21 @@ export class Loft {
         row.push(mb.vertex(P[r][c], n, [o.u(o.stations[r]), V[r][c]], paths[r].surface[cols[c].seg]));
       }
       ids.push(row);
+      this.grid.push(P[r].map((p, c) => ({ p, n: norm(N[r][c]) })));
+    }
+    // (A column without faces of its own took the fallback above; give the grid the same.)
+    for (let r = 0; r < nr; r++) {
+      for (let c = 0; c < nc; c++) {
+        const n = this.grid[r][c].n;
+        if (Math.hypot(N[r][c][0], N[r][c][1], N[r][c][2]) < 1e-12) {
+          let cy = 0;
+          for (const q of P[r]) cy += q[1] / nc;
+          const f = norm([0, P[r][c][1] - cy, P[r][c][2] - offset(o.stations[r])]);
+          n[0] = f[0];
+          n[1] = f[1];
+          n[2] = f[2];
+        }
+      }
     }
     for (const [r, c, r1, c1] of faces) {
       // Skip faces between two rings at the same position.
@@ -533,37 +595,31 @@ export class Loft {
     }
   }
 
-  /**
-   * The point of the body under p, looking from the middle of its section
-   * at p's x: the surface point in the direction of p, with the outward
-   * normal there. Null outside the loft's length.
-   */
-  project(p: readonly number[]): { point: V3; normal: V3 } | null {
+  /** The ring interval that holds x (not one between two rings at the same place), and how far along it x lies. */
+  private locate(x: number): { r: number; f: number } | null {
     const rings = this.rings;
-    let r = -1;
     for (let i = 0; i + 1 < rings.length; i++) {
       const a = rings[i].x;
       const b = rings[i + 1].x;
-      if ((p[0] <= a && p[0] >= b) || (p[0] >= a && p[0] <= b)) {
-        if (Math.abs(a - b) < 1e-9) continue;
-        r = i;
-        break;
-      }
+      if (Math.abs(a - b) < 1e-9) continue;
+      if ((x <= a && x >= b) || (x >= a && x <= b)) return { r: i, f: (x - a) / (b - a) };
     }
-    if (r < 0) return null;
-    const A = rings[r];
-    const B = rings[r + 1];
-    const f = (p[0] - A.x) / (B.x - A.x);
-    const zs = A.z.map((z, i) => z + (B.z[i] - z) * f);
-    const ys = A.y.map((y, i) => y + (B.y[i] - y) * f);
-    let cz = 0;
-    let cy = 0;
-    for (let i = 0; i < zs.length; i++) {
-      cz += zs[i] / zs.length;
-      cy += ys[i] / ys.length;
-    }
-    const dz = p[2] - cz;
-    const dy = p[1] - cy;
+    return null;
+  }
+
+  /**
+   * A ray in the section at x, from (oz, oy) along (dz, dy), against the
+   * body's outline there: the last point it leaves the body by (`far`), or
+   * the first it meets, with the outline's normal on the side the ray comes
+   * from or leaves to. Null when it misses, or outside the loft's length.
+   */
+  private cast(x: number, oz: number, oy: number, dz: number, dy: number, far: boolean): { point: V3; normal: V3 } | null {
+    const at = this.locate(x);
+    if (!at) return null;
+    const A = this.rings[at.r];
+    const B = this.rings[at.r + 1];
+    const zs = A.z.map((z, i) => z + (B.z[i] - z) * at.f);
+    const ys = A.y.map((y, i) => y + (B.y[i] - y) * at.f);
     let best: { t: number; z: number; y: number; nz: number; ny: number } | null = null;
     for (let i = 0; i < zs.length; i++) {
       const j = (i + 1) % zs.length;
@@ -571,24 +627,160 @@ export class Loft {
       const ey = ys[j] - ys[i];
       const den = dz * ey - dy * ez;
       if (Math.abs(den) < 1e-12) continue;
-      // Ray c + t (dz, dy) against the edge i + s (ez, ey).
-      const t = ((zs[i] - cz) * ey - (ys[i] - cy) * ez) / den;
-      const s = ((zs[i] - cz) * dy - (ys[i] - cy) * dz) / den;
+      // Ray o + t (dz, dy) against the edge i + s (ez, ey).
+      const t = ((zs[i] - oz) * ey - (ys[i] - oy) * ez) / den;
+      const s = ((zs[i] - oz) * dy - (ys[i] - oy) * dz) / den;
       if (t <= 0 || s < 0 || s > 1) continue;
-      if (!best || t > best.t) {
-        // Outward: the edge normal pointing away from the centre.
+      if (!best || (far ? t > best.t : t < best.t)) {
+        // The edge's normal: pointing the way the ray goes when it leaves the body, against it when it arrives.
         let nz = ey;
         let ny = -ez;
-        if (nz * dz + ny * dy < 0) {
+        if ((nz * dz + ny * dy < 0) === far) {
           nz = -nz;
           ny = -ny;
         }
-        best = { t, z: cz + dz * t, y: cy + dy * t, nz, ny };
+        best = { t, z: oz + dz * t, y: oy + dy * t, nz, ny };
       }
     }
     if (!best) return null;
-    return { point: [p[0], best.y, best.z], normal: norm([0, best.ny, best.nz]) };
+    return { point: [x, best.y, best.z], normal: norm([0, best.ny, best.nz]) };
   }
+
+  /**
+   * The point of the body under p, looking from the middle of its section
+   * at p's x: the surface point in the direction of p, with the outward
+   * normal there. Null outside the loft's length.
+   */
+  project(p: readonly number[]): { point: V3; normal: V3 } | null {
+    const at = this.locate(p[0]);
+    if (!at) return null;
+    const A = this.rings[at.r];
+    const B = this.rings[at.r + 1];
+    let cz = 0;
+    let cy = 0;
+    for (let i = 0; i < A.z.length; i++) {
+      cz += (A.z[i] + (B.z[i] - A.z[i]) * at.f) / A.z.length;
+      cy += (A.y[i] + (B.y[i] - A.y[i]) * at.f) / A.y.length;
+    }
+    return this.cast(p[0], cz, cy, p[2] - cz, p[1] - cy, true);
+  }
+
+  /** The top of the body at x, straight above the point z across the car. */
+  drop(x: number, z: number): { point: V3; normal: V3 } | null {
+    return this.cast(x, z, 50, 0, -1, false);
+  }
+
+  /** The side of the body at x and height y: the right side (`side` 1) or the left. */
+  flank(x: number, y: number, side: 1 | -1): { point: V3; normal: V3 } | null {
+    return this.cast(x, side * 50, y, -side, 0, false);
+  }
+
+  /** The column of a marked point of the section, on the right side or the left (a point on the centre line is the same on both). */
+  private column(mark: string, side: 1 | -1): number {
+    const src = this.marks.get(mark);
+    if (src === undefined) throw new Error(`No point "${mark}" in this section.`);
+    const centre = src === 0 || src === this.points - 1;
+    const c = this.columns.findIndex((col) => col.src === src && (centre || col.side === side));
+    if (c < 0) throw new Error(`No column for "${mark}" on that side.`);
+    // On the left the columns run on from the top centre and wrap round to the bottom centre.
+    return side < 0 && src === 0 ? this.columns.length : c;
+  }
+
+  /** The body at x on a column: the point and the unit normal there, between the two rings x lies between. */
+  private onColumn(x: number, c: number): { p: V3; n: V3; r: number } | null {
+    const at = this.locate(x);
+    if (!at) return null;
+    const a = this.grid[at.r][c];
+    const b = this.grid[at.r + 1][c];
+    return { p: add(a.p, sub(b.p, a.p), at.f), n: norm(add(a.n, sub(b.n, a.n), at.f)), r: at.r };
+  }
+
+  /**
+   * A strip laid on the body along a marked point of its section, from x0
+   * back to x1: `width` wide across the line, lifted off the surface. For a
+   * shut line along the car, or a pillar between two panes of glass.
+   */
+  seamAlong(mb: CarMeshBuilder, mark: string, x0: number, x1: number, width: number, surface: Surface, side: 1 | -1 = 1, lift = 0.003): void {
+    const nc = this.columns.length;
+    const c = this.column(mark, side) % nc;
+    const [front, rear] = x0 > x1 ? [x0, x1] : [x1, x0];
+    const xs = [front, ...this.rings.map((r) => r.x).filter((x, i, all) => x < front - 1e-6 && x > rear + 1e-6 && all.indexOf(x) === i), rear];
+    // The neighbours round the ring that are another point of the section (a crease has two columns at one point).
+    const other = (step: 1 | -1) => {
+      let k = c;
+      for (let i = 0; i < 4; i++) {
+        k = (k + step + nc) % nc;
+        if (this.columns[k].src !== this.columns[c].src || this.columns[k].side !== this.columns[c].side) break;
+      }
+      return k;
+    };
+    const before = other(-1);
+    const after = other(1);
+    const rows: [number, number][] = [];
+    for (const x of xs) {
+      const at = this.onColumn(x, c);
+      const a = this.onColumn(x, before);
+      const b = this.onColumn(x, after);
+      if (!at || !a || !b) continue;
+      // Across the line: round the ring, in the surface.
+      const round = sub(b.p, a.p);
+      const across = norm(sub(round, add([0, 0, 0], at.n, dot(round, at.n))));
+      const p = add(at.p, at.n, lift);
+      rows.push([mb.vertex(add(p, across, -width / 2), at.n, [0.5, 0.5], surface), mb.vertex(add(p, across, width / 2), at.n, [0.5, 0.5], surface)]);
+    }
+    for (let i = 0; i + 1 < rows.length; i++) mb.quad(rows[i][0], rows[i][1], rows[i + 1][1], rows[i + 1][0]);
+  }
+
+  /**
+   * A strip laid round the body at x, from one marked point of the section
+   * to another: `width` wide along the car. For a shut line across the car.
+   */
+  seamRound(mb: CarMeshBuilder, x: number, from: string, to: string, width: number, surface: Surface, side: 1 | -1 = 1, lift = 0.003): void {
+    const nc = this.columns.length;
+    let a = this.column(from, side);
+    let b = this.column(to, side);
+    if (a > b) [a, b] = [b, a];
+    const rows: [number, number][] = [];
+    let last: V3 | null = null;
+    for (let k = a; k <= b; k++) {
+      const at = this.onColumn(x, k % nc);
+      if (!at) return;
+      if (last && Math.hypot(at.p[1] - last[1], at.p[2] - last[2]) < 1e-6) continue;
+      last = at.p;
+      // Along the car, in the surface.
+      const g = this.grid;
+      const along = sub(g[at.r][k % nc].p, g[at.r + 1][k % nc].p);
+      const dir = norm(sub(along, add([0, 0, 0], at.n, dot(along, at.n))));
+      const p = add(at.p, at.n, lift);
+      rows.push([mb.vertex(add(p, dir, width / 2), at.n, [0.5, 0.5], surface), mb.vertex(add(p, dir, -width / 2), at.n, [0.5, 0.5], surface)]);
+    }
+    for (let i = 0; i + 1 < rows.length; i++) mb.quad(rows[i][0], rows[i][1], rows[i + 1][1], rows[i + 1][0]);
+  }
+}
+
+/**
+ * A patch laid on a loft, of its own surface: a vent, a grille, a louvre.
+ * On top of the body (`face` 'top': centred on x and z, `w` long and `h`
+ * across), or on a side ('right', 'left': centred on x and the height y,
+ * `w` long and `h` high). Each point of its grid goes straight down or
+ * straight in onto the body and is lifted off it.
+ */
+export function patch(
+  mb: CarMeshBuilder, body: Loft, face: 'top' | 'right' | 'left', x: number, at: number, w: number, h: number, surface: Surface, nx = 4, ny = 2, lift = 0.004,
+): void {
+  const ids: number[][] = [];
+  for (let j = 0; j <= ny; j++) {
+    const row: number[] = [];
+    for (let i = 0; i <= nx; i++) {
+      const px = x + (i / nx - 0.5) * w;
+      const q = at + (j / ny - 0.5) * h;
+      const hit = face === 'top' ? body.drop(px, q) : body.flank(px, q, face === 'right' ? 1 : -1);
+      if (!hit) return;
+      row.push(mb.vertex(add(hit.point, hit.normal, lift), hit.normal, [0.5, 0.5], surface));
+    }
+    ids.push(row);
+  }
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) mb.quad(ids[j][i], ids[j][i + 1], ids[j + 1][i + 1], ids[j + 1][i]);
 }
 
 // ---- decals --------------------------------------------------------------------
@@ -969,8 +1161,10 @@ export function ellipsoid(
   }
 }
 
-/** A box between two corners. */
-export function box(mb: CarMeshBuilder, lo: V3, hi: V3, surface: Surface, u = 0.5): void {
+/** A box between two opposite corners, in either order. */
+export function box(mb: CarMeshBuilder, a: V3, b: V3, surface: Surface, u = 0.5): void {
+  const lo: V3 = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.min(a[2], b[2])];
+  const hi: V3 = [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.max(a[2], b[2])];
   const faces: { n: V3; pts: V3[] }[] = [
     { n: [1, 0, 0], pts: [[hi[0], lo[1], lo[2]], [hi[0], hi[1], lo[2]], [hi[0], hi[1], hi[2]], [hi[0], lo[1], hi[2]]] },
     { n: [-1, 0, 0], pts: [[lo[0], lo[1], hi[2]], [lo[0], hi[1], hi[2]], [lo[0], hi[1], lo[2]], [lo[0], lo[1], lo[2]]] },

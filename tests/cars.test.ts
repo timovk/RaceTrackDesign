@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BODIES, buildCar } from '../src/core/carBodies.ts';
-import { CarMeshBuilder, type CarMeshData, LAMP, Loft, SectionPath, ZONE, curve, paint, plate, triangulate } from '../src/core/carMesh.ts';
+import { CarMeshBuilder, type CarMeshData, LAMP, Loft, PART, SectionPath, ZONE, curve, paint, plate, triangulate } from '../src/core/carMesh.ts';
 import { bodyFor, liveryFor, spreadCars } from '../src/core/raceCars.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
 
@@ -100,15 +100,19 @@ describe('car geometry toolkit', () => {
 
 describe('car models', () => {
   for (const body of BODIES) {
-    it(`${body}: builds at three levels of detail, real size, on its wheels`, () => {
+    it(`${body}: builds at four levels of detail, real size, on its wheels`, () => {
       const car = buildCar(body);
-      expect(car.lods).toHaveLength(3);
+      expect(car.lods).toHaveLength(4);
       const counts = car.lods.map((l) => l.body.indices.length / 3);
-      // Less detail at each level, and within budget.
-      expect(counts[0]).toBeGreaterThan(counts[1]);
-      expect(counts[1]).toBeGreaterThan(counts[2]);
-      expect(counts[0]).toBeLessThan(30_000);
+      // Less detail at each level, and within budget: the level for close-ups, full, medium, far.
+      for (let i = 1; i < 4; i++) expect(counts[i - 1]).toBeGreaterThan(counts[i]);
+      expect(counts[0]).toBeLessThan(45_000);
+      expect(counts[1]).toBeLessThan(14_000);
       expect(counts[2]).toBeLessThan(4_000);
+      expect(counts[3]).toBeLessThan(1_500);
+      // A wheel is rounder at each level too.
+      const wheels = car.lods.map((l) => l.wheel.indices.length / 3);
+      for (let i = 1; i < 4; i++) expect(wheels[i - 1]).toBeGreaterThan(wheels[i]);
       const b = bounds(car.lods[0].body);
       // Within a few centimetres of its length, width and height, on the ground.
       expect(b.hi[0] - b.lo[0]).toBeGreaterThan(car.length * 0.92);
@@ -129,7 +133,7 @@ describe('car models', () => {
       }
       expect(car.wheels.filter((w) => w.front)).toHaveLength(car.kind === 'bike' ? 1 : 2);
       // Faces point the way their vertex normals do.
-      for (const f of faces(car.lods[1].body)) expect(f.n[0] * f.vn[0] + f.n[1] * f.vn[1] + f.n[2] * f.vn[2]).toBeGreaterThan(-1e-9);
+      for (const f of faces(car.lods[2].body)) expect(f.n[0] * f.vn[0] + f.n[1] * f.vn[1] + f.n[2] * f.vn[2]).toBeGreaterThan(-1e-9);
       // Number decals at full detail, in the decal cell.
       const d = car.lods[0].decals;
       expect(d.indices.length).toBeGreaterThan(0);
@@ -168,11 +172,11 @@ describe('car models', () => {
   it('turns only the DRS flap of a single-seater about its hinge', () => {
     const f1 = buildCar('f1').lods[0].body;
     let flap = 0;
-    for (let i = 0; i < f1.hinge.length; i += 3) if (f1.hinge[i + 2] > 0.5) flap++;
+    for (let i = 0; i < f1.hinge.length; i += 3) if (f1.hinge[i + 2] === PART.flap) flap++;
     expect(flap).toBeGreaterThan(20);
     expect(flap).toBeLessThan(f1.positions.length / 3 / 10);
     const gt = buildCar('gt3').lods[0].body;
-    for (let i = 0; i < gt.hinge.length; i += 3) expect(gt.hinge[i + 2]).toBe(0);
+    for (let i = 0; i < gt.hinge.length; i += 3) expect(gt.hinge[i + 2]).not.toBe(PART.flap);
   });
 
   it('carries onboard cameras: above the driver and on the nose looking ahead, and one looking back', () => {

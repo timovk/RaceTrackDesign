@@ -1,9 +1,13 @@
 /**
  * The race in the 3D view: every car (and the safety car) drawn as its
  * model, in its team's livery, where the race puts it; wheels turning and
- * steering, bikes leaning into corners, DRS flaps opening, a soft shadow
- * underneath. Cars sit on the drawn ground at their real size whatever the
- * height exaggeration, tilted with the road.
+ * steering, bikes leaning into corners, DRS flaps opening, the model's own
+ * shadow on the road underneath. Cars sit on the drawn ground at their real
+ * size whatever the height exaggeration, tilted with the road.
+ *
+ * A car's damage shows: a broken front wing (or splitter) is gone, a car
+ * that was hit has scuffed paint, a punctured tyre is flat and the car sags
+ * towards it, and a car that crashed out is a wreck.
  *
  * In the wet the rear (rain) lights come on, closed cars switch their
  * headlights up, and the safety car flashes its beacons in turn while it is
@@ -11,9 +15,10 @@
  * more widely in the wet. The cars on track are also the sources of the
  * spray (ui/weatherLayer.ts).
  *
- * Each car model is instanced per level of detail; a car takes the level
- * that its size on screen calls for, so a car seen through a long lens
- * keeps its detail. Cars that would overlap are moved side by side
+ * Each car model is instanced per level of detail (four of them); a car
+ * takes the level that its size on screen calls for, so a car seen through
+ * a long lens keeps its detail and one that fills the picture gets the
+ * finest. Cars that would overlap are moved side by side
  * (core/raceCars.ts) in the picture only.
  *
  * Positions are scene coordinates (x east, y up, z south), outside the
@@ -30,7 +35,7 @@ import type { RacingLine } from '../core/racingLine.ts';
 import { type Earthworks, SINK } from '../core/scene3d.ts';
 import { TrackIndex } from '../core/scenery.ts';
 import type { SprayBody } from '../core/weatherFx.ts';
-import { type DecalCar, DECAL_GRID, LIGHTS, carGeometry, carMaterial, decalAtlas, decalMaterial, linearRgb, shadowTexture } from './carMaterials.ts';
+import { DAMAGE, type DecalCar, DECAL_GRID, LIGHTS, carGeometry, carMaterial, decalAtlas, decalMaterial, groundShadowMesh, linearRgb } from './carMaterials.ts';
 
 interface LodMeshes {
   body: THREE.InstancedMesh;
@@ -41,6 +46,8 @@ interface LodMeshes {
 interface BodySet {
   model: CarModel;
   lods: LodMeshes[];
+  /** The model's shadow on the road, one per car whatever its level of detail. */
+  shadow: THREE.InstancedMesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
   capacity: number;
 }
 
@@ -60,6 +67,8 @@ export interface ShownCar {
   id: number;
   look: CarLook;
   matrix: THREE.Matrix4;
+  /** Where it stands on the road, without the lean of a bike or the sag of a flat tyre: for its shadow. */
+  ground: THREE.Matrix4;
   wheels: THREE.Matrix4[];
   /** Middle of the car, scene coordinates. */
   position: THREE.Vector3;
@@ -68,6 +77,9 @@ export interface ShownCar {
   lod: number;
   /** Which lights are on (LIGHTS bits). */
   lights: number;
+  /** What of its damage shows (DAMAGE bits), and which wheel has a flat tyre (-1: none). */
+  damage: number;
+  flat: number;
 }
 
 /** A car on track throwing up spray: where it is on the racing line, how fast it goes, and its size. */
@@ -95,9 +107,15 @@ export interface CarContext {
   clock: number;
 }
 
-/** Projected length in pixels above which a car takes the full model, and the medium one. */
+/** Projected length in pixels above which a car takes the close-up model, the full one, and the medium one. */
+const LOD_CLOSE = 420;
 const LOD_FULL = 150;
 const LOD_MEDIUM = 36;
+/** A flat tyre: the wheel sits this much lower (metres), and the car leans this far towards it (radians). */
+const FLAT_DROP = 0.045;
+const FLAT_LEAN = 0.016;
+/** Which wheel of a car's four goes flat, by the car's number. */
+const FLAT_WHEEL = [2, 1, 3, 0];
 const SAFETY_ID = -1;
 
 /** The glow round a light that is on: its colour, its width (metres), and which way it shines (+1 forward, -1 back, 0 all round). */
@@ -127,11 +145,9 @@ export class CarLayer {
   readonly group = new THREE.Group();
   private envMap: THREE.Texture;
   private readonly material: THREE.MeshPhysicalMaterial;
-  private readonly shadowMaterial: THREE.MeshBasicMaterial;
   private decalMat: THREE.MeshPhysicalMaterial | null = null;
   private atlas: THREE.Texture | null = null;
   private sets = new Map<string, BodySet>();
-  private shadowMesh: THREE.InstancedMesh | null = null;
   private glowMesh: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial> | null = null;
   private readonly camPos = new THREE.Vector3();
   private pxPerM = 1000;
@@ -153,10 +169,6 @@ export class CarLayer {
   constructor(envMap: THREE.Texture) {
     this.envMap = envMap;
     this.material = carMaterial(this.envMap);
-    this.shadowMaterial = new THREE.MeshBasicMaterial({
-      map: shadowTexture(), transparent: true, depthWrite: false, color: 0x000000, opacity: 0.6,
-      polygonOffset: true, polygonOffsetFactor: -6, polygonOffsetUnits: -6,
-    });
   }
 
   /** The sky reflected in the paint: clear or overcast. */
@@ -197,11 +209,6 @@ export class CarLayer {
     });
     this.looks = sim.cars.map((car, i) => look(this.sets.get(bodyOf(car))!, liveryFor(car.entrant.team, car.entrant.color), i));
     this.safetyLook = look(this.sets.get('safety-car')!, SAFETY_LIVERY, sim.cars.length);
-    this.shadowMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), this.shadowMaterial, sim.cars.length + 1);
-    this.shadowMesh.frustumCulled = false;
-    this.shadowMesh.count = 0;
-    this.shadowMesh.renderOrder = 1;
-    this.group.add(this.shadowMesh);
     this.glowMesh = glowMesh((sim.cars.length + 1) * 4);
     this.group.add(this.glowMesh);
   }
@@ -218,11 +225,14 @@ export class CarLayer {
         m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
         this.group.add(m);
       }
-      body.castShadow = i < 2;
-      wheels.castShadow = i < 2;
+      // (All but the far level cast the sun's shadow.)
+      body.castShadow = i < 3;
+      wheels.castShadow = i < 3;
       return { body, decals, wheels };
     });
-    return { model, lods, capacity };
+    const shadow = groundShadowMesh(model.shadow, capacity);
+    this.group.add(shadow);
+    return { model, lods, shadow, capacity };
   }
 
   private clear(): void {
@@ -234,14 +244,13 @@ export class CarLayer {
           m.dispose();
         }
       }
+      this.group.remove(set.shadow);
+      set.shadow.geometry.dispose();
+      set.shadow.material.map?.dispose();
+      set.shadow.material.dispose();
+      set.shadow.dispose();
     }
     this.sets.clear();
-    if (this.shadowMesh) {
-      this.group.remove(this.shadowMesh);
-      this.shadowMesh.geometry.dispose();
-      this.shadowMesh.dispose();
-      this.shadowMesh = null;
-    }
     if (this.glowMesh) {
       this.group.remove(this.glowMesh);
       this.glowMesh.geometry.dispose();
@@ -307,22 +316,41 @@ export class CarLayer {
       if (closed && wetLights) lights |= LIGHTS.head;
       return lights;
     };
-    const place = (id: number, look: CarLook, x: number, y: number, heading: number, dist: number, speed: number, curvature: number, steerK: number, drs: number, compound: [number, number, number], lights: number) => {
+    // What of a car's damage shows: a broken wing has lost the nose part, a car that was hit is scuffed, one that crashed out is a wreck.
+    const damageOf = (car: RaceCar) => {
+      const kind = car.damage?.kind;
+      if (kind === 'terminal' || (car.status === 'retired' && car.retired?.heading !== undefined)) return DAMAGE.nose | DAMAGE.wrecked;
+      return kind === 'wing' ? DAMAGE.nose : kind === 'body' ? DAMAGE.scuffed : 0;
+    };
+    const flatOf = (car: RaceCar) => (car.damage?.kind === 'puncture' && this.looks[car.id].set.model.wheels.length === 4 ? FLAT_WHEEL[car.id % 4] : -1);
+    const place = (
+      id: number, look: CarLook, x: number, y: number, heading: number, dist: number, speed: number, curvature: number, steerK: number, drs: number,
+      compound: [number, number, number], lights: number, damage = 0, flat = -1,
+    ) => {
       const model = look.set.model;
       let s = this.pool.get(id);
       if (!s || s.look !== look) {
-        s = { id, look, matrix: new THREE.Matrix4(), wheels: model.wheels.map(() => new THREE.Matrix4()), position: new THREE.Vector3(), drs, compound, lod: 2, lights };
+        s = {
+          id, look, matrix: new THREE.Matrix4(), ground: new THREE.Matrix4(), wheels: model.wheels.map(() => new THREE.Matrix4()), position: new THREE.Vector3(),
+          drs, compound, lod: 3, lights, damage, flat,
+        };
         this.pool.set(id, s);
       }
       s.lights = lights;
+      s.damage = damage;
+      s.flat = flat;
       const cx = Math.cos(heading);
       const cy = Math.sin(heading);
       const half = model.wheelbase / 2;
       const yf = ctx.sceneY(surface(x + cx * half, y + cy * half));
       const yr = ctx.sceneY(surface(x - cx * half, y - cy * half));
       const pitch = Math.atan2(yf - yr, model.wheelbase);
-      const roll = model.kind === 'bike' ? Math.max(-1.0, Math.min(1.0, Math.atan((speed * speed * curvature) / 9.81))) : 0;
-      tmpV.set(x, (yf + yr) / 2, y);
+      // A bike leans into the corner; a car with a flat tyre sags towards it (its right side goes down with a positive roll).
+      const sag = flat >= 0 ? (model.wheels[flat].z > 0 ? FLAT_LEAN : -FLAT_LEAN) : 0;
+      const roll = model.kind === 'bike' ? Math.max(-1.0, Math.min(1.0, Math.atan((speed * speed * curvature) / 9.81))) : sag;
+      tmpV.set(x, (yf + yr) / 2 + 0.03, y);
+      s.ground.compose(tmpV, tmpQ.setFromEuler(tmpE.set(0, -heading, pitch, 'YZX')), ONE);
+      tmpV.y -= 0.03;
       tmpQ.setFromEuler(tmpE.set(roll, -heading, pitch, 'YZX'));
       s.matrix.compose(tmpV, tmpQ, ONE);
       const steer = Math.max(-0.45, Math.min(0.45, Math.atan(model.wheelbase * steerK)));
@@ -334,14 +362,14 @@ export class CarLayer {
         if (flip) tmpQ.multiply(FLIP);
         tmpQ.multiply(tmpQ2.setFromAxisAngle(AXIS_Z, spin));
         tmpS.set(w.radius / model.wheelRadius, w.radius / model.wheelRadius, w.width / model.wheelWidth);
-        tmpM.compose(tmpV2.set(w.x, w.y, w.z), tmpQ, tmpS);
+        tmpM.compose(tmpV2.set(w.x, w.y - (j === flat ? FLAT_DROP : 0), w.z), tmpQ, tmpS);
         s!.wheels[j].multiplyMatrices(s!.matrix, tmpM);
       });
       s.position.set(0, model.height / 2, 0).applyMatrix4(s.matrix);
       s.drs = drs;
       s.compound = compound;
       const px = (model.length / Math.max(1, camera.position.distanceTo(s.position))) * pxPerM;
-      s.lod = px > LOD_FULL ? 0 : px > LOD_MEDIUM ? 1 : 2;
+      s.lod = px > LOD_CLOSE ? 0 : px > LOD_FULL ? 1 : px > LOD_MEDIUM ? 2 : 3;
       shown.push(s);
     };
     for (const car of view.cars) {
@@ -355,7 +383,7 @@ export class CarLayer {
         // Parked beside the track, turned off the racing line; or as it came to rest after a crash.
         const near = car.retired?.heading === undefined ? this.index?.nearest(pose.x, pose.y, 60) : null;
         const heading = car.retired?.heading ?? (near ? t.heading[near.k] + 0.5 : 0);
-        place(car.id, look, pose.x, pose.y, heading, 0, 0, 0, 0, 0, compound, 0);
+        place(car.id, look, pose.x, pose.y, heading, 0, 0, 0, 0, 0, compound, 0, damageOf(car), flatOf(car));
         continue;
       }
       if (car.status === 'pit') {
@@ -370,7 +398,7 @@ export class CarLayer {
         const x = pose.x + Math.sin(pose.heading) * off;
         const y = pose.y - Math.cos(pose.heading) * off;
         const p = car.pit ? car.pit.prevP + (car.pit.p - car.pit.prevP) * alpha : 0;
-        place(car.id, look, x, y, pose.heading, p, car.v, 0, 0, 0, compound, lightsOf(car));
+        place(car.id, look, x, y, pose.heading, p, car.v, 0, 0, 0, compound, lightsOf(car), damageOf(car), flatOf(car));
         continue;
       }
       this.aside.delete(car.id);
@@ -384,7 +412,7 @@ export class CarLayer {
       else if (along > 0.05) p.heading -= Math.atan2(car.lateral - car.prevLateral, along);
       const k = Math.floor(((u % n) + n) % n) % n;
       const drs = car.drsUntilU > u ? 1 : 0;
-      place(car.id, look, p.x, p.y, p.heading, u * ds, car.v, line.curvature[k], line.curvature[k], drs, compound, lightsOf(car));
+      place(car.id, look, p.x, p.y, p.heading, u * ds, car.v, line.curvature[k], line.curvature[k], drs, compound, lightsOf(car), damageOf(car), flatOf(car));
       emitters.push({ id: car.id, u, lateral, speed: car.v, body: sprayBody(look.set.model.kind), length: look.set.model.length, width: look.set.model.width });
     }
     const sc = view.safetyCar;
@@ -424,6 +452,7 @@ export class CarLayer {
         const livB = g.getAttribute('livB') as THREE.InstancedBufferAttribute;
         const livC = g.getAttribute('livC') as THREE.InstancedBufferAttribute;
         const style = g.getAttribute('livStyle') as THREE.InstancedBufferAttribute;
+        const state = g.getAttribute('carState') as THREE.InstancedBufferAttribute;
         const cell = lod.decals.geometry.getAttribute('decalCell') as THREE.InstancedBufferAttribute;
         const tint = lod.wheels.geometry.getAttribute('livA') as THREE.InstancedBufferAttribute;
         cars.forEach((s, i) => {
@@ -433,29 +462,24 @@ export class CarLayer {
           livB.setXYZ(i, ...s.look.b);
           livC.setXYZ(i, ...s.look.c);
           style.setXYZW(i, s.look.pattern, s.look.variation, s.drs, s.lights);
+          // Its damage, and a number of its own so that no two cars are scuffed alike.
+          state.setXYZW(i, s.damage, ((s.id + 2) * 0.6180339887) % 1, 0, 0);
           cell.setXY(i, ...s.look.cell);
           s.wheels.forEach((w, j) => {
             lod.wheels.setMatrixAt(i * wheelsPer + j, w);
             tint.setXYZ(i * wheelsPer + j, ...s.compound);
           });
         });
-        for (const a of [livA, livB, livC, style, cell, tint]) a.needsUpdate = true;
+        for (const a of [livA, livB, livC, style, state, cell, tint]) a.needsUpdate = true;
         lod.body.instanceMatrix.needsUpdate = true;
         lod.decals.instanceMatrix.needsUpdate = true;
         lod.wheels.instanceMatrix.needsUpdate = true;
       }
-    }
-    const sh = this.shadowMesh;
-    if (sh) {
-      sh.count = this.shown.length;
-      this.shown.forEach((s, i) => {
-        const model = s.look.set.model;
-        s.matrix.decompose(tmpV, tmpQ, tmpS);
-        tmpV.y += 0.03;
-        tmpS.set(model.length * 1.08, 1, model.width * (model.kind === 'bike' ? 1.6 : 1.2));
-        sh.setMatrixAt(i, tmpM.compose(tmpV, tmpQ, tmpS));
-      });
-      sh.instanceMatrix.needsUpdate = true;
+      // The model's shadow under each of its cars.
+      const cars = this.shown.filter((s) => s.look.set === set);
+      set.shadow.count = cars.length;
+      cars.forEach((s, i) => set.shadow.setMatrixAt(i, s.ground));
+      set.shadow.instanceMatrix.needsUpdate = true;
     }
     this.writeGlow();
   }
@@ -560,8 +584,6 @@ export class CarLayer {
   dispose(): void {
     this.clear();
     this.material.dispose();
-    this.shadowMaterial.map?.dispose();
-    this.shadowMaterial.dispose();
   }
 }
 

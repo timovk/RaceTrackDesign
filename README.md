@@ -34,6 +34,7 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | S4 | Side-by-side racing, step 4: the stewards: who is to blame for a contact, and each series' own penalties, served in the race or added to the race time | **done** |
 | S5 | Side-by-side racing, step 5: restarts and the safety car queue (the leader holds the field up and picks its moment, lapped cars are sent round, a standing restart goes as the start does), and a TV director that shows it | **done** |
 | TS | Trackside: advertising boards and gantries, a crowd in the grandstands, a pit building with numbered garages, a race control tower and a podium, and tyre marks on the asphalt | **done** |
+| G4 | Graphics, phase 4: the cars. A finer model for close-ups with the shut lines between the panels; vents, louvres, pillars, exhausts and brake discs; woven carbon, tyre rubber and glass; shading baked into the crevices; each car's own shadow on the road; damage that shows | **done** |
 
 What comes next, and what was proposed and never decided, is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -129,7 +130,10 @@ Warnings flag corners tighter than the track is wide, very tight corners, steep 
 - Cars are where the race has them across the road: side by side through a pass, turned the way they move when they pull out, on the grass beside the road after a mistake, and turning round in a spin. A car that has crashed stays where it came to rest. Bikes, which still race in one line, are drawn side by side where they would overlap.
 - Cars leave tyre marks that stay for the rest of the race: wheelspin off the grid at a standing start, two black lines where a driver locks up into a corner or brakes too late for a pass, and a slide across the road in a spin. A replay shows the road as it was at that moment.
 - Click a car to select it, as in the timing tower; with **Follow** on, the camera keeps the selected car in view. The driver codes and positions show over the cars nearest the camera.
-- Cars cast shadows in the sun, their paint reflects the sky, and they keep their size whatever the **Height**.
+- A car that fills the picture gets a finer model with the shut lines between its panels. From further away it keeps its vents and louvres, the pillars round its windows, exhausts, a wiper, dive planes, and brake discs behind the spokes; a Formula 1 car its floor fences, diffuser strakes, brake drums and cooling louvres.
+- Carbon parts show their weave close up, tyres are rubber with a scuffed tread and lettering on the sidewall that turns with the wheel, and glass shows a little of the cabin when looked into and the sky at a glancing angle. The crevices are shaded: under the wings, in the wheel arches, round the cockpit and underneath.
+- Damage shows: a broken front wing (or a closed car's splitter) is gone until the pits fit a new one, a car that was hit carries scratches, a punctured tyre is flat with the car sagging towards it, and a car that crashed out stands there as a wreck.
+- Cars cast shadows in the sun and lay a shadow of their own shape on the road right under them, their paint reflects the sky, and they keep their size whatever the **Height**.
 
 **TV.** In Race mode the **TV** button in the 3D toolbar shows the race as a broadcast, with a director choosing what to show and from where.
 - Cameras stand where a circuit puts them: a tower beyond the run-off at every corner, one behind the grid, one over the pit lane, one beside every long straight, and more wherever the track would otherwise be out of sight. Each pans and zooms with its car through a long lens; the helicopter hangs high off to one side, circles slowly and climbs when a hill gets in the way. Trees standing in a camera's line of sight to the track are cleared once the broadcast starts, as at a real circuit.
