@@ -69,6 +69,14 @@
       "calibration": {"laps": 2, "rmsError": 0.0247}
     },
     {
+      "id": "f1-1950", "name": "Formula 1 1950", "spec": "Alfa Romeo 158", "kind": "car", "color": "#c1272d",
+      "mass": 850, "powerKw": 240, "cdA": [0.74, 0.74], "clA": [0, 0],
+      "grip": 0.765, "loadSensitivity": 0.03, "driveShare": 0.52, "rollingResistance": 0.018,
+      "drs": 0, "topSpeedKmh": 290, "gears": 4, "firstGearKmh": 105,
+      "licence": "FIA 3", "pitSpeedKmh": 100,
+      "calibration": {"laps": 2, "rmsError": 0.0113}
+    },
+    {
       "id": "motogp", "name": "MotoGP", "spec": "2025", "kind": "bike", "color": "#fb923c",
       "mass": 237, "powerKw": 215, "cdA": [0.32, 0.32], "clA": [0.06, 0.06],
       "grip": 1.476, "loadSensitivity": 0.05, "driveShare": 1, "rollingResistance": 0.015,

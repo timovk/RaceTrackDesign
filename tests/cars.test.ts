@@ -149,6 +149,11 @@ describe('car models', () => {
     for (const body of BODIES) {
       const car = buildCar(body);
       expect(car.lods[0].body.lamp).toHaveLength(car.lods[0].body.positions.length / 3);
+      // (The car of 1950 has no lights at all.)
+      if (body === 'f1-1950') {
+        expect(car.lamps).toHaveLength(0);
+        continue;
+      }
       // A rear light on every car and bike, at the back.
       const rear = kinds(body, LAMP.rain);
       expect(rear.length).toBeGreaterThanOrEqual(1);

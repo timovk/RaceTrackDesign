@@ -17,3 +17,14 @@ The Bremgartenwald north-west of Bern, 4,096 m square at 2 m, with its north-wes
 | Woods | The green tint of the [national map 1:25,000 of 1954](https://www.swisstopo.admin.ch/en/timetravel) on a 4 m grid, in the part of the map between 2,595,488 and 2,599,328 east, 1,199,472 and 1,201,776 north; today's forest ([swissTLM3D](https://www.swisstopo.admin.ch/en/landscape-model-swisstlm3d)) beyond it | Cells under lettering and line work take their neighbours' value; a majority filter over 20 m takes out specks. |
 
 Source: Federal Office of Topography swisstopo. Its geodata is free to use, with the source named ([terms](https://www.swisstopo.admin.ch/en/terms-of-use-free-geodata-and-geoservices)).
+
+## monaco
+
+Monaco and its harbour, 2,048 m square at 2 m, laid on the ground at its centre, 7.4258 E, 43.7368 N (x east and y south of the north-west corner; the map is a plane touching the GRS 80 ellipsoid there, good to a millimetre over a kilometre).
+
+| What | From | Changed how |
+|---|---|---|
+| Heights | [RGE ALTI](https://geoservices.ign.fr/rgealti) of IGN France, as served by the Geoplateforme's map service (`ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES`), sampled at 2 m in October 2026 | The sea (no data) and the harbours (flat at the level the survey gave them) lie 3 m under a water level of 1 m; other ground is kept at 1.5 m or more. Along the lap of 1950 the ground within 6.5 m of the road's middle is set to the road's own height (the ground under the lap, evened out over some 40 m) and eased back to the survey over the next 13.5 m. Where the tunnel is, from Portier to the foot of the road down to the harbour, and along the north quay to past Tabac, the road runs straight between the heights at the two ends and the levelled strip is 14 m wide each side, eased out to 42 m: the ground over the tunnel is cut away, up to 25 m deep. Heights are rounded to 2 cm. |
+| Woods | None | The map has no woods. |
+
+Source: IGN France. Its data is free to reuse under the [Licence Ouverte 2.0](https://www.etalab.gouv.fr/licence-ouverte-open-licence/), with the source named.

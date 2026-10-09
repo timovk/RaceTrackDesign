@@ -10,6 +10,17 @@
       "waterLevel": 481.5,
       "woodsSize": 1024,
       "source": "Elevation: swisstopo swissALTI3D (2 m), with today's motorway taken out. Woods: the 1954 national map."
+    },
+    {
+      "id": "monaco",
+      "name": "Monaco and its harbour",
+      "mapSize": 2048,
+      "resolution": 1024,
+      "base": -10,
+      "step": 0.02,
+      "waterLevel": 1,
+      "woodsSize": 256,
+      "source": "Elevation: IGN France RGE ALTI (2 m), opened up where the tunnel is and evened out on the quays. No woods, no buildings."
     }
   ]
 }

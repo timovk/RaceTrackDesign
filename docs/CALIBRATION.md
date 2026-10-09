@@ -23,6 +23,8 @@ pinned down. The largest single miss is Formula 1 at Sakhir, -4.9%.
 
 ## Results
 
+The Formula 1 car of 1950 is not in the table: its two real laps are on the app's own templates, not on the circuit database. Its power (350 bhp, less the losses to the wheels) and weight are the Alfa Romeo 158's, its drag is set for a top speed of 290 km/h, it has no downforce, and its grip alone is fitted, to Juan Manuel Fangio's pole laps of 1950: 1:50.2 at Monaco (model 1:51.6, +1.2%) and 2:42.1 at Bremgarten (model 2:40.5, -1.0%). `tests/historic.test.ts` keeps both within 3%.
+
 | Class | RMS error | Circuit | Real | Model | Error |
 |---|---|---|---|---|---|
 | Formula 1 | 2.5% | Monza | 1:18.792 | 1:19.533 | +0.9% |

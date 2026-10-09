@@ -34,6 +34,7 @@ A browser app in TypeScript with no backend. The same seed and settings always p
 | S4 | Side-by-side racing, step 4: the stewards: who is to blame for a contact, and each series' own penalties, served in the race or added to the race time | **done** |
 | S5 | Side-by-side racing, step 5: restarts and the safety car queue (the leader holds the field up and picks its moment, lapped cars are sent round, a standing restart goes as the start does), and a TV director that shows it | **done** |
 | TS | Trackside: advertising boards and gantries, a crowd in the grandstands, a pit building with numbered garages, a race control tower and a podium, and tyre marks on the asphalt | **done** |
+| H1 | Historic content, version 1: the Formula 1 car of 1950 as a class of its own, shaped and paced as the Alfa Romeo 158; and the Monaco Grand Prix lap of 1950 as a template on its real ground | **done** |
 | G4 | Graphics, phase 4: the cars. A finer model for close-ups with the shut lines between the panels; vents, louvres, pillars, exhausts and brake discs; woven carbon, tyre rubber and glass; shading baked into the crevices; each car's own shadow on the road; damage that shows | **done** |
 
 What comes next, and what was proposed and never decided, is in [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -67,7 +68,7 @@ If PowerShell refuses to run `npm` scripts, call Vite directly: `node node_modul
 
 The app works in four modes, in order. Everything downstream recalculates live when something upstream changes.
 
-**Templates** (in the header) lists the circuits that come with the app. Picking one opens it as a project like any other: move its points, add a layout, race on it, save it under another name. The first is [Bremgarten 1954](#bremgarten-1954).
+**Templates** (in the header) lists the circuits that come with the app. Picking one opens it as a project like any other: move its points, add a layout, race on it, save it under another name. They are [Bremgarten 1954](#bremgarten-1954) and [Monaco 1950](#monaco-1950).
 
 **1 Terrain.** Enter a seed (or press Random) and pick a landscape: flat, rolling, hilly or mountains. Fine-tune relief, hill size, roughness, warp, ridges, valley floors, erosion, water and base elevation. Maps are 4, 8 or 16 km square; generation runs in a background worker and takes about two seconds. A template of a real circuit stands on *surveyed ground* instead: real elevations and woods, with no seed and nothing to tune. The panel then says where the ground comes from, and **Use a generated landscape instead** puts the same track on a generated one.
 
@@ -80,7 +81,7 @@ The app works in four modes, in order. Everything downstream recalculates live w
 - Pick the layout to analyse and race with **Layout** above the map (or in the list). Lap times, the licence, the facilities, races and the 3D view follow it, with the rest of the circuit greyed out round it (in 3D built as roads, the ground shaped for all of them, run-off stopping where another road carries on). Each layout keeps its own race setup. Design always shows the full circuit; a race on a layout keeps running while you look at it.
 
 **3 Analyse.**
-- *Lap times* for ten classes: Formula 1, Formula 2, IndyCar, Hypercar, LMP2, GT3, GT4, TCR, MotoGP and Superbike. The table shows each class's flying lap, gap and top speed. Click a class for its three sector times, average and minimum speed, full-throttle share, braking zones, wing setting and vehicle data.
+- *Lap times* for eleven classes: Formula 1, Formula 2, IndyCar, Hypercar, LMP2, GT3, GT4, TCR, the [Formula 1 of 1950](#the-formula-1-of-1950), MotoGP and Superbike. The table shows each class's flying lap, gap and top speed. Click a class for its three sector times, average and minimum speed, full-throttle share, braking zones, wing setting and vehicle data.
 - *Circuit licence*: an estimated FIA grade (1 to 4, cars) and FIM grade (A or B, bikes), with the checklist behind it, which classes may race, run-off escape paths per grade on the map, and the largest permitted grid.
 - *Facilities*: start/finish, pit lane with the drive-through time loss per class, speed trap, DRS zones, overtaking spots and marshal posts.
 - *Geometry*: length, direction, height difference, climb, steepest gradients, longest straight, corners (numbered, with type, radius and angle), tightest crest and dip, width, cut and fill, and all design warnings.
@@ -124,7 +125,7 @@ Warnings flag corners tighter than the track is wide, very tight corners, steep 
 - Editing happens in 2D. In Race mode **Map image** saves the 3D view.
 - The 3D view (three.js) loads the first time it is opened. It needs WebGL; the sky (about 38 MB) and the surface textures (about 17 MB) load in the background, with a painted sky and plain surfaces until they are in.
 
-**The race in 3D.** In Race mode the 3D view shows the race: every car as a model of its class (Formula 1, Formula 2 and IndyCar single-seaters, Hypercar and LMP2 prototypes, GT3, GT4 and TCR cars, MotoGP and Superbike bikes with their riders, and the safety car), at its real size and in its team's livery, where the race puts it.
+**The race in 3D.** In Race mode the 3D view shows the race: every car as a model of its class (Formula 1, Formula 2 and IndyCar single-seaters, Hypercar and LMP2 prototypes, GT3, GT4 and TCR cars, the front-engined Grand Prix car of 1950 on its wire wheels, MotoGP and Superbike bikes with their riders, and the safety car), at its real size and in its team's livery, where the race puts it.
 - Liveries come from each team's colour: a second colour, an accent and one of five patterns, the same for both cars of a team. Single-seaters carry their number on the nose and the engine cover, closed cars in a roundel on the doors and the bonnet (in the class colour in a multi-class race), bikes on the fairing and the tail; team names are on the rear wing endplates.
 - Wheels turn and steer, the tyre sidewalls show the compound fitted, bikes lean into corners, and the DRS flap opens in the DRS zones. Cars stop in their box in the pit lane, and a retired car stays where it stopped. In practice and qualifying the cars wait between runs in their open garages, pushed back in to face the pit lane.
 - Cars are where the race has them across the road: side by side through a pass, turned the way they move when they pull out, on the grass beside the road after a mistake, and turning round in a spin. A car that has crashed stays where it came to rest. Bikes, which still race in one line, are drawn side by side where they would overlap.
@@ -283,10 +284,36 @@ What is not of 1954: the app builds the circuit to today's practice, as chosen f
 
 How exact it is: the surveyed stretches are good to about a metre. The hand-traced ones are within about 4 m of the road in the photograph, which itself lies a few metres off today's survey in places. Bends are smooth curves through the traced points, so a corner's radius is right to perhaps a tenth. The widths of single stretches, the camber and the road's surface (part of it was cobbled) are not modelled. With its 9 m road the circuit fails today's licence checks on width, as it would. [data/templates](data/templates/README.md) has the method and the trace.
 
+## Monaco 1950
+
+The Monaco Grand Prix as it was run for the first world championship, on 21 May 1950: the lap of 1929 to 1954, 3.18 km, clockwise. From the start on the Boulevard Albert Ier it turns right at Sainte-Devote, climbs 40 m to the Casino, drops through Mirabeau and the Station hairpin to Portier, runs along the sea front, flicks through the chicane onto the quay, turns left at Tabac and goes down the quay beside the boulevard to the Gasworks hairpin, where it comes back onto the start straight. There is no swimming pool and no Rascasse: those came in 1973.
+
+- **The ground** is IGN France's RGE ALTI elevation model at 2 m, 2 km square, with the harbour and the sea as water. Beside the road the ground is levelled to the road's own height, as a street on a hillside is a ledge; where the tunnel is, it is opened up into a cutting; on the quays it is evened out where they have been built on since.
+- **The line** follows today's streets from OpenStreetMap where they are the streets of 1950. What has changed is drawn over IGN's aerial photograph of the 1950s, which shows the harbour before the pool, the gasworks and the old station: the Casino square, Portier, the chicane, Tabac, the quay road and the hairpin. How far south the hairpin lies is set so that the lap comes to the 3.180 km of the record books; the photograph allows it within some 25 m.
+- **The road** is 8 m wide throughout.
+
+What is not of 1950: there are no buildings, no tunnel and no railway, so it is a road on a bare hill by the sea, with a few trees. The ground and the shore are today's: the harbour has the piers and the wider quays built since. The app dresses the lap to today's practice (guardrail, kerbs, run-off where there is room, grandstands), puts its pit lane on the town side of the boulevard (in 1950 the pits stood on the strip between the boulevard and the quay) and lines the grid up two abreast (it was three and two by turns). The licence check fails it on width, length and run-off, as it would fail the real one.
+
+For comparison: Juan Manuel Fangio took pole in 1:50.2 in an Alfa Romeo 158 and won the 100 laps in 3 h 13 min; nine cars went out together at Tabac on the first lap, where a wave had wet the road. The app's car of 1950 laps the template in 1:51.6.
+
+Sources and method: [data/templates/README.md](data/templates/README.md) and [public/surveys/README.md](public/surveys/README.md).
+
+## The Formula 1 of 1950
+
+A class of its own beside today's Formula 1: the front-engined Grand Prix car of the first world championship, to the figures of the Alfa Romeo 158, the car that took pole and won at Monaco and at Bremgarten in 1950.
+
+- **The car**: 350 bhp from a supercharged 1.5 litre straight-eight, 700 kg dry (850 kg here with its driver and fuel), four gears, drum brakes, no wings; 2.50 m between the axles and 4.28 m long, on tall narrow tyres. Its top speed is set at 290 km/h. Its tyre grip (0.77, where today's car has 1.85 before its downforce) is fitted to two pole laps of 1950, both Fangio's: 1:50.2 at Monaco and 2:42.1 at Bremgarten, on the two templates. The model gives 1:51.6 and 2:40.5, 1.2% slow and 1.0% fast.
+- **In 3D** it is a cigar of a body with an oval grille and a tail that runs to a point, louvres and straps on the bonnet, one exhaust along the left side, the driver upright in the open behind a big wheel and a small screen, wire wheels with knock-off spinners, and its number in white roundels. It is painted in its team's colour with a band of the second colour round the nose.
+- **The race**: 300 km from a standing start, in a field of 19 (as started at Monaco) with far bigger gaps between the cars than today. The tank does not last the distance, so the cars stop for fuel, and stand for most of a minute. Cars break often: a third or more of the field does not see the flag. There is no safety car and no virtual one; the stewards give warnings only. The weekend is a Thursday and a Saturday practice of 90 minutes; the Saturday sets the grid.
+
+What rests on little: the fuel it burns is the 1951 car's figure scaled down (1 kg a kilometre), the tank size, the refuelling rate and the tyre life are estimates, and so are the rates of mistakes and breakdowns. The pit lane speed is 100 km/h because the app wants one; there was no limit. In 1950 the first five places on the Monaco grid went by Thursday's times; here Saturday decides them all. Rain tyres did not exist: the app's stand in.
+
 ## Credits
 
 The sky panoramas are "Kloofendal 48d Partly Cloudy (Pure Sky)" and "Kloofendal Overcast (Pure Sky)" by Greg Zaal and Jarod Guest, from [Poly Haven](https://polyhaven.com), CC0 (see [public/sky](public/sky/README.md)). The surface textures are Poly Haven's too, CC0, by Dimitrios Savva, Charlotte Baglioni, Rob Tuytel, Amal Kumar, Greg Zaal, Dario Barresi and Jenelle van Heerden (see [public/textures](public/textures/README.md)).
 
 The Bremgarten template's elevation, road centrelines, aerial photograph and maps are from the Federal Office of Topography swisstopo (swissALTI3D, swissTLM3D, SWISSIMAGE HIST 1946, the national map of 1954), free to use with the source named (see [public/surveys](public/surveys/README.md)).
+
+The Monaco template's elevation and the aerial photograph of the 1950s it was traced over are from IGN France (RGE ALTI; the photographs of 1950 to 1965), free to reuse under the Licence Ouverte 2.0 with the source named. Its street lines are from OpenStreetMap, (c) OpenStreetMap contributors, under the Open Database License. See [public/surveys](public/surveys/README.md) and [data/templates](data/templates/README.md).
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works inside.

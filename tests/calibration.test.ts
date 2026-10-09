@@ -61,7 +61,8 @@ describe('calibration against real qualifying laps', () => {
   const refs = loadReferenceLaps();
   const circuits = loadCircuits(new Set(refs.map((r) => r.circuit)));
 
-  for (const car of VEHICLES) {
+  // (A historic class has its real laps on the templates of its day: tests/historic.test.ts.)
+  for (const car of VEHICLES.filter((v) => refs.some((r) => r.classId === v.id))) {
     it(`${car.name} stays close to real lap times`, () => {
       const rows = evaluate(car, circuits, refs);
       expect(rows.length).toBeGreaterThan(0);

@@ -4,6 +4,7 @@
  * of a real circuit sits on surveyed ground (core/survey.ts).
  */
 import bremgarten from '../../data/templates/bremgarten.json' with { type: 'json' };
+import monaco from '../../data/templates/monaco.json' with { type: 'json' };
 import { type Project, readProject } from './project.ts';
 
 export interface Template {
@@ -21,6 +22,12 @@ export const TEMPLATES: readonly Template[] = [
     name: 'Bremgarten 1954',
     summary: 'The Swiss Grand Prix road circuit in the forest north of Bern: 7.28 km of fast bends and no real straight, on its real ground.',
     file: bremgarten,
+  },
+  {
+    id: 'monaco',
+    name: 'Monaco 1950',
+    summary: 'The Monaco Grand Prix as first run for the world championship: 3.18 km round the harbour, up to the Casino and back down, with the Gasworks hairpin. Real ground; no buildings and no tunnel yet.',
+    file: monaco,
   },
 ];
 

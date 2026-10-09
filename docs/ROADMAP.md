@@ -1,6 +1,6 @@
 # Roadmap
 
-What is decided and waiting to be built, and what was proposed and never decided. The README's status table lists what is done. Last updated 2026-10-09.
+What is decided and waiting to be built, and what was proposed and never decided. The README's status table lists what is done. Last updated 2026-10-10.
 
 ## Side-by-side racing
 
@@ -301,6 +301,37 @@ Not right yet:
 - **No bridge carries a road or people**, and the boards stand only at the line and the corners, not along every straight a camera sees.
 - **The worn-in rubber follows the GT3 car's braking points** for every class (the reference class, as for the sector lines); it was looked at in the app with the Formula 1 lap, before that was settled.
 - **Bikes** leave no marks.
+
+## Historic content
+
+Asked for on 2026-10-09 as "version 1 of the Historic Content Update: 1950-shaped F1 cars, and the 1950 Monaco GP layout template". Chosen then: the cars as a class of their own at the pace of 1950, with the rules of 1950 as far as the app has them; real data downloaded for Monaco; and for version 1 the road, the ground and the sea only.
+
+### Version 1 as built
+
+- **The Formula 1 of 1950**: a class beside today's, to the Alfa Romeo 158's figures, its grip fitted to the pole laps of 1950 at Monaco and Bremgarten; a 3D model of its own; races of 300 km with fuel stops, breakdowns, no safety car and warnings only. README, "The Formula 1 of 1950".
+- **Monaco 1950**: the 3.18 km lap of 1929 to 1954 as a template, on IGN France's ground, traced from today's streets and an aerial photograph of the 1950s. README, "Monaco 1950"; sources and method in `data/templates/README.md` and `public/surveys/README.md`.
+
+Seen in the app: the template in 2D and 3D, the car close up on the grid and on the hill, and a race of twelve cars running its first laps.
+
+Not right yet:
+
+- **No buildings, no tunnel, no railway**: Monaco is a road on a bare hill by the sea. The tunnel is a cutting.
+- **Today's ground and shore**, with the piers and quays built since 1950.
+- **Today's dressing**: guardrail, red and white kerbs, catch fencing, run-off, the app's grandstands and pit building. In 1950 there were kerbstones, lamp posts, straw bales and the harbour's edge.
+- **The pits** are on the town side of the boulevard; they stood between the boulevard and the quay.
+- **The grid** is two abreast; it was three and two by turns.
+- **The Gasworks hairpin** is placed by the lap length, within some 25 m; **the Casino square** is read off a photograph that is not sharp there.
+- **One shape of car** for the whole field: the Alfa Romeo. The Ferraris, Maseratis, Talbots, ERAs and Gordinis looked different and were slower; here the spread in pace stands for that.
+- **The driver does not move**: no arms at work, no head in the wind.
+- **Figures that rest on little**: fuel use, tank, refuelling rate, tyre life, and the rates of mistakes and breakdowns.
+- **The first-five-on-Thursday rule** of the Monaco grid, and points, are not in.
+- **Not looked at**: a whole race at Monaco in the app (the 300 km were run on the test circuit only), the car in the rain, the wreck and flat-tyre looks on this car, Bremgarten with this class in 3D.
+
+### Ideas for a version 2 (proposed, not decided)
+
+- Buildings as plain blocks along the lap, and the tunnel.
+- A dressing of the day: no kerbs or guardrail, straw bales, the pits on the strip by the quay, a grid of three and two.
+- More shapes of car, and the other circuits of 1950 (Bremgarten is there already).
 
 ## Proposed, not decided
 

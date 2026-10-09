@@ -192,10 +192,11 @@ export class CarLayer {
     counts.set('safety-car', (counts.get('safety-car') ?? 0) + 1);
     const decals: DecalCar[] = [];
     for (const car of sim.cars) {
-      const kind = buildCar(bodyOf(car)).kind;
+      const model = buildCar(bodyOf(car));
+      const kind = model.kind;
       decals.push({
         number: String(car.entrant.number), team: car.entrant.team,
-        style: kind === 'single-seater' ? 'painted' : kind === 'bike' ? 'panel' : 'roundel',
+        style: model.roundels ? 'roundel' : kind === 'single-seater' ? 'painted' : kind === 'bike' ? 'panel' : 'roundel',
         panel: kind !== 'single-seater' && kind !== 'bike' && sim.multiClass ? car.cls.color : undefined,
       });
     }

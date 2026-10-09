@@ -1,7 +1,8 @@
 /**
  * The 3D cars: single-seaters (Formula 1, Formula 2, IndyCar), prototypes
- * (Hypercar, LMP2), GT and touring cars, the safety car, and bikes with
- * their riders, each built from smooth swept bodies, airfoil wings, tubes
+ * (Hypercar, LMP2), GT and touring cars, the safety car, bikes with their
+ * riders, and the front-engined Grand Prix car of 1950, each built from
+ * smooth swept bodies, airfoil wings, tubes
  * and plates (core/carMesh.ts), at four levels of detail: one for close-ups
  * (finer, with the shut lines between the panels), then full, medium and far.
  * The shading in the crevices and the shadow on the road are baked into each
@@ -16,7 +17,7 @@
  * midway between the axles.
  */
 import {
-  CARBON, type CarMeshData, CarMeshBuilder, DARK_METAL, GLASS, LAMP, Loft, PART, RUBBER, SATIN_BLACK, SEAM, SectionPath, type Surface, TINT, type V3, ZONE,
+  CARBON, type CarMeshData, CarMeshBuilder, DARK_METAL, GLASS, LAMP, Loft, METAL, PART, RUBBER, SATIN_BLACK, SEAM, SectionPath, type Surface, TINT, type V3, ZONE,
   add, box, curve, decal, ellipsoid, flatDecal, paint, patch, pipe, plate, revolve, smoothstep, stations, trim, tube, wing,
 } from './carMesh.ts';
 import { type GroundShadow, type Occluder, bakeOcclusion, groundShadow, transferOcclusion } from './carShade.ts';
@@ -61,6 +62,8 @@ export interface CarModel {
   wheelWidth: number;
   /** The lights that switch on and off (LAMP kinds), each at its middle in car coordinates. */
   lamps: LampPlace[];
+  /** Its number stands in a white roundel, as cars carried it before numbers were painted on. */
+  roundels?: boolean;
 }
 
 /** An onboard camera: where it sits and the direction it looks, in car coordinates. */
@@ -193,7 +196,7 @@ function withCreases(base: number[], creases: number[]): { xs: number[]; region:
  * A wheel at unit size proportions: the tyre with its compound band on the
  * outer sidewall (tinted per car), the rim and the wheel cover or spokes.
  */
-function buildWheel(radius: number, width: number, rimRadius: number, lod: number, spokes: boolean): CarMeshData {
+function buildWheel(radius: number, width: number, rimRadius: number, lod: number, spokes: boolean, wire = false): CarMeshData {
   const mb = new CarMeshBuilder();
   const w = width / 2;
   const R = radius;
@@ -211,7 +214,8 @@ function buildWheel(radius: number, width: number, rimRadius: number, lod: numbe
     { r, z: w - 0.004, surface: rim, hard: true },
     { r: r + 0.012, z: w + 0.004, surface: RUBBER, hard: true },
     { r: r + 0.03, z: w + 0.012, surface: RUBBER, hard: true },
-    { r: r + 0.052, z: w + 0.016, surface: TINT, hard: true },
+    // (The compound's band; a wire wheel's tyre of 1950 is black all over.)
+    { r: r + 0.052, z: w + 0.016, surface: wire ? RUBBER : TINT, hard: true },
     { r: R - 0.06, z: w + 0.012, surface: RUBBER },
     { r: R - 0.025, z: w - 0.008, surface: RUBBER },
     { r: R - 0.004, z: w - 0.035, surface: RUBBER },
@@ -230,7 +234,19 @@ function buildWheel(radius: number, width: number, rimRadius: number, lod: numbe
   if (lod < 2) {
     // The wheel nut, and spokes behind an open rim (wheels without covers).
     tube(mb, [0, 0, w - 0.05], [0, 0, w - 0.005], 0.035, 0.03, steps(12, lod), trim([0.7, 0.6, 0.1], { roughness: 0.3, metalness: 1 }));
-    if (spokes) {
+    if (wire) {
+      // A wire wheel: thin spokes laced from the hub to the rim, each crossing its neighbour, and a knock-off spinner.
+      const chrome = trim([0.6, 0.61, 0.63], { roughness: 0.2, metalness: 1 });
+      const count = steps(28, lod);
+      for (let i = 0; i < count; i++) {
+        const a = (2 * Math.PI * i) / count;
+        const b = a + (i % 2 ? 0.42 : -0.42);
+        const z0 = w - (i % 2 ? 0.03 : 0.075);
+        tube(mb, [Math.cos(a) * 0.05, Math.sin(a) * 0.05, z0], [Math.cos(b) * (r - 0.015), Math.sin(b) * (r - 0.015), w - 0.03], 0.005, 0.005, 4, chrome, 1, undefined, false);
+      }
+      tube(mb, [0, 0, w - 0.04 - dish], [0, 0, w - 0.02], 0.06, 0.05, steps(14, lod), chrome, 1, undefined, false);
+      box(mb, [-0.07, -0.012, w - 0.012], [0.07, 0.012, w + 0.004], chrome);
+    } else if (spokes) {
       const n = 10;
       for (let i = 0; i < n; i++) {
         const a = (2 * Math.PI * i) / n;
@@ -543,6 +559,163 @@ function singleSeaterModel(s: SingleSeaterSpec): Unshaded {
       tcam: { at: [fa - 2.16, s.height + 0.07, 0], look: [1, -0.06, 0] },
       nose: { at: [fa + 0.45, 0.5, 0], look: [1, -0.06, 0] },
       rear: { at: [fa - 2.16, s.height + 0.07, 0], look: [-1, -0.1, 0] },
+    },
+  };
+}
+
+// ---- the Grand Prix car of 1950 -------------------------------------------------
+
+/**
+ * A front-engined Grand Prix car as raced in 1950, to the measure of the
+ * Alfa Romeo 158: 2.50 m between the axles, 1.25 m between the wheels of an
+ * axle, 4.28 m long, on tall narrow tyres (5.50-17 in front, 7.00-18 behind).
+ */
+const GP1950 = { id: 'f1-1950', wheelbase: 2.502, track: 1.25, front: 0.68, rear: 1.1, frontR: 0.355, frontW: 0.14, rearR: 0.4, rearW: 0.18, rimR: 0.229 };
+
+/**
+ * The car of 1950: a cigar of a body with the engine under a long bonnet,
+ * an oval grille in its nose and a tail that runs to a point; the driver
+ * upright in the open, behind a big wheel and a small screen, just ahead of
+ * the rear axle; one exhaust along the left side; wire wheels out in the
+ * open on a leaf spring across each end. Painted one colour, a band of the
+ * second round the nose, its number in white roundels.
+ */
+function grandPrixCar(lod: number): { body: CarMeshData; decals: CarMeshData } {
+  const s = GP1950;
+  const mb = new CarMeshBuilder();
+  const dm = new CarMeshBuilder();
+  const fa = s.wheelbase / 2;
+  const ra = -fa;
+  const tip = fa + s.front;
+  const tail = ra - s.rear;
+  const u = (x: number) => (x - tail) / (tip - tail);
+  const n = (v: number) => steps(v, lod);
+  const wz = s.track / 2;
+  const cockpitFront = -0.1;
+  const cockpitRear = -0.95;
+  const noseBand = tip - 0.24;
+  const bottom = curve([[tip, 0.36], [fa, 0.25], [0.3, 0.2], [ra, 0.24], [tail + 0.35, 0.4], [tail, 0.5]]);
+  const top = curve([[tip, 0.68], [fa, 0.78], [0.5, 0.84], [cockpitFront, 0.87], [cockpitRear, 0.86], [ra - 0.1, 0.78], [tail + 0.5, 0.66], [tail, 0.56]]);
+  const half = curve([[tip, 0.2], [fa, 0.28], [0.5, 0.32], [cockpitFront, 0.34], [cockpitRear, 0.33], [ra, 0.29], [tail + 0.5, 0.17], [tail, 0.03]]);
+  const base = stations(tip, tail, n(40), (x) => 1 + 2 * Math.exp(-(((x - tip) / 0.25) ** 2)) + 1.5 * Math.exp(-(((x - tail) / 0.3) ** 2)) + 1.2 * Math.exp(-(((x + 0.5) / 0.6) ** 2)));
+  const { xs, region } = withCreases(base, [noseBand, cockpitFront, cockpitRear]);
+  const paintwork = paint(ZONE.solidA);
+  const band = paint(ZONE.solidB);
+  const leather = trim([0.09, 0.05, 0.03], { roughness: 0.7 });
+  const steel = trim([0.1, 0.1, 0.11], { roughness: 0.45, metalness: 1 });
+  const loft = new Loft(mb, {
+    stations: xs,
+    u,
+    capFront: trim([0.015, 0.015, 0.017], { roughness: 0.6 }),
+    capRear: paintwork,
+    section: (x, i) => {
+      const rx = region[i];
+      const skin = rx > noseBand ? band : paintwork;
+      const b = bottom(x);
+      const t = top(x);
+      const w = half(x);
+      // An egg of a section: half an ellipse under the widest point and half a rounder one over it.
+      const p = new SectionPath(0, b, skin).mark('keel');
+      p.line(w * 0.45, b, n(1)).round(w, b + (t - b) * 0.5, n(4), 2.3, 'across').mark('shoulder');
+      if (rx < cockpitFront && rx > cockpitRear) {
+        // The cockpit: up to the edge of the opening, and down into it round the driver.
+        p.round(0.23, t - 0.03, n(4), 2.3, 'up').use(leather).round(0.17, t - 0.27, n(3), 2, 'up').line(0, t - 0.29, 1);
+      } else {
+        p.round(0, t, n(4) + n(3) + 1, 2.3, 'up');
+      }
+      return p.mark('spine');
+    },
+  });
+  // The exhaust, along the left side to past the rear axle.
+  pipe(mb, [[0.95, 0.46, -0.33], [0.4, 0.42, -0.37], [-0.6, 0.42, -0.385], [-1.45, 0.44, -0.36]], 0.038, n(10), PIPE);
+  // The driver: upright in the open, at the wheel.
+  const overalls = trim([0.62, 0.66, 0.7], { roughness: 0.8 });
+  const skinTone = trim([0.55, 0.36, 0.26], { roughness: 0.7 });
+  const seatTop = top(-0.6);
+  tube(mb, [-0.74, seatTop - 0.3, 0], [-0.6, seatTop + 0.17, 0], 0.2, 0.17, n(12), overalls, 0.75, [0, 0, 1]);
+  // A cap helmet over goggles.
+  ellipsoid(mb, [-0.57, seatTop + 0.33, 0], [0.105, 0.12, 0.095], n(18), n(10), (d) => (d[1] > 0.3 ? paint(ZONE.solidC) : d[0] > 0.45 && d[1] > -0.05 ? GLASS : d[0] > 0.2 && d[1] < 0.05 ? skinTone : paint(ZONE.solidC)));
+  // The steering wheel: big, thin and nearly upright, tilted back towards the driver.
+  const wheelAt: V3 = [-0.28, top(-0.28) + 0.02, 0];
+  const ring: V3[] = [];
+  for (let i = 0; i <= steps(20, lod); i++) {
+    const a = (2 * Math.PI * i) / steps(20, lod);
+    ring.push([wheelAt[0] + Math.sin(a) * 0.19 * 0.5, wheelAt[1] + Math.sin(a) * 0.19 * 0.87, Math.cos(a) * 0.19]);
+  }
+  pipe(mb, ring, 0.012, steps(6, lod), trim([0.2, 0.1, 0.04], { roughness: 0.5 }), 1, false);
+  for (const side of [1, -1]) {
+    tube(mb, [-0.6, seatTop + 0.1, side * 0.19], [wheelAt[0], wheelAt[1], side * 0.17], 0.05, 0.04, n(8), overalls);
+    if (lod <= 0) tube(mb, wheelAt, [wheelAt[0], wheelAt[1], side * 0.19], 0.008, 0.008, 5, METAL);
+  }
+  // The aero screen in front of the cockpit.
+  ellipsoid(mb, [cockpitFront + 0.02, top(cockpitFront) - 0.06, 0], [0.2, 0.22, 0.27], n(14), n(4), () => GLASS, [0.3, 0.95], [-1.0, 1.0]);
+  // The filler cap on the tail.
+  tube(mb, [ra - 0.45, top(ra - 0.45) - 0.01, 0], [ra - 0.45, top(ra - 0.45) + 0.035, 0], 0.045, 0.045, n(12), METAL);
+  if (lod <= 0) {
+    // The bars of the grille.
+    const mid = (top(tip) + bottom(tip)) / 2;
+    for (let i = -3; i <= 3; i++) {
+      const z = i * 0.05;
+      const reach = ((top(tip) - bottom(tip)) / 2) * Math.sqrt(Math.max(0, 1 - (z / half(tip)) ** 2)) - 0.02;
+      box(mb, [tip, mid - reach, z - 0.004], [tip + 0.01, mid + reach, z + 0.004], METAL);
+    }
+    for (const sgn of [1, -1] as const) {
+      // Louvres down each side of the bonnet, and two straps across it.
+      for (let i = 0; i < 8; i++) patch(mb, loft, sgn > 0 ? 'right' : 'left', fa - 0.1 - i * 0.075, 0.62, 0.02, 0.13, SATIN_BLACK, 1, 2);
+      for (const x of [fa - 0.02, 0.42]) loft.seamRound(mb, x, 'shoulder', 'spine', 0.035, leather, sgn, 0.004);
+      // A mirror each side of the scuttle.
+      tube(mb, [cockpitFront + 0.06, top(cockpitFront) - 0.05, sgn * 0.27], [cockpitFront + 0.06, top(cockpitFront) + 0.09, sgn * 0.31], 0.006, 0.006, 5, METAL);
+      ellipsoid(mb, [cockpitFront + 0.06, top(cockpitFront) + 0.1, sgn * 0.31], [0.012, 0.04, 0.04], n(10), n(5), () => MIRROR);
+      // The axles: arms and a half-shaft to each wheel, a finned brake drum inboard of it.
+      tube(mb, [fa, 0.52, sgn * 0.2], [fa, s.frontR + 0.08, sgn * (wz - 0.1)], 0.018, 0.016, 6, steel);
+      tube(mb, [fa + 0.05, 0.3, sgn * 0.2], [fa, s.frontR - 0.1, sgn * (wz - 0.1)], 0.018, 0.016, 6, steel);
+      tube(mb, [ra, 0.42, sgn * 0.12], [ra, s.rearR, sgn * (wz - 0.1)], 0.026, 0.024, 8, steel);
+      for (const [ax, R, w] of [[fa, s.frontR, s.frontW], [ra, s.rearR, s.rearW]] as const) {
+        const face = wz - w / 2;
+        tube(mb, [ax, R, sgn * (face - 0.005)], [ax, R, sgn * (face - 0.075)], s.rimR * (R / s.rearR) * 0.92, s.rimR * (R / s.rearR) * 0.86, n(20), DARK_METAL);
+      }
+    }
+    // A leaf spring across each end.
+    box(mb, [fa - 0.03, 0.27, -(wz - 0.12)], [fa + 0.03, 0.3, wz - 0.12], steel);
+    box(mb, [ra - 0.03, 0.3, -(wz - 0.12)], [ra + 0.03, 0.33, wz - 0.12], steel);
+  }
+  // Close up: the joints of the bonnet and the tail.
+  if (lod < 0) {
+    for (const sgn of [1, -1] as const) {
+      loft.seamAlong(mb, 'shoulder', cockpitFront + 0.12, noseBand, SEAM_WIDTH, SEAM, sgn);
+      loft.seamRound(mb, cockpitFront + 0.12, 'keel', 'spine', SEAM_WIDTH, SEAM, sgn);
+      loft.seamRound(mb, ra - 0.15, 'keel', 'spine', SEAM_WIDTH, SEAM, sgn);
+    }
+  }
+  // Its number in a roundel on the nose, on each side of the scuttle and on each side of the tail.
+  // (Each is laid from a plane that touches the body there: a decal goes onto the body along lines from the middle of its section, and from further off it would come out squashed on so slim a car.)
+  decal(dm, loft, [tip - 0.5, top(tip - 0.5), 0], TOP.right, TOP.up, 0.26, 0.26, DECAL_NUMBER_SQUARE, n(6), n(6));
+  for (const [sgn, dir] of [[1, SIDE_R], [-1, SIDE_L]] as const) {
+    decal(dm, loft, [0.2, 0.55, sgn * half(0.2)], dir.right, dir.up, 0.3, 0.3, DECAL_NUMBER_SQUARE, n(6), n(6));
+    decal(dm, loft, [ra - 0.42, 0.57, sgn * half(ra - 0.42)], dir.right, dir.up, 0.26, 0.26, DECAL_NUMBER_SQUARE, n(6), n(6));
+  }
+  return { body: mb.build(), decals: dm.build() };
+}
+
+function grandPrixModel(): Unshaded {
+  const s = GP1950;
+  const fa = s.wheelbase / 2;
+  const wz = s.track / 2;
+  const lods = [-1, 0, 1, 2].map((lod) => ({ ...grandPrixCar(lod), wheel: buildWheel(s.rearR, s.rearW, s.rimR, lod, true, true) }));
+  return {
+    id: s.id, kind: 'single-seater', length: s.wheelbase + s.front + s.rear, width: s.track + s.rearW + 0.05, height: 1.2, wheelbase: s.wheelbase,
+    wheels: [
+      { x: fa, y: s.frontR, z: wz, radius: s.frontR, width: s.frontW, front: true },
+      { x: fa, y: s.frontR, z: -wz, radius: s.frontR, width: s.frontW, front: true },
+      { x: -fa, y: s.rearR, z: wz, radius: s.rearR, width: s.rearW, front: false },
+      { x: -fa, y: s.rearR, z: -wz, radius: s.rearR, width: s.rearW, front: false },
+    ],
+    lods, eye: [-0.5, 1.16, 0], wheelRadius: s.rearR, wheelWidth: s.rearW, lamps: lampPlaces(lods[0].body), roundels: true,
+    cameras: {
+      // Over the driver's shoulder, low on the nose, and looking back from the tail.
+      tcam: { at: [-1.05, 1.32, 0], look: [1, -0.1, 0] },
+      nose: { at: [fa + 0.35, 0.84, 0], look: [1, -0.05, 0] },
+      rear: { at: [-1.5, 0.98, 0], look: [-1, -0.1, 0] },
     },
   };
 }
@@ -1033,6 +1206,7 @@ const MODELS: Record<string, () => Unshaded> = {
   f1: () => singleSeaterModel(F1),
   f2: () => singleSeaterModel(F2),
   indycar: () => singleSeaterModel(INDYCAR),
+  'f1-1950': () => grandPrixModel(),
   hypercar: () => closedModel(HYPERCAR),
   lmp2: () => closedModel(LMP2),
   gt3: () => closedModel(GT3),

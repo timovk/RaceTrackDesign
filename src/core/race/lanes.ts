@@ -44,6 +44,7 @@ const SIZES: Record<string, BodySize> = {
   gt3: { length: 4.7, width: 2 },
   gt4: { length: 4.7, width: 1.96 },
   tcr: { length: 4.43, width: 1.95 },
+  'f1-1950': { length: 4.28, width: 1.48 },
   motogp: { length: 1.85, width: 0.66 },
   superbike: { length: 1.83, width: 0.66 },
 };

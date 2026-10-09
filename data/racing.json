@@ -26,6 +26,7 @@
     "gt4": "GT4 European Series Sporting Regulations 2026, Article 16.5 (30 s for a drive-through not served) and the 2026 decisions (a drive-through for causing a collision, Article 33.4): https://www.gt4europeanseries.com. The procedure taken over from GT World Challenge Europe (same organiser)",
     "tcr": "2026 TCR Europe Sporting Regulations, Articles 39 to 41 (a time penalty is added to the race time; three crossings of the line; 30 s in the last three laps; incidents normally investigated after the race): see weekendSources. The 5 s from decision no. 13 at Mugello 2026 (causing a collision)"
   },
+  "historicNotes": "f1-1950 is the Formula 1 of the first world championship. Looked up: 300 km or three hours as the length of a Grand Prix of the day (Monaco 1950 was 100 laps, 318 km, won in 3 h 13 min; the Swiss Grand Prix 305.8 km), 19 starters at Monaco, practice on the Thursday and the Saturday, refuelling stops (the Swiss Grand Prix of 1950 turned on one), no safety car. Estimates: fuel 1 kg/km (the Alfa Romeo 159 of 1951 used 190 L of methanol per 100 km; the 158 of 1950 had 80 bhp less), a tank of 180 kg, 4 kg/s into it, 30 s for four wheels, tyres good for 220 km, and the rates of mistakes and breakdowns (more than a third of a field of the day did not finish). The stewards give warnings only: time penalties as today's did not exist. Sources: https://en.wikipedia.org/wiki/1950_Monaco_Grand_Prix, https://en.wikipedia.org/wiki/1950_Swiss_Grand_Prix, https://en.wikipedia.org/wiki/Alfa_Romeo_158/159_Alfetta",
   "classes": {
     "f1": {
       "label": "F1",
@@ -283,6 +284,34 @@
         ],
         "evolutionPct": 0.6,
         "redFlag": { "stopAt": "pitlane", "raceClockStops": false, "restart": "rolling", "work": true, "resultLapsBack": 2, "practiceClockStops": false, "qualifyingClockStops": true, "qualifyingPenalty": "best", "clearMinutes": [12, 30] }
+      }
+    },
+    "f1-1950": {
+      "label": "F1 '50",
+      "color": "#c1272d",
+      "field": { "cars": 19, "perTeam": 3, "drivers": 1, "carSpreadPct": 3.5, "driverSpreadPct": 0.8 },
+      "race": { "distanceKm": 300, "maxMinutes": 200, "start": "standing" },
+      "pace": { "racePct": 2.5, "consistencyPct": 0.6, "overtaking": 1 },
+      "fuel": { "kgPerKm": 1, "capacityKg": 180, "refuelKgPerS": 4 },
+      "tyres": {
+        "mustUseTwo": false,
+        "compounds": [
+          { "name": "Race", "code": "R", "color": "#d0d4da", "type": "slick", "offsetPct": 0, "lifeKm": 220, "degPct": 1.5 },
+          { "name": "Rain", "code": "W", "color": "#0a84ff", "type": "wet", "lifeKm": 220, "degPct": 1.5 }
+        ]
+      },
+      "pit": { "stops": true, "tyreChangeS": 30, "concurrent": true, "minStops": 0, "minStationaryS": 0, "repairS": 90 },
+      "air": { "towDragCut": 0.15, "wakeDownforceLoss": 0 },
+      "incidents": { "mistakePerLap": 0.03, "offPerLap": 0.006, "crashPerLap": 0.0012, "dnfPer1000Km": 1.1 },
+      "flags": { "safetyCar": false, "virtual": null },
+      "stewards": { "collision": "warning", "lesser": "warning", "timeAtStop": false, "serveLaps": 3, "lateLaps": 3, "driveThroughS": 30, "afterRace": true },
+      "reference": { "energyMJPerKm": 1.99, "tyreWork": 0.341 },
+      "weekend": {
+        "practice": [{ "name": "Thursday", "minutes": 90, "day": 1, "longRuns": true }],
+        "qualifyingDay": 2,
+        "qualifying": [{ "name": "Saturday", "minutes": 90 }],
+        "evolutionPct": 1,
+        "redFlag": { "stopAt": "pitlane", "raceClockStops": false, "restart": "standing", "work": true, "resultLapsBack": 2, "practiceClockStops": false, "qualifyingClockStops": false, "qualifyingPenalty": "none", "clearMinutes": [15, 40] }
       }
     },
     "motogp": {
