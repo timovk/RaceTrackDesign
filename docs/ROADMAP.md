@@ -333,6 +333,27 @@ Not right yet:
 - A dressing of the day: no kerbs or guardrail, straw bales, the pits on the strip by the quay, a grid of three and two.
 - More shapes of car, and the other circuits of 1950 (Bremgarten is there already).
 
+## The track generator
+
+Asked for on 2026-10-10: "Implement the race track generator. Make sure the user is able to pick parameters, like preferred track length, track width, high/low elevation, lots of corners or lots of high-speed sections". Chosen then: the track goes on the best spot of the map there is, and the landscape is left alone; sliders, plus kinds of circuit that set them all at once; beyond the basics the class and its licence, straights and overtaking, the make-up of the corners, and shape and direction; and several tracks to pick from, repeatable by a seed.
+
+### As built
+
+- **Design, Generate a track.** A dialog with seven kinds of circuit, twelve sliders, seven tick boxes, the class and the direction, and a seed. Generate offers six tracks as cards (the lap drawn, length, corners, height difference, straights, the class's lap and top speed, heavy braking points, the licence verdict, and what the map could not give). Use this track makes one the design in one step that Undo takes back.
+- **How it works** is in ARCHITECTURE.md (Track generator): laps drawn as polygons with rounded corners, sorted on shape, tried all over the map, and the best built and measured with the app's own analysis and licence check.
+- **Checked**: on the rolling, hilly and mountain landscapes at 8 km. On rolling ground (one seed), six of six Grand Prix circuits pass FIA grade 1 and six of six motorcycle circuits FIM Grade A, in about two seconds each; five of six high-speed circuits pass FIA grade 2, in three. The kinds built to no licence take half a second to one. Every track is within 1% of the length asked.
+
+### Not right yet
+
+- **The six do not stand apart on the map.** Each takes its own best place, and several often lie on the same spot. Nothing spreads them out.
+- **Height on rough maps.** On the mountain landscape a lap asked to climb 160 m gets 30 to 100 m: the generator keeps off slopes over 11% and does not touch the grading to make a steep place work (evening the profile out over a longer stretch was tried, and made the slopes worse where the cut and fill limit binds). The card says so.
+- **Run-off is estimated before building.** The speeds are rough, and water or the edge of the map beyond a corner is not looked at until the track is built and the licence check runs. That check is the judge: on the mountain map one Grand Prix circuit in six failed on a single escape path, and one came out with a grid at 2.1%.
+- **Fast corners and the sweeper need room.** Fewer corners come out fast than the mix asks, because a corner is tightened where it does not fit; a sweeper finds room in about two laps in three, one in three with all four features asked for. Under 2 km a hairpin rarely fits.
+- **About a hundred control points** on a 5 km track, one every 18 degrees of every corner: easy to nudge, slow to reshape by hand.
+- **On the main thread**: the page stands still for a moment at a time while the tracks are made. It is not in a worker.
+- **No crossings and no banking**, as the app has neither.
+- **The kinds of circuit are my own**: the seven and their numbers are not from a source.
+
 ## Proposed, not decided
 
 - Projects and backups.
@@ -341,6 +362,5 @@ Not right yet:
 - A championship across circuits (with sprint races and points).
 - Night races.
 - Sound.
-- A track generator.
 - More templates of real circuits, made the way Bremgarten was (`data/templates/README.md`).
 - Side-by-side racing for bikes, after the car version.

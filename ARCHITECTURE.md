@@ -28,6 +28,7 @@ src/
     earthworks.ts    the ground as built: road surfaces, verges, cut and fill banks
     facilities.ts    grid, pit lane, speed trap, DRS, overtaking, marshals
     licence.ts       FIA and FIM licence estimate with run-off tracing
+    generator.ts     the track generator: laps drawn to order, a place for each on the map, the tracks offered
     circuits.ts      real circuit CSVs -> track designs
     calibration.ts   reference laps, error, parameter fitting
     project.ts       project file format
@@ -86,6 +87,7 @@ src/
     raceDock.ts      telemetry, lap chart, gaps, lap times, stints, conditions and statistics under the map
     charts.ts        canvas chart helpers
     download.ts      saving files from the browser
+    generatorDialog.ts  the track generator's dialog: kinds of circuit, the settings, the tracks to pick from
     panels/          sidebar panels per mode
 data/
   vehicles.json      vehicle classes (edit to add or change classes)
@@ -217,6 +219,31 @@ A layout is the full circuit with links taken (`layouts.ts`). A link is stored a
 **Facilities.** A layout shares the full circuit's start line (station 0) and pit lane: `layoutPitLane` maps the pit lane's entry and exit to the layout's stations when the layout keeps every station of the track beside it, else the layout has none. `placeFacilities` takes such a pit lane as given instead of placing one; everything else (grid, speed trap, DRS, overtaking, marshal posts) is placed for the layout, and the licence is assessed for it.
 
 **In the app.** The store builds the full circuit and every layout whenever the design changes. Design edits the full circuit, so there `track` is the full circuit; Analyse and Race show the layout picked, and `track` and everything derived from it (metrics, warnings, lap times, facilities, licence) belong to that layout. Analyses are kept per layout until the design changes, so switching layouts or modes is instant once each is done; for a layout the full circuit is analysed first, for its pit lane. Each layout keeps its own race setup. A race belongs to its layout: it stops when that layout's track or analysis changes or another layout is picked, not when Design shows the full circuit. The map greys out the rest of the circuit round the layout shown; the 3D view builds the skipped stretches of the full circuit and the other layouts' links as plain roads (the ground is shaped for all roads, and run-off stops at them). Link points are kept to the centimetre as they are placed, as the project file stores them, so a layout drawn and the same layout loaded from its file give the same lap times.
+
+## Track generator
+
+`generator.ts` makes tracks to order on the heightmap there is (`generateTracks`); `ui/generatorDialog.ts` is its dialog. Nothing in it is left to chance beyond the seed: the same settings on the same terrain give the same tracks.
+
+**What is asked.** `GeneratorSettings`: the lap length, the width, the height difference, corners against speed (0 to 1), the class it is for and whether to build to that class's licence, the longest straight, the start straight and the number of heavy braking points, the weights of slow (under 45 m of radius), medium and fast (over 120 m) corners, four features (hairpin, chicane, esses, sweeper), the direction, compact against spread out, how much the lap folds back, and whether to keep clear of water and woods. `GENERATOR_STYLES` are seven sets of all of them (Grand Prix circuit, old road course, street circuit, club circuit, motorcycle circuit, high-speed circuit, mountain course); the kinds and their numbers are this tool's own. `resolveSettings` holds each setting within its range and, built to a licence, raises the length, the width and the start straight to `classNeeds`, with a note for each thing raised. `classNeeds` follows the checks of `licence.ts`: 12 m wide, 15 m (FIA) or 14 m (FIM) from the grid to the exit of the first corner, the least lap length, the longest straight allowed, and a start straight that holds the grid behind the line and the first corner 250 m ahead of it (562 m for FIA grade 1 and FIM Grade A; 450 m for the other FIA grades, where both are recommendations; 470 m for FIM Grade B, which requires 200 m to the first corner).
+
+**The lap as a shape** (`drawShape`). A polygon with rounded corners, in metres:
+
+1. A loop of four to eight corners round a middle (about a third of the corners wanted; `cornersWanted` is 5.2 per kilometre at the twisty end and 1.8 at the fast end, between 5 and 34), up to 2.5 times as long as wide when the lap is to be spread out.
+2. The longest edge is the main straight. The start is on it, or on the next longest when the start straight is to be much shorter. Both are kept clear of everything that follows.
+3. The esses (three to five swings of 24 to 38 m to either side) and the chicane each have the shortest free edge that will do set aside. Detours then fold the lap back on itself on the longest free edges: out towards the middle and back, and a narrow one with its legs splayed is the hairpin. One corner between two edges of over 380 m is opened out to 220 to 380 m of radius as the sweeper, and kinks on the edges still free make up the number of corners.
+4. Every other corner draws its radius from the slow (18 to 45 m), medium (45 to 120 m) or fast (120 to 380 m) range by the weights, a sharp turn more often a slow one. `fit` then tightens the corners that would not fit on the edge between them, so fewer come out fast than were drawn.
+5. The whole is scaled to the lap length and stretched along the main straight until that is as long as wanted, seven times over.
+6. It is turned round if it runs the wrong way.
+
+A shape whose parts come nearer each other than the gap is thrown away (the gap is the licence's room for run-off and barriers, 50 to 70 m, and without a licence 30 m, the width and up to 18 m). Half to nine in ten survive at usual lengths, about one in ten at 1.5 km and at 12 km.
+
+**Sorting the shapes** (`measureShape`, `scoreShape`, `shortRunoff`). 70 shapes are drawn per track wanted and scored on their geometry alone: the corners against the number wanted, the mix, the longest and the start straight, the heavy braking points, how spread out the lap is and how much of it has another part within 120 m, and 1.5 for a feature asked for and not made. The count of braking points uses a rough pace of the class (`paceOf`: the speed a radius takes from grip and downforce, pulling away limited by grip and power, braking by grip; a fall of 25 m/s into a corner is heavy braking). Built to a licence, `shortRunoff` counts the escape paths `licence.ts` would find short: straight on from where each corner is turned into and along the lap at its apex, as deep as `requiredRunoff` asks at 1.1 times the rough speed, with another part of the lap in the way. Each costs half a point.
+
+**The place** (`findSite`). The best 2.4 shapes per track wanted are tried all over the map: centres on a grid of about 22 by 22 (at least 110 m apart), turned twelve ways, then twice more closely round the best. A place costs by how far the ground under the lap is from the height difference asked, by slopes along the lap over 6% (up to 11% for a lap that is to climb a lot: `steepLimit`), by the slope of the start straight over 1.5%, and by woods where they are to be kept clear of; water under the lap rules a place out when it is to be kept clear of. The lap stays 130 m from the edge of the map. Each shape takes its own best place, so two tracks may lie on the same spot.
+
+**The tracks** (`generateTracks`, `toDesign`). The best 1.6 per track wanted are made into designs: a control point every 18 degrees round each corner and 35 m inside each end of a straight; the start line with the whole grid on the straight behind it and the first corner 320 m ahead where the straight has room for both (the FIM's distance first where it has not, else the grid); and, built to a licence, the grid's width from 45 m behind the last row to 110 m past the first corner, changing by 1 m per 25 m. The licence takes the first corner of 45 degrees at under 300 m of radius for the first; the wide stretch runs to the first of 55 degrees at under 250 m, which is one whatever building does to it, and on through a corner the same way within 80 m. Each design is built with `buildTrack`, thrown away on an error of `validateTrack`, and measured as the app will measure it: `analyseTrack`, a lap of the class, and, built to a licence, `analysePerformance`, `placeFacilities` and `assessLicence` for the verdict. Built to a licence, it builds on through the places found until as many pass as were asked for. The tracks are offered best first: shape and place, a quarter of a point per warning and 1.5 per required check failed, so those that pass come first. Each carries notes on what could not be met: the height the map has, a feature without room, woods or water under the lap.
+
+**In the app.** The dialog keeps its settings while the app is open. Generate runs `generateTracks` on the main thread, pausing between the stages so the page can say how far it is (half a second to three seconds for six tracks; the licence check is most of it). "Use this track" calls `store.replaceDesign`: the design, the start line as an override, no layouts and no pit lane placed by hand, as one edit that Undo takes back. The class the track was made for is selected and the map brought to the track.
 
 ## 3D view
 

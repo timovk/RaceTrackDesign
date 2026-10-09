@@ -980,6 +980,20 @@ const SURVEY_SPACING = 8;
 export const TREES_NEAR = 100;
 
 /**
+ * How wooded a terrain is at a point, from 0 (open ground) to 1 (forest):
+ * the woods of a surveyed map, or the slow noise by which `forest` grows the
+ * woods of a generated one. For choosing where a track could go.
+ */
+export function woodsAt(hm: Heightmap, seed: string): (x: number, y: number) => number {
+  if (hm.woods) return (x, y) => (inWoods(hm, x, y) ? 1 : 0);
+  const noise = createNoise2D(seededRandom(`${seed}:forest`));
+  return (x, y) => {
+    const f = Math.max(0, Math.min(1, (fbm(noise, x / 650, y / 650, 3, 0.5) + 0.05) / 0.45));
+    return f * f * (3 - 2 * f);
+  };
+}
+
+/**
  * Where trees could grow on a terrain, from its seed: forests where a slow
  * noise says so and single trees elsewhere, thinning out on steep ground and
  * towards the high ground, none in water. Conifers take over higher up. The

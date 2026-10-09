@@ -29,7 +29,7 @@ export function mountApp(root: HTMLElement, store: Store): void {
   const profile = new ProfileView(store, locate);
   const panels: Record<Mode, HTMLElement> = {
     terrain: new TerrainPanel(store).el,
-    design: new DesignPanel(store, locate).el,
+    design: new DesignPanel(store, locate, () => (store.view.dimension === '3d' ? map.fit() : map.fitTrackBesideTower())).el,
     analyse: new AnalysePanel(store, locate).el,
     race: new RacePanel(store, race, () => map.exportImage(`${slug(store.project.name)}-map.png`)).el,
   };

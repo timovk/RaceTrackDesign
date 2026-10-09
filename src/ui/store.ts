@@ -455,6 +455,27 @@ export class Store {
     this.commitEdit();
   }
 
+  /**
+   * Puts another track in place of the design, as one undoable edit: the
+   * layouts go with the old track, and so do the pit lane and speed trap
+   * placed by hand. `startFinish` is where the new track's line goes.
+   */
+  replaceDesign(design: TrackDesign, startFinish: Vec2 | null): void {
+    this.beginEdit();
+    this.project.track = JSON.parse(JSON.stringify(design)) as TrackDesign;
+    this.project.overrides = startFinish ? { startFinish: centimetres(startFinish) } : {};
+    this.project.layouts = [];
+    this.layout = 0;
+    this.selected = null;
+    this.linkDraft = null;
+    this.linkSelected = null;
+    this.focus = null;
+    if (this.tool === 'link') this.tool = 'points';
+    this.rebuildTrack();
+    this.emit('project', 'selection', 'layout', 'focus', 'mode');
+    this.commitEdit();
+  }
+
   /** Removes a control point and selects the one before it. */
   deletePoint(index: number): void {
     this.edit((d) => d.points.splice(index, 1));

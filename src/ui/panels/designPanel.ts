@@ -4,6 +4,7 @@ import { sampleHeight } from '../../core/heightmap.ts';
 import { type Control, section, segmented, slider } from '../controls.ts';
 import { h, setChildren } from '../dom.ts';
 import * as fmt from '../format.ts';
+import { openGenerator } from '../generatorDialog.ts';
 import type { Store, Tool, Topic } from '../store.ts';
 import { issueList } from './issueList.ts';
 
@@ -40,7 +41,8 @@ export class DesignPanel {
   private readonly layouts: HTMLElement;
   private readonly linkStatus: HTMLElement;
 
-  constructor(store: Store, onLocate: (station: number) => void) {
+  /** `onLocate` shows a station on the map; `onFrame` brings the whole track into view. */
+  constructor(store: Store, onLocate: (station: number) => void, onFrame: () => void = () => {}) {
     this.store = store;
     this.onLocate = onLocate;
     const d = () => store.design;
@@ -100,6 +102,9 @@ export class DesignPanel {
     this.el = h('div', { class: 'panel' },
       section('Tool', tools.el, this.help),
       this.pointCard,
+      section('Generate',
+        h('button', { class: 'btn block gen-open', title: 'Set a lap length, a width, how much it climbs, corners or speed and more, and pick from the tracks it comes up with', onclick: () => openGenerator(store, onFrame) }, 'Generate a track\u2026'),
+        h('p', { class: 'hint' }, 'Lets the app draw the track: on the best spot of this map for what you ask. It replaces the track there is; Undo brings it back.')),
       section('Track', width.el,
         h('div', { class: 'row' },
           h('button', { class: 'btn', onclick: () => store.edit((x) => x.points.forEach((p) => { p.width = x.defaultWidth; })) }, 'Apply width to all'),

@@ -2997,3 +2997,269 @@ input.layout-name:focus {
 .map-layout select {
   max-width: 160px;
 }
+
+/* ---- the track generator ---- */
+
+.gen-open {
+  margin-top: 0;
+}
+
+.gen-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: rgba(5, 7, 10, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.gen-dialog {
+  width: min(1240px, 100%);
+  height: min(860px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.gen-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 12px 10px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.gen-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.gen-header .icon-btn {
+  margin-left: auto;
+  align-self: center;
+}
+
+.gen-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 340px 1fr;
+}
+
+.gen-left {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+}
+
+.gen-settings {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 16px 12px;
+}
+
+.gen-settings .panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gen-actions {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.gen-actions .btn {
+  padding: 9px;
+}
+
+.gen-styles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.gen-style {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+
+.gen-style:hover {
+  background: var(--panel-3);
+}
+
+.gen-style.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.gen-style strong {
+  font-size: 12.5px;
+}
+
+.gen-style span {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.gen-select {
+  width: 100%;
+}
+
+.gen-ticks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+}
+
+.gen-tick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.gen-tick input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.gen-seed {
+  flex: 1;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  letter-spacing: 0.04em;
+}
+
+.gen-right {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 18px 18px;
+  background: var(--bg);
+}
+
+.gen-status {
+  margin: 0 0 8px;
+}
+
+.gen-notes:empty {
+  display: none;
+}
+
+.gen-notes {
+  margin-bottom: 10px;
+}
+
+.gen-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--warning);
+}
+
+.gen-results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(262px, 1fr));
+  gap: 12px;
+}
+
+.gen-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+}
+
+.gen-card:hover {
+  border-color: var(--muted);
+}
+
+.gen-card-top {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  background: var(--panel-2);
+  border-radius: 6px;
+}
+
+.gen-outline {
+  display: block;
+  max-width: 100%;
+}
+
+.gen-number {
+  position: absolute;
+  top: 6px;
+  left: 9px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.gen-figures {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.gen-figures p {
+  margin: 0;
+}
+
+.gen-figures .gen-head {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.gen-figures .gen-head .muted {
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.gen-pass {
+  color: var(--ok);
+}
+
+.gen-fail {
+  color: #ff8a8c;
+}
+
+@media (max-width: 860px) {
+  .gen-backdrop {
+    padding: 0;
+  }
+
+  .gen-body {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+
+  .gen-left {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .gen-settings,
+  .gen-right {
+    overflow: visible;
+  }
+}

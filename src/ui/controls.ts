@@ -44,6 +44,8 @@ export function slider(o: SliderOptions): Control {
     active = false;
     o.onCommit?.(Number(input.value));
   });
+  // A key pressed on the slider that changed nothing (Tab, say) starts no interaction to wait for.
+  input.addEventListener('blur', () => { active = false; });
   const el = h('label', { class: 'slider', title: o.title }, h('span', { class: 'slider-head' }, h('span', null, o.label), value), input);
   const update = () => {
     if (active) return;
