@@ -2,6 +2,8 @@
  * The last stretch of a race, step by step, for action replays: where every
  * car and the safety car were and how each looked (tyres, DRS, in the pits,
  * stopped), so the 3D view can draw the race as it was a few seconds ago.
+ * A stretch that will be wanted much later (a contact the stewards may give
+ * a penalty for) can be kept beyond that (`keep`).
  *
  * A step is recorded after each simulation step; the view at a past time
  * gives stand-ins for the cars that carry the recorded state over the real
@@ -36,6 +38,9 @@ interface Step {
   scIn: boolean;
 }
 
+/** Stretches kept beyond the ring at most; the oldest goes first. */
+const CLIPS = 12;
+
 export class ReplayBuffer {
   /** Race seconds kept. */
   readonly seconds: number;
@@ -44,6 +49,9 @@ export class ReplayBuffer {
   private head = 0;
   private count = 0;
   private sim: RaceSim | null = null;
+  /** Stretches kept beyond the ring, and those asked for whose end is still to come. */
+  private clips: Step[][] = [];
+  private wanted: { from: number; to: number }[] = [];
 
   constructor(seconds = 40) {
     this.seconds = seconds;
@@ -54,6 +62,35 @@ export class ReplayBuffer {
     this.head = 0;
     this.count = 0;
     this.sim = null;
+    this.clips = [];
+    this.wanted = [];
+  }
+
+  /**
+   * Keeps the stretch of race time `from`..`to` for as long as the race
+   * lasts, once all of it is recorded (it has to begin within what the ring
+   * still holds, and may end in the future).
+   */
+  keep(from: number, to: number): void {
+    this.wanted.push({ from, to });
+  }
+
+  /** Copies the stretches asked for that are complete out of the ring. */
+  private keepWanted(): void {
+    const now = this.to;
+    const due = this.wanted.filter((w) => w.to <= now);
+    if (!due.length) return;
+    this.wanted = this.wanted.filter((w) => w.to > now);
+    for (const w of due) {
+      const clip: Step[] = [];
+      for (let i = 0; i < this.count; i++) {
+        const s = this.at(i);
+        if (s.t >= w.from - 1e-9 && s.t <= w.to + 1e-9) clip.push({ t: s.t, cars: s.cars.slice(), scU: s.scU, scIn: s.scIn });
+      }
+      if (clip.length < 2) continue;
+      this.clips.push(clip);
+      if (this.clips.length > CLIPS) this.clips.shift();
+    }
   }
 
   /** Earliest and latest race times recorded (NaN when empty). */
@@ -119,6 +156,7 @@ export class ReplayBuffer {
     const sc = sim.safetyCar;
     step.scU = sc ? sc.u : NaN;
     step.scIn = !!sc?.in;
+    if (this.wanted.length) this.keepWanted();
   }
 
   /**
@@ -126,13 +164,19 @@ export class ReplayBuffer {
    * drawn at `alpha` between two steps; null when `t` is not recorded.
    */
   view(sim: RaceSim, t: number): { view: RaceView; alpha: number } | null {
-    if (sim !== this.sim || this.count < 2 || !(t >= this.from) || t > this.to) return null;
+    if (sim !== this.sim) return null;
+    // From the ring, or from a stretch kept beyond it.
+    const inRing = this.count >= 2 && t >= this.from && t <= this.to;
+    const clip = inRing ? null : this.clips.find((c) => t >= c[0].t && t <= c[c.length - 1].t);
+    if (!inRing && !clip) return null;
+    const count = clip ? clip.length : this.count;
+    const at = (k: number): Step => (clip ? clip[k] : this.at(k));
     // The last step at or before t (steps are DT apart).
-    let i = Math.min(this.count - 2, Math.max(0, Math.floor((t - this.from) / DT + 1e-9)));
-    while (i > 0 && this.at(i).t > t) i--;
-    while (i < this.count - 2 && this.at(i + 1).t <= t) i++;
-    const a = this.at(i);
-    const b = this.at(i + 1);
+    let i = Math.min(count - 2, Math.max(0, Math.floor((t - at(0).t) / DT + 1e-9)));
+    while (i > 0 && at(i).t > t) i--;
+    while (i < count - 2 && at(i + 1).t <= t) i++;
+    const a = at(i);
+    const b = at(i + 1);
     const alpha = Math.max(0, Math.min(1, (t - a.t) / Math.max(1e-9, b.t - a.t)));
     const cars = sim.cars.map((car) => {
       const o = car.id * FIELDS;

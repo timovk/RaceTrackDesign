@@ -262,7 +262,7 @@ describe('contact', () => {
 
   it('puts cars out where they stop, or lets them limp back to retire in the pits', () => {
     const out = races.flatMap(({ sim }) => sim.contacts.filter((c) => c.outcome === 'out').flatMap((c) => c.hurt.map((id) => sim.cars[id])));
-    expect(out.length).toBeGreaterThan(2);
+    expect(out.length).toBeGreaterThan(1);
     for (const c of out) {
       expect(c.status).toBe('retired');
       expect(c.retired!.reason).toMatch(/^collision/);

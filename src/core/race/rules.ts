@@ -48,7 +48,21 @@ export interface RaceRules {
    * safety car, and a virtual safety car (everyone a share slower than the
    * race lap) or a full course yellow (a speed limit, m/s), or neither.
    */
-  flags: { safetyCar: boolean; virtual: 'vsc' | 'fcy' | null; vscSlower: number; fcySpeed: number };
+  flags: {
+    safetyCar: boolean;
+    virtual: 'vsc' | 'fcy' | null;
+    vscSlower: number;
+    fcySpeed: number;
+    /**
+     * Behind the safety car, once the track is clear: every car the leader
+     * has lapped is sent past the queue and the safety car to get its lap
+     * back (`overtake`), or every car that is ahead of its class leader on
+     * the road (`passAround`), or nobody.
+     */
+    lapped: 'overtake' | 'passAround' | null;
+    /** The restart after a safety car: the leader holds the field up and goes when it chooses (`leader`), or keeps its pace up to a restart zone before the line (`zone`). */
+    restart: 'leader' | 'zone';
+  };
   /** Average wheel energy (J/m) and tyre work per metre on the reference circuits; 0 when unknown. */
   reference: { energy: number; tyreWork: number };
   /** What the stewards give for contact, and how it is served. */
@@ -276,6 +290,8 @@ export function parseRaceRules(raw: unknown, vehicle: Pick<VehicleClass, 'id' | 
       virtual,
       vscSlower: num(flags, 'vscPct', 35, 5, 100) / 100,
       fcySpeed: num(flags, 'fcyKmh', 80, 20, 200) / 3.6,
+      lapped: flags.lapped === 'overtake' || flags.lapped === 'passAround' ? flags.lapped : null,
+      restart: flags.restart === 'zone' ? 'zone' : 'leader',
     },
     reference: {
       energy: num(ref, 'energyMJPerKm', 0, 0, 1000) * 1000,

@@ -136,6 +136,8 @@ export type DamageKind = 'wing' | 'puncture' | 'body' | 'terminal';
 export interface ContactRecord {
   t: number;
   lap: number;
+  /** On the first lap after a start from the grid: the start of the race, or a standing restart. */
+  firstLap: boolean;
   /** Race progress of the car ahead where it happened. */
   u: number;
   /** The car ahead and the car behind, and how far alongside the one behind was: 0 nose to tail, 1 level. */
@@ -412,6 +414,18 @@ export class RaceCar {
   lineFirst = false;
   /** No passing before this race progress (after a restart, until the line). */
   holdUntilU = -Infinity;
+  /** After a rolling restart: it keeps this speed (m/s) until this race time, when it reacts to the cars ahead going. */
+  reactUntil = 0;
+  reactV = 0;
+  /**
+   * Behind the safety car: sent past the queue and the safety car to get a
+   * lap back (the side of the racing line it goes by on, +1 its left; 0 when
+   * not), and then on its way round the lap to the back of the queue.
+   */
+  unlapping: 0 | 1 | -1 = 0;
+  catchingUp = false;
+  /** Race progress of the first corner after its last start from the grid: until there the field fans out as the starts go. */
+  gridUntilU = Infinity;
   stuckLaps = 0;
   stuckBehind = -1;
   /** Lap on which a rival close behind stopped, threatening the undercut. */
@@ -423,6 +437,8 @@ export class RaceCar {
   neutralThisLap = false;
   /** Tyre type the team wants at the next stop because of the weather. */
   wantType: TyreType | null = null;
+  /** The neutralisation (its number in the race) in which it last came in for a stop. */
+  cheapStopIn = 0;
   incident: { u: number; kind: 'mistake' | 'off' | 'crash' | 'failure' } | null = null;
   trackIndex = 0;
   loopTimes: Float64Array;
@@ -755,7 +771,7 @@ const SINGLE_YELLOW = 1.06;
 const DOUBLE_YELLOW = 1.2;
 const YELLOW_BEFORE = 250;
 const YELLOW_AFTER = 60;
-/** Under a safety car, cars keep at least this much slower than their race lap until they reach the queue. */
+/** Under a safety car, cars keep at least this much slower than the fastest class's race lap until they reach the queue. */
 const SC_DELTA = 1.25;
 /** The safety car's speed: a share of the fastest class's race speed, and a top speed (m/s). */
 const SC_PACE = 0.7;
@@ -763,8 +779,47 @@ const SC_TOP = 55;
 /** Laps the safety car leads at least, and where it first appears ahead of the leader (metres). */
 const SC_MIN_LAPS = 2;
 const SC_AHEAD = 150;
+/**
+ * Once the track is clear the safety car stays out until the field has
+ * closed up behind it: no gap of more than QUEUE_CLOSED metres from one car
+ * on the road to the next. It waits SC_WAIT_LAPS laps for that at most.
+ */
+const QUEUE_CLOSED = 120;
+const SC_WAIT_LAPS = 3;
+/** The safety car keeps this far behind a car ahead of it that it sees within SC_SEES metres. */
+const SC_ROOM = 12;
+const SC_SEES = 80;
 /** Seconds over which cars slow down when the race is neutralised. */
 const NEUTRAL_RAMP = 5;
+/**
+ * A rolling restart. Once the safety car is in this lap the car behind it
+ * has the field: it goes at a point of its choosing between GO_BEFORE
+ * metres before the line (in a series with a restart zone, ZONE_BEFORE, and
+ * at the pace it had), never before the safety car has left the track. Over
+ * the BUNCH_RUN metres before that point it holds the field up: down to
+ * BUNCH_SHARE of the class's top speed (within BUNCH_LIMITS, m/s), braking
+ * at BUNCH_BRAKE m/s². When it goes, each driver behind follows after a
+ * moment of their own (REACT seconds, the better starters sooner) and
+ * REACT_PER_PLACE more for every place back in the queue.
+ */
+const GO_BEFORE = [80, 380];
+const ZONE_BEFORE = [120, 300];
+const BUNCH_RUN = 600;
+const BUNCH_SHARE = 0.36;
+const BUNCH_LIMITS = [22, 34];
+const BUNCH_BRAKE = 4;
+const REACT = [0.1, 0.45];
+const REACT_PER_PLACE = 0.03;
+const REACT_REACH = 600;
+/**
+ * Lapped cars sent round under the safety car: their lap-time factor while
+ * they pass the queue and catch it up again, and how far clear of a car on
+ * the racing line they go by (metres, beyond the gap two cars keep).
+ */
+const UNLAP_PACE = 1.06;
+const UNLAP_CLEAR = 0.4;
+/** The safety car waits at most this many laps for the cars of a pass-around to reach the back of the queue. */
+const WAVE_LAPS = 3;
 /** DRS stays shut on a track wetter than this. */
 const DRS_WET = 0.3;
 const TIMELINE_EVERY = 30;
@@ -796,7 +851,7 @@ export class RaceSim {
   lapLeaders: number[] = [];
   /** Race control. */
   phase: FlagPhase = 'green';
-  safetyCar: { u: number; prevU: number; startU: number; clearAt: number; in: boolean } | null = null;
+  safetyCar: { u: number; prevU: number; startU: number; clearAt: number; in: boolean; waved?: number; clearU?: number } | null = null;
   neutral: Neutralisation[] = [];
   yellows: YellowZone[] = [];
   /** Conditions now, and every half minute so far. */
@@ -875,8 +930,17 @@ export class RaceSim {
   private readonly scExit: number;
   protected phaseSince = 0;
   private virtualUntil = NaN;
-  /** After a safety car: the car that leads the field to the line, where racing resumes. */
+  /** After a safety car: the car that leads the field to the line, where racing resumes at the latest. */
   private restartLeader: RaceCar | null = null;
+  /**
+   * A rolling restart being run, from the moment the safety car is in this
+   * lap (see GO_BEFORE): how far before the line the leader goes (metres)
+   * and whether it holds the field up first, the line in the safety car's
+   * race progress, where the safety car is (or left the track) and how far
+   * it is from there to the line (stations), the speed the leader had when
+   * it began to slow, and the leader.
+   */
+  private restartRun: { go: number; bunch: boolean; lineU: number; refU: number; refLeft: number; fromV: number; leader: RaceCar | null } | null = null;
   /** Grip blend weights per tyre type at the current wetness. */
   private gripW: [number, number][] = [[0, 0], [0, 0], [0, 0]];
   private raining = false;
@@ -934,7 +998,10 @@ export class RaceSim {
     this.firstZoneU = Math.min(m.zones.length ? m.zones[0].station : Math.round(n / 4), m.firstCorner >= 0 ? m.firstCorner : Infinity);
     this.pitSide = pitSide(m);
     this.cars = setup.entrants.map((e) => new RaceCar(e, this.classes[e.classIndex], m.samples, setup.settings.seed));
-    for (const car of this.cars) car.cls.cars.push(car);
+    for (const car of this.cars) {
+      car.cls.cars.push(car);
+      car.gridUntilU = this.firstZoneU;
+    }
     this.teams = Math.max(1, ...setup.entrants.map((e) => e.teamIndex + 1));
     this.rubber = setup.rubber ?? 1;
     // A session puts its cars in the garages itself (see session.ts).
@@ -968,6 +1035,7 @@ export class RaceSim {
         car.startDelay = 0.15 + 0.3 * (1 - d.launch) * car.rng() + 0.05 * car.rng();
         car.launch = { u: g.u, from: 0, factor: 0.94 + 0.06 * d.launch };
       }
+      car.gridUntilU = this.firstZoneU;
       this.prepareStart(car, lapsEstimate[car.cls.index]);
     });
     this.order = [...this.cars].sort((a, b) => a.gridPosition - b.gridPosition);
@@ -1004,6 +1072,7 @@ export class RaceSim {
     this.updateConditions(t0);
     // Race control may have called the race off.
     if (this.finished) return;
+    this.runRestart(t0);
     const track = this.cars.filter((c) => c.status === 'running');
     track.sort((a, b) => mod(b.u, n) - mod(a.u, n));
     track.forEach((c, i) => { c.trackIndex = i; });
@@ -1416,7 +1485,8 @@ export class RaceSim {
       // Neutralised: no faster than the VSC delta, the full course yellow limit or the safety car delta.
       const floor = this.phase === 'vsc' ? m.seg[k] * (1 + this.model.rules.flags.vscSlower)
         : this.phase === 'fcy' ? this.lineDs[k] / this.model.rules.flags.fcySpeed
-          : m.seg[k] * SC_DELTA;
+          // (The safety car delta is the fastest class's: a slower class may go as fast as that, where it can.)
+          : Math.max(m.seg[k], this.model.seg[k] * (car.unlapping !== 0 || car.catchingUp ? UNLAP_PACE : SC_DELTA));
       if (floor > s) s += (floor - s) * Math.min(1, (this.t - this.phaseSince) / NEUTRAL_RAMP);
     }
     // Speed caps: pulling away (start, pit exit, restart) and braking for the pit entry.
@@ -1431,6 +1501,19 @@ export class RaceSim {
       const toEntry = mod(m.pit.entry - u, this.n) * this.ds;
       if (toEntry < 800) cap = Math.min(cap, Math.sqrt(m.pit.limit * m.pit.limit + 2 * PIT_BRAKE * (toEntry + m.pit.limitFrom)));
     }
+    const run = this.restartRun;
+    if (run && run.bunch && run.leader === car) {
+      // Leading the field to a restart: it holds it up over the last stretch before it goes.
+      const left = this.toRestartLine(run, u) * this.ds;
+      const into = run.go + BUNCH_RUN - left;
+      if (into > 0) {
+        if (Number.isNaN(run.fromV)) run.fromV = Math.max(car.v, 1);
+        const hold = Math.max(BUNCH_LIMITS[0], Math.min(BUNCH_LIMITS[1], BUNCH_SHARE * m.vehicle.topSpeed));
+        cap = Math.min(cap, Math.max(hold, Math.sqrt(Math.max(0, run.fromV * run.fromV - 2 * BUNCH_BRAKE * into))));
+      }
+    }
+    // The leader has gone: a moment before this driver follows.
+    if (this.t < car.reactUntil) cap = Math.min(cap, Math.max(1, car.reactV));
     if (cap < Infinity) s = Math.max(s, this.lineDs[k] / Math.max(cap, 1));
     return s;
   }
@@ -1455,7 +1538,8 @@ export class RaceSim {
     // a ripple, not with every car braking harder than the one ahead; and never closer than nose to tail.
     const follow = (a: RaceCar, d: number) => {
       const metres = this.road(car.u, car.u + d, car.lateral);
-      const g = this.phase === 'sc' ? 10 + 0.25 * a.ground : 6 + 0.12 * a.ground;
+      // (A car sent round to the back of the queue follows as in the race, not as in the queue.)
+      const g = this.phase === 'sc' && !car.catchingUp && car.unlapping === 0 ? 10 + 0.25 * a.ground : 6 + 0.12 * a.ground;
       const closest = (a.cls.length + car.cls.length) / 2 + NOSE_TO_TAIL;
       const depth = Math.min(1, Math.max(0, (g - metres) / Math.max(1e-9, g - closest)));
       const pace = EASE_OFF - (EASE_OFF - EASE_MOST) * depth;
@@ -1466,8 +1550,10 @@ export class RaceSim {
     };
     let limit = Infinity;
     let alongside = 0;
+    /** The car that sets the limit. */
+    let holder: RaceCar | null = null;
     car.heldBy = null;
-    const free = this.lanes && !this.noPassing(car);
+    const free = this.lanes && (car.unlapping !== 0 || !this.noPassing(car));
     for (let s = 1; s < Math.min(N, this.lanes ? 12 : 6); s++) {
       const a = order[(car.trackIndex - s + N) % N];
       if (a.status !== 'running') continue;
@@ -1483,6 +1569,7 @@ export class RaceSim {
           }
           continue;
         }
+        holder = a;
         if (d * this.ds < reach) {
           // Beside a car with no room to stay there: it lifts until it is clear behind.
           limit = Math.min(limit, this.onward(car.u, BACK_OUT * a.ground * DT, car.lateral));
@@ -1502,11 +1589,13 @@ export class RaceSim {
       break;
     }
     const sc = this.safetyCar;
-    if (sc) {
+    if (sc && car.unlapping === 0) {
       const d = mod(sc.u - car.u, this.n);
       const k = mod(Math.floor(sc.u), this.n);
       if (d * this.ds <= 250) limit = Math.min(limit, behind(d, this.lineDs[k] / this.scSeg[k]));
     }
+    // Round the lap after getting a lap back: until it reaches the back of the queue (not another car on its way there).
+    if (car.catchingUp && holder && !holder.catchingUp && holder.unlapping === 0) car.catchingUp = false;
     // Forming up for a standing restart, or stopped on track under a red flag: no further than the car's slot.
     const slot = this.regrid?.slots.get(car.id);
     if (slot !== undefined) limit = Math.min(limit, slot);
@@ -1536,14 +1625,15 @@ export class RaceSim {
   private inTheWay(ahead: RaceCar, car: RaceCar, free: boolean): boolean {
     if (ahead.offTrack || ahead.exitUntilU > ahead.u) return false;
     const pit = ahead.model.pit;
-    if (ahead.pitRequest && pit && mod(pit.entry - ahead.u, this.n) * this.ds < ENTRY_ROAD) return false;
+    // (On the pit entry road it is in the way only of a car that is coming in too: they go in one behind the other.)
+    if (ahead.pitRequest && pit && mod(pit.entry - ahead.u, this.n) * this.ds < ENTRY_ROAD) return !!car.pitRequest;
     if (!free || car.squeezed === ahead) return true;
     return Math.abs(ahead.lateral - car.lateral) < ahead.cls.half + car.cls.half + SIDE_GAP - SLACK;
   }
 
   /** Away from the grid and not yet near the first corner of the race: the field fans out, each car round the next as its start allows. */
   private away(car: RaceCar): boolean {
-    return car.lapsDone === 0 && car.u < this.firstZoneU - AWAY_UNTIL / this.ds;
+    return car.u < car.gridUntilU - AWAY_UNTIL / this.ds;
   }
 
   /** No passing here and now: under a neutralisation or waved yellows, and before the line after a restart. */
@@ -2208,6 +2298,9 @@ export class RaceSim {
     this.phase = 'sc';
     this.phaseSince = t;
     this.safetyCar = { u, prevU: u, startU: u, clearAt: t + clearance, in: false };
+    // (Out again as the field was coming to a restart: that restart is off.)
+    this.restartRun = null;
+    this.restartLeader = null;
     this.neutral.push({ kind: 'sc', from: t, to: NaN, reason });
     this.log('flag', t, `Safety car: ${reason}`, -1);
   }
@@ -2217,29 +2310,56 @@ export class RaceSim {
     sc.prevU = sc.u;
     let budget = DT;
     let u = sc.u;
+    // It does not drive through a car ahead of it (one that has just been sent past it, slow through a corner).
+    let limitU = Infinity;
+    for (const c of this.cars) {
+      if (c.status !== 'running' || c.offTrack) continue;
+      const d = mod(c.u - sc.u, this.n);
+      if (d * this.ds < SC_SEES) limitU = Math.min(limitU, sc.u + Math.max(0, d - SC_ROOM / this.ds));
+    }
     while (budget > 1e-12) {
       const fl = Math.floor(u);
       const segT = this.scSeg[mod(fl, this.n)];
-      const need = (fl + 1 - u) * segT;
+      const next = Math.max(u, Math.min(fl + 1, limitU));
+      const need = (next - u) * segT;
       if (need > budget) {
         u += budget / segT;
         break;
       }
       budget -= need;
-      u = fl + 1;
+      u = next;
+      if (next < fl + 1) break;
       // At the line, once the track is clear and it has led a full lap: in this lap.
       if (!sc.in && mod(u, this.n) === 0 && this.t >= sc.clearAt && u - sc.startU >= (SC_MIN_LAPS - 1) * this.n) {
-        sc.in = true;
-        this.log('flag', this.t, 'Safety car in this lap', -1);
+        sc.u = u;
+        // The track is clear; it stays out until the field has closed up behind it (SC_WAIT_LAPS laps at most).
+        sc.clearU ??= u;
+        if (!this.closedUp(sc) && u - sc.clearU < SC_WAIT_LAPS * this.n) continue;
+        // The track is clear. First the lapped cars are sent round, where the series does that: then it stays out a lap more.
+        if (sc.waved === undefined && this.waveLapped(sc)) sc.waved = u;
+        // (A pass-around is waited for, up to WAVE_LAPS laps; lapped cars sent to overtake get the one lap.)
+        else if (sc.waved !== undefined && this.model.rules.flags.lapped === 'passAround' && u - sc.waved < WAVE_LAPS * this.n
+          && this.cars.some((c) => c.status === 'running' && (c.unlapping !== 0 || c.catchingUp))) {
+          // Not yet: cars are still on their way round.
+        } else {
+          sc.in = true;
+          this.log('flag', this.t, 'Safety car in this lap', -1);
+          if (this.restart !== 'standing') this.planRestart(sc);
+        }
       }
       if (sc.in && mod(u, this.n) === this.scExit) {
         // In this lap: it leaves the track, and the car behind leads the field to the line (or to the grid, for a standing restart).
+        sc.u = u;
+        if (this.restartRun) {
+          this.restartRun.refU = u;
+          this.restartRun.refLeft = this.restartRun.lineU - u;
+        }
         this.safetyCar = null;
         if (this.restart === 'standing') {
           this.formGrid(this.t);
           return;
         }
-        const behind = this.cars.filter((c) => c.status === 'running').sort((a, b) => mod(u - a.u, this.n) - mod(u - b.u, this.n))[0];
+        const behind = this.restartRun?.leader ?? this.cars.filter((c) => c.status === 'running').sort((a, b) => mod(u - a.u, this.n) - mod(u - b.u, this.n))[0];
         this.restartLeader = behind ?? null;
         if (!behind) this.goGreen(this.t);
         return;
@@ -2248,22 +2368,156 @@ export class RaceSim {
     sc.u = u;
   }
 
-  /** Back to racing: everyone pulls away from their current speed; after a safety car, no passing before the line. */
+  /**
+   * Back to racing: everyone pulls away from their current speed. After a
+   * safety car there is no passing before the line, and the drivers behind
+   * the leader each take a moment to follow (see REACT).
+   */
   private goGreen(t: number, announce = true): void {
     const afterSc = this.phase === 'sc';
+    const run = this.restartRun;
+    this.restartRun = null;
     this.closeNeutral(t);
     this.phase = 'green';
     this.safetyCar = null;
-    const leader = this.restartLeader;
+    const leader = run?.leader ?? this.restartLeader;
     this.restartLeader = null;
     this.virtualUntil = NaN;
     this.restart = null;
     for (const car of this.cars) {
+      car.unlapping = 0;
+      car.catchingUp = false;
       if (car.status !== 'running') continue;
       car.launch = { u: car.u, from: car.v, factor: 1 };
       if (afterSc && car !== leader) car.holdUntilU = Math.ceil(car.u / this.n - 1e-9) * this.n;
     }
+    if (run && leader && announce) {
+      // The queue behind the leader, front to back: the further back, the later a driver sees it go.
+      const queue = this.cars
+        .filter((c) => c.status === 'running' && c !== leader && mod(leader.u - c.u, this.n) * this.ds < REACT_REACH)
+        .sort((a, b) => mod(leader.u - a.u, this.n) - mod(leader.u - b.u, this.n));
+      queue.forEach((car, i) => {
+        car.reactV = car.v;
+        car.reactUntil = t + REACT[0] + (REACT[1] - REACT[0]) * (1 - car.driver.launch) * car.rng() + REACT_PER_PLACE * (i + 1);
+      });
+    }
     if (announce) this.log('flag', t, 'Green flag: racing resumes', -1);
+  }
+
+  /** Whether the field has closed up behind the safety car (see QUEUE_CLOSED); cars sent round to the back of it aside. */
+  private closedUp(sc: NonNullable<RaceSim['safetyCar']>): boolean {
+    const behind = this.cars
+      .filter((c) => c.status === 'running' && !c.offTrack && c.unlapping === 0 && !c.catchingUp)
+      .map((c) => mod(sc.u - c.u, this.n))
+      .sort((a, b) => a - b);
+    let last = 0;
+    for (const d of behind) {
+      if ((d - last) * this.ds > QUEUE_CLOSED) return false;
+      last = d;
+    }
+    return true;
+  }
+
+  /** The safety car is in this lap, for a rolling restart: where the leader will go (see GO_BEFORE). */
+  private planRestart(sc: NonNullable<RaceSim['safetyCar']>): void {
+    const zone = this.model.rules.flags.restart === 'zone';
+    const range = zone ? ZONE_BEFORE : GO_BEFORE;
+    // Where it leaves the track, and the line after that, in its own race progress.
+    const exitU = sc.u + mod(this.scExit - sc.u, this.n);
+    const lineU = exitU + mod(-this.scExit, this.n);
+    const drawn = range[0] + (range[1] - range[0]) * this.controlRng();
+    const go = Math.min(drawn, Math.max(30, (lineU - exitU) * this.ds - 20));
+    this.restartRun = { go, bunch: !zone, lineU, refU: sc.u, refLeft: lineU - sc.u, fromV: NaN, leader: null };
+  }
+
+  /** Stations from race progress `u` to the line of the restart being run (for a car in the queue). */
+  private toRestartLine(run: NonNullable<RaceSim['restartRun']>, u: number): number {
+    const n = this.n;
+    // Behind the safety car while it is out; once it has left the track, either side of where it left.
+    let behind = mod(run.refU - u, n);
+    if (!this.safetyCar && behind > n / 2) behind -= n;
+    return run.refLeft + behind;
+  }
+
+  /**
+   * A rolling restart, step by step: the cars sent round that have passed
+   * the safety car, who leads the field, and the moment it goes.
+   */
+  private runRestart(t: number): void {
+    const sc = this.safetyCar;
+    const n = this.n;
+    if (this.phase === 'sc') {
+      for (const c of this.cars) {
+        if (c.unlapping === 0) continue;
+        // Past the safety car (or it has gone in): round the lap to the back of the queue.
+        const ahead = sc ? mod(c.u - sc.u, n) : 0;
+        if (c.status !== 'running' || !sc || (ahead * this.ds > 15 && ahead < n / 2)) {
+          c.unlapping = 0;
+          c.catchingUp = c.status === 'running';
+        }
+      }
+    }
+    const run = this.restartRun;
+    if (!run) return;
+    if (this.phase !== 'sc') {
+      this.restartRun = null;
+      return;
+    }
+    if (sc) {
+      run.refU = sc.u;
+      run.refLeft = run.lineU - sc.u;
+    }
+    // The leader: the first car behind the safety car; once that has left the track, the same car while it runs, then the next behind it.
+    const eligible = (c: RaceCar) => c.status === 'running' && c.unlapping === 0 && !c.catchingUp && !c.offTrack;
+    const from = sc ? sc.u : run.leader && !eligible(run.leader) ? run.leader.u : null;
+    let leader = from === null ? run.leader : null;
+    if (from !== null) {
+      let least = Infinity;
+      for (const c of this.cars) {
+        if (!eligible(c)) continue;
+        const d = mod(from - c.u, n);
+        if (d < least) {
+          least = d;
+          leader = c;
+        }
+      }
+    }
+    run.leader = leader;
+    if (!sc) this.restartLeader = leader;
+    if (!leader) {
+      if (!sc) this.goGreen(t);
+      return;
+    }
+    if (this.toRestartLine(run, leader.u) * this.ds <= run.go) this.goGreen(t);
+  }
+
+  /**
+   * Behind the safety car, with the track clear and the field closed up:
+   * the cars that are sent past it. Any car between it and the leader of the
+   * race is waved by; and the cars that get a lap back by the series' rule
+   * (see `flags.lapped`) pass the queue and the safety car. All of them
+   * drive round the lap to the back of the queue. Returns whether any got a
+   * lap back (the safety car then stays out for it).
+   */
+  private waveLapped(sc: NonNullable<RaceSim['safetyCar']>): boolean {
+    if (!this.lanes || this.restart) return false;
+    const how = this.model.rules.flags.lapped;
+    const n = this.n;
+    const running = this.cars.filter((c) => c.status === 'running' && !c.offTrack && !c.pitRequest && c.exitUntilU <= c.u);
+    const leader = this.order.find((c) => c.status === 'running');
+    const waved = leader ? running.filter((c) => c !== leader && mod(sc.u - c.u, n) < mod(sc.u - leader.u, n)) : [];
+    const lapped = !how ? [] : running.filter((c) => {
+      if (waved.includes(c)) return false;
+      if (how === 'overtake') return !!leader && leader.u - c.u >= n;
+      // Ahead of its class leader on the road, and so the better part of a lap behind it.
+      const first = c.cls.order.find((o) => o.status === 'running');
+      return !!first && first !== c && first.u - c.u > n / 2 && mod(sc.u - first.u, n) > mod(sc.u - c.u, n);
+    });
+    for (const c of [...waved, ...lapped]) c.unlapping = 1;
+    const names = (cars: RaceCar[]) => cars.sort((a, b) => a.position - b.position).map((c) => c.entrant.code).join(', ');
+    if (waved.length) this.log('flag', this.t, `Waved past the safety car, ahead of the leader: ${names(waved)}`, -1);
+    if (lapped.length) this.log('flag', this.t, how === 'overtake' ? `Lapped cars may now overtake: ${names(lapped)}` : `Pass-around: ${names(lapped)} may pass the safety car`, -1);
+    return lapped.length > 0;
   }
 
   private closeNeutral(t: number): void {
@@ -2294,6 +2548,7 @@ export class RaceSim {
     this.closeNeutral(t);
     this.safetyCar = null;
     this.restartLeader = null;
+    this.restartRun = null;
     this.virtualUntil = NaN;
     this.restart = null;
     this.regrid = null;
@@ -2394,6 +2649,7 @@ export class RaceSim {
       this.phase = 'sc';
       this.phaseSince = t;
       this.safetyCar = { u, prevU: u, startU: u, clearAt: t, in: true };
+      if (!standing) this.planRestart(this.safetyCar);
       this.neutral.push({ kind: 'sc', from: t, to: NaN, reason: 'restart after the red flag' });
       this.log('flag', t, `The race resumes behind the safety car${standing ? ', for a standing restart' : ''}`, -1);
     } else {
@@ -2440,7 +2696,8 @@ export class RaceSim {
     const lateral = new Map<number, number>();
     running.forEach((c, i) => {
       const g = this.model.grid[Math.min(i, this.model.grid.length - 1)];
-      slots.set(c.id, line + g.u);
+      // (Its slot the next time it comes to the grid: a lapped car stays a lap down.)
+      slots.set(c.id, c.u + mod(line + g.u - c.u, this.n));
       lateral.set(c.id, g.lateral);
     });
     this.regrid = { slots, lateral, since: t, lights: NaN };
@@ -2469,6 +2726,8 @@ export class RaceSim {
       car.v = 0;
       car.launch = { u: car.u, from: 0, factor: 0.94 + 0.06 * car.driver.launch };
       car.startDelay = t + 0.15 + 0.3 * (1 - car.driver.launch) * car.rng();
+      // As at the start: the field fans out to the first corner, and places change hands as the starts go.
+      car.gridUntilU = Math.ceil(car.u / this.n - 1e-9) * this.n + this.firstZoneU;
     }
     this.log('start', t, 'Lights out: the race restarts', this.order[0]?.id ?? -1);
   }
@@ -2546,7 +2805,7 @@ export class RaceSim {
       this.rebuildYellows();
     }
     if ((this.phase === 'vsc' || this.phase === 'fcy') && t >= this.virtualUntil) this.goGreen(t);
-    if (this.restartLeader && this.restartLeader.status !== 'running') this.goGreen(t);
+    if (!this.restartRun && this.restartLeader && this.restartLeader.status !== 'running') this.goGreen(t);
     if (!this.setup.session) {
       // Rain too heavy to race in stops it (not a bike race: riders change bikes and race on).
       const heavy = this.rain > RED_RAIN && this.wetness > RED_RAIN && this.model.rules.weekend.redFlag.rain;
@@ -2734,7 +2993,7 @@ export class RaceSim {
     if (!reason) {
       if (car.wear > 1.08 && left > 3) reason = 'tyres';
       else if (car.stops < r.pit.minStops && left <= 3) reason = 'mandatory';
-      else if (this.phase !== 'green' && left > 2 && this.cheapStop(car, lap, left)) reason = this.phase === 'sc' ? 'safety car' : this.phase === 'vsc' ? 'VSC' : 'full course yellow';
+      else if (this.phase !== 'green' && left > 2 && car.unlapping === 0 && !car.catchingUp && car.cheapStopIn !== this.neutral.length && this.cheapStop(car, lap, left)) reason = this.phase === 'sc' ? 'safety car' : this.phase === 'vsc' ? 'VSC' : 'full course yellow';
       else if (!refuel && car.nextStopLap !== null && car.tyreType === 'slick') {
         const toGo = car.nextStopLap - lap;
         if (toGo <= 0) reason = 'plan';
@@ -2746,6 +3005,8 @@ export class RaceSim {
       }
     }
     if (reason) car.pitRequest = reason;
+    // (The cheap stop of a neutralised race is taken once: not again while the same one lasts.)
+    if (reason && this.phase !== 'green') car.cheapStopIn = this.neutral.length;
     void t;
   }
 
@@ -3040,7 +3301,7 @@ export class RaceSim {
       const gap = a.cls.half + car.cls.half + SIDE_GAP;
       for (const side of [toMiddle, -toMiddle as 1 | -1]) {
         if (!this.roomBeside(car, a, a.lateral + side * gap, d)) continue;
-        car.attack = { target: a, side, untilU: this.firstZoneU };
+        car.attack = { target: a, side, untilU: car.gridUntilU };
         return;
       }
       return;
@@ -3373,7 +3634,14 @@ export class RaceSim {
       // Wide: as far out as the mistake takes it (no further in than it is); back when the road is clear for it.
       else if (car.wide && !returning) want = car.wide.side * Math.max(car.wide.reach, car.wide.side * car.lateral);
       else if (returning) want = this.clearToReturn(car, k) ? 0 : car.lateral;
-      else if (closed) want = 0;
+      else if (car.unlapping !== 0) {
+        // Sent past the queue: beside the racing line, where the cars on the lead lap stay, on the side with more
+        // road (it does not change sides with a car beside it).
+        const need = 2 * car.cls.half + SIDE_GAP + UNLAP_CLEAR;
+        const room = (side: number) => (side > 0 ? hi[i] : -lo[i]);
+        if (car.flank === 0 && room(car.unlapping) < need && room(-car.unlapping) >= need) car.unlapping = -car.unlapping as 1 | -1;
+        want = car.unlapping * need;
+      } else if (closed) want = 0;
       else if (chasing) want = attack!.target.lateral + attack!.side * (car.cls.half + attack!.target.cls.half + SIDE_GAP);
       else if (car.coverUntilU > car.u) {
         // Shutting the inside: over until a car does not fit there, and no further once one is beside it.
@@ -3496,7 +3764,7 @@ export class RaceSim {
           // (Not on the run from the grid to the first corner, where places change hands as the starts go.)
           // (Nor where there is no passing: two cars side by side when the race is neutralised fall into line as
           // they are, the one ahead in front, and that is no overtake.)
-          if (!this.setup.session && car.cls === o.cls && car.u > o.u && car.u - o.u < n / 2 && o.exitUntilU <= o.u && !o.offTrack && !(car.lapsDone === 0 && car.u < this.firstZoneU)
+          if (!this.setup.session && car.cls === o.cls && car.u > o.u && car.u - o.u < n / 2 && o.exitUntilU <= o.u && !o.offTrack && car.u >= car.gridUntilU
             && !this.noPassing(car)) {
             this.passed(car, o, f.place, f.classPlace);
           }
@@ -3607,7 +3875,7 @@ export class RaceSim {
     const away = (c: RaceCar): 1 | -1 => (c.lateral >= other(c).lateral ? 1 : -1);
     const record = (outcome: ContactRecord['outcome'], hurt: RaceCar[]) => {
       this.contacts.push({
-        t, lap, u: a.u, ahead: a.id, behind: b.id, overlap, inside: other(outer).id, speed, lunging: lunging?.id ?? -1, squeezed: squeezed?.id ?? -1, outcome, hurt: hurt.map((c) => c.id),
+        t, lap, firstLap: a.u < a.gridUntilU - this.firstZoneU + this.n, u: a.u, ahead: a.id, behind: b.id, overlap, inside: other(outer).id, speed, lunging: lunging?.id ?? -1, squeezed: squeezed?.id ?? -1, outcome, hurt: hurt.map((c) => c.id),
       });
       // What cost a car something is the stewards' business.
       if (hurt.length) this.report(this.contacts.length - 1, where);
@@ -3742,7 +4010,7 @@ export class RaceSim {
     if (c.state === 'investigating') for (const id of c.cars) this.cars[id].investigations--;
     c.state = 'decided';
     c.decidedAt = t;
-    const verdict = judge(rec, rules.firstLapLenient && rec.lap === 1);
+    const verdict = judge(rec, rules.firstLapLenient && rec.firstLap);
     c.verdict = verdict;
     const code = (id: number) => this.cars[id].entrant.code;
     const behind = this.cars[c.cars[0]];

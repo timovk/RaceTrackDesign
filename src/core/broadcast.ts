@@ -221,6 +221,8 @@ export interface TvCar {
   selected: boolean;
   /** In practice or qualifying: on a push lap (1), or on one in the closing minutes of qualifying (2). */
   pushing?: number;
+  /** A car of its class side by side with it now (bodies overlapping along the road), if any. */
+  beside?: number;
 }
 
 export type Battle = { kind: 'battle'; ahead: number; behind: number };
@@ -248,6 +250,8 @@ export interface TvShot {
   hold: number;
   /** A replay: the stretch of race time it shows, and how fast (race seconds per screen second). */
   replay?: { from: number; to: number; speed: number };
+  /** What a replay is of: a pass, or a contact (also the one a penalty has just been given for). */
+  replayOf?: 'overtake' | 'contact';
 }
 
 /** The cars in a subject, front first. */
@@ -260,16 +264,26 @@ function samePair(a: Battle, b: Battle): boolean {
   return (a.ahead === b.ahead && a.behind === b.behind) || (a.ahead === b.behind && a.behind === b.ahead);
 }
 
-/** Something that happened, for the director: a car in trouble, overtaking, or taking the lead of the race on track. */
+/**
+ * Something that happened, for the director: a car in trouble, overtaking,
+ * or taking the lead of the race on track; two cars going side by side
+ * (`fight`); a restart coming or under way (`restart`: the car leading the
+ * field); a start from the grid during the race (`start`); and a penalty
+ * for a contact a while ago, which is worth another look at it (`penalty`).
+ */
 export interface TvEvent {
-  kind: 'incident' | 'overtake' | 'lead';
+  kind: 'incident' | 'overtake' | 'lead' | 'fight' | 'restart' | 'start' | 'penalty';
   car: number;
   /** Director time it happened. */
   at: number;
-  /** For a replay: the car passed, the race time it happened and where the car was then (race progress). */
+  /** For a replay: the other car in it (the car passed, or hit), the race time it happened and where the car was then (race progress). */
   other?: number;
   raceTime?: number;
   u?: number;
+  /** The race time it was noted, when that is not when it happened (a penalty). */
+  since?: number;
+  /** A start that has had its shot. */
+  shown?: boolean;
 }
 
 /** What a replay needs to know about an event besides the car. */
@@ -277,6 +291,7 @@ export interface ReplayDetail {
   other?: number;
   raceTime: number;
   u: number;
+  since?: number;
 }
 
 const MIN_SHOT = 2.5;
@@ -322,6 +337,12 @@ const REPLAY_FROM = 2.5;
 const REPLAY_WITHIN = 25;
 const REPLAY_GAP = 25;
 const REPLAY_MAX_RATE = 5;
+/** Two cars side by side for a place: that much more of a battle, and the shot stays on them up to this much longer (screen seconds). */
+const SIDE_BY_SIDE = 30;
+const FIGHT_HOLD = 8;
+/** A restart is shown on this many cars at the front of the field, for about this long (race seconds). */
+const RESTART_GROUP = 5;
+const RESTART_HOLD = 10;
 
 export interface DirectorTrack {
   n: number;
@@ -387,9 +408,9 @@ export class Director {
     if (this.shot) this.shot = { ...this.shot, hold: 0 };
   }
 
-  /** Something worth showing happened (at the current clock); with `replay`, worth a replay too. */
-  note(kind: TvEvent['kind'], car: number, replay?: ReplayDetail): void {
-    const e: TvEvent = { kind, car, at: this.clock, ...replay };
+  /** Something worth showing happened (at the current clock); with `replay`, worth a replay too; `other`: the second car in it. */
+  note(kind: TvEvent['kind'], car: number, replay?: ReplayDetail, other?: number): void {
+    const e: TvEvent = { kind, car, at: this.clock, ...(other === undefined ? {} : { other }), ...replay };
     this.events.push(e);
     if (replay) this.replays.push(e);
   }
@@ -407,7 +428,7 @@ export class Director {
   update(dt: number, rate: number, cars: readonly TvCar[], raceTime = Infinity): TvShot | null {
     this.clock += Math.max(0, dt);
     this.events = this.events.filter((e) => this.clock - e.at < 12);
-    this.replays = this.replays.filter((e) => !(raceTime - e.raceTime! > REPLAY_WITHIN));
+    this.replays = this.replays.filter((e) => !(raceTime - (e.since ?? e.raceTime!) > REPLAY_WITHIN));
     const byId = new Map(cars.map((c) => [c.id, c]));
     const s = this.shot;
     // Time away from the cars followed (a replay, an incident elsewhere) does not count against their time.
@@ -420,8 +441,11 @@ export class Director {
       const now = mine ? follows : this.battleNow(s.subject.ahead, s.subject.behind, byId);
       if (now && (now.ahead !== s.subject.ahead || now.behind !== s.subject.behind)) s.subject = now;
     }
-    if (s && !this.mustCut(s, byId, rate, raceTime, follows)) return s;
-    const opening = !s && this.recent.length === 0 && raceTime < START_WINDOW && rate <= START_MAX_RATE;
+    // A start from the grid during the race (a standing restart) is shown as the start was.
+    const again = rate <= START_MAX_RATE ? this.events.find((e) => e.kind === 'start' && !e.shown) : undefined;
+    if (again) again.shown = true;
+    if (s && !again && !this.mustCut(s, byId, rate, raceTime, follows)) return s;
+    const opening = !!again || (!s && this.recent.length === 0 && raceTime < START_WINDOW && rate <= START_MAX_RATE);
     this.shot = (opening ? this.startShot(cars, rate) : null) ?? this.choose(cars, byId, rate, raceTime, follows);
     if (this.shot) {
       this.recent.push(this.shot);
@@ -434,6 +458,11 @@ export class Director {
   private replayReady(rate: number, raceTime: number, follows: Subject | null, byId: Map<number, TvCar>): boolean {
     return rate <= REPLAY_MAX_RATE && this.clock - this.lastReplay >= REPLAY_GAP
       && this.replays.some((e) => raceTime - e.raceTime! >= REPLAY_FROM && this.cutsIn(e, follows, byId));
+  }
+
+  /** Whether the two cars of a battle are side by side now. */
+  private sideBySide(b: Battle, byId: Map<number, TvCar>): boolean {
+    return byId.get(b.ahead)?.beside === b.behind || byId.get(b.behind)?.beside === b.ahead;
   }
 
   /** Whether a subject has any of these cars in it. */
@@ -525,6 +554,8 @@ export class Director {
     const ids = subjectIds(follows);
     if (ids.includes(e.car) || (e.other !== undefined && ids.includes(e.other))) return true;
     if (ids.some((id) => byId.get(id)?.selected)) return false;
+    // (Two cars going side by side take it from a car on its own, not from another battle.)
+    if (e.kind === 'fight') return follows.kind === 'car';
     return e.kind !== 'overtake';
   }
 
@@ -542,16 +573,21 @@ export class Director {
 
   private mustCut(s: TvShot, byId: Map<number, TvCar>, rate: number, raceTime: number, follows: Subject | null): boolean {
     const elapsed = this.clock - s.start;
-    if (elapsed >= s.hold) return true;
+    // Two cars side by side for a place keep the screen a while longer, and no replay cuts in on them.
+    const fighting = s.subject.kind === 'battle' && !s.replay && this.sideBySide(s.subject, byId);
+    if (elapsed >= s.hold + (fighting ? FIGHT_HOLD : 0)) return true;
     // A replay plays to its end.
     if (s.reason === 'replay') return false;
     // A replay that is ready comes as soon as the shot has had its moment (not an incident, the start or a stop).
-    if (elapsed > MIN_SHOT && s.reason !== 'incident' && s.reason !== 'start' && s.reason !== 'pit' && this.replayReady(rate, raceTime, follows, byId)) return true;
+    if (elapsed > MIN_SHOT && !fighting && s.reason !== 'incident' && s.reason !== 'start' && s.reason !== 'pit' && this.replayReady(rate, raceTime, follows, byId)) return true;
     const cars = this.subjectCars(s.subject, byId);
     if (cars.length === 0) return true;
-    // Something major: an incident, or the lead of the race changing hands off screen.
+    // Something major: an incident, the lead of the race changing hands off screen, or a restart; and, from a car
+    // that is on screen for nothing in particular, two cars going side by side for a place.
+    const idle = s.reason === 'field' || s.reason === 'leader';
     const incident = elapsed > MIN_SHOT && s.reason !== 'incident' && this.events.some((e) => e.at > s.start && this.cutsIn(e, follows, byId)
-      && (e.kind === 'incident' || (e.kind === 'lead' && !this.shows(s.subject, [e.car]))));
+      && (e.kind === 'incident' || (e.kind === 'lead' && !this.shows(s.subject, [e.car])) || (e.kind === 'restart' && s.reason !== 'start')
+        || (e.kind === 'fight' && idle && !this.shows(s.subject, [e.car]))));
     // The start holds on the field as it gets away, until the back of it leaves the camera's sight.
     if (s.reason !== 'start') {
       // An onboard camera goes with its car, the pit box camera until the car has left the pit lane.
@@ -599,7 +635,9 @@ export class Director {
       if (c.interval > BATTLE_GAP || c.classPosition <= 1) continue;
       const ahead = byClassPos.get(`${c.classIndex}:${c.classPosition - 1}`);
       if (!ahead) continue;
-      battles.push({ subject: { kind: 'battle', ahead: ahead.id, behind: c.id }, reason: 'battle', score: 20 + 80 * stake(ahead) + 10 * (1 - c.interval / BATTLE_GAP) });
+      // Side by side they are worth more than merely close.
+      const side = c.beside === ahead.id || ahead.beside === c.id ? SIDE_BY_SIDE : 0;
+      battles.push({ subject: { kind: 'battle', ahead: ahead.id, behind: c.id }, reason: 'battle', score: 20 + 80 * stake(ahead) + 10 * (1 - c.interval / BATTLE_GAP) + side });
     }
     if (selected) {
       // The viewer's car, in a battle when it is in one.
@@ -613,7 +651,12 @@ export class Director {
       // A director cuts straight to trouble, and to a new leader of the race (with the car it passed while they are together).
       if (e.kind === 'incident') cand.push({ subject: { kind: 'car', id: e.car }, reason: 'incident', score: 100 });
       else if (e.kind === 'lead') cand.push({ subject: (e.other !== undefined ? this.battleNow(e.car, e.other, byId) : null) ?? { kind: 'car', id: e.car }, reason: 'overtake', score: 115 });
-      else cand.push({ subject: { kind: 'car', id: e.car }, reason: 'overtake', score: 20 + 45 * stake(c) });
+      else if (e.kind === 'restart') {
+        // A restart: the front of the field, from the car that leads it.
+        const front = running.filter((x) => x.position >= c.position).sort((a, b) => a.position - b.position).slice(0, RESTART_GROUP).map((x) => x.id);
+        if (front.length > 1) cand.push({ subject: { kind: 'group', ids: front }, reason: 'start', score: 118 });
+      } else if (e.kind === 'overtake') cand.push({ subject: { kind: 'car', id: e.car }, reason: 'overtake', score: 20 + 45 * stake(c) });
+      // (Two cars side by side are a battle, scored as one above; a penalty and a start have a replay and a shot of their own.)
     }
     // A replay of an overtake or incident a few seconds ago, one at a time.
     if (running.length && this.replayReady(rate, raceTime, follows, byId)) {
@@ -621,8 +664,9 @@ export class Director {
         const age = raceTime - e.raceTime!;
         if (!(age >= REPLAY_FROM) || !this.cutsIn(e, follows, byId)) continue;
         const mine = !!selected && (e.car === selected.id || e.other === selected.id);
-        const subject: Subject = e.kind !== 'incident' && e.other !== undefined ? { kind: 'battle', ahead: e.car, behind: e.other } : { kind: 'car', id: e.car };
-        cand.push({ subject, reason: 'replay', score: mine ? 125 : e.kind === 'lead' ? 112 : e.kind === 'incident' ? 108 : 100, event: e });
+        // Both cars of a pass, of a contact and of the contact a penalty was given for.
+        const subject: Subject = e.other !== undefined ? { kind: 'battle', ahead: e.car, behind: e.other } : { kind: 'car', id: e.car };
+        cand.push({ subject, reason: 'replay', score: mine ? 125 : e.kind === 'lead' ? 112 : e.kind === 'incident' ? 108 : e.kind === 'penalty' ? 104 : 100, event: e });
       }
     }
     // Practice and qualifying: cars on a push lap, the quicker ones and the closing minutes most.
@@ -658,7 +702,9 @@ export class Director {
     // Following cars: them again (from another camera), unless something that may cut in is more important.
     if (follows) {
       const lead = this.events.filter((e) => e.kind === 'lead');
-      cand = cand.filter((c) => c.reason === 'incident' || c.reason === 'replay' || (c.reason === 'overtake' && lead.some((e) => this.shows(c.subject, [e.car]))));
+      const fights = this.events.filter((e) => e.kind === 'fight' && this.cutsIn(e, follows, byId));
+      cand = cand.filter((c) => c.reason === 'incident' || c.reason === 'replay' || c.reason === 'start' || (c.reason === 'overtake' && lead.some((e) => this.shows(c.subject, [e.car])))
+        || (c.reason === 'battle' && fights.some((e) => this.shows(c.subject, [e.car]) && this.shows(c.subject, [e.other ?? e.car]))));
       const own = this.subjectCars(follows, byId);
       const reason = follows.kind === 'battle' || !own.length ? 'battle' : this.reasonFor(own[0]);
       cand.push({ subject: follows, reason, score: own.some((c) => c.selected) ? 120 : 90 });
@@ -701,11 +747,12 @@ export class Director {
   private replayShot(e: TvEvent, subject: Subject, byId: Map<number, TvCar>): TvShot {
     this.replays = this.replays.filter((r) => r !== e);
     this.lastReplay = this.clock;
-    const incident = e.kind === 'incident';
+    const incident = e.kind === 'incident' || e.kind === 'penalty';
     const before = incident ? REPLAY_BEFORE_INCIDENT : REPLAY_BEFORE;
     const after = incident ? REPLAY_AFTER_INCIDENT : REPLAY_AFTER;
     const replay = { from: e.raceTime! - before, to: e.raceTime! + after, speed: REPLAY_SPEED };
-    const shot = (camera: string, carrier?: number): TvShot => ({ subject, camera, carrier, reason: 'replay', start: this.clock, hold: (before + after) / REPLAY_SPEED, replay });
+    const replayOf = incident ? 'contact' : 'overtake';
+    const shot = (camera: string, carrier?: number): TvShot => ({ subject, camera, carrier, reason: 'replay', start: this.clock, hold: (before + after) / REPLAY_SPEED, replay, replayOf });
     const r = this.rng();
     if (!incident && e.other !== undefined && r < 0.35) return r < 0.2 ? shot('tcam', e.car) : shot('rear', e.other);
     // The stretch the cars covered during the replay, at about their speed now.
@@ -739,7 +786,7 @@ export class Director {
       const left = (lead.stopLeft ?? 0) / Math.max(1e-6, rate);
       if (left >= MIN_PIT_SHOT) return { subject, camera: 'pitbox', carrier: lead.id, reason, start: this.clock, hold: Math.min(12, left + 2.5) };
     }
-    const hold = 5 + this.rng() * 7;
+    const hold = reason === 'start' ? Math.max(5, RESTART_HOLD / Math.max(1e-6, rate)) : 5 + this.rng() * 7;
     const last = this.recent[this.recent.length - 1];
     // Now and then onboard, but never twice running and at most two in four shots.
     const chance = ONBOARD_CHANCE[reason] ?? 0;

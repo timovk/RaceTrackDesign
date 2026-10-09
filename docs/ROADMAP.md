@@ -1,10 +1,10 @@
 # Roadmap
 
-What is decided and waiting to be built, and what was proposed and never decided. The README's status table lists what is done. Last updated 2026-10-07.
+What is decided and waiting to be built, and what was proposed and never decided. The README's status table lists what is done. Last updated 2026-10-09.
 
-## Next: side-by-side racing
+## Side-by-side racing
 
-Decided on 2026-10-05. Steps 1 to 4 are built; step 5 is waiting.
+Decided on 2026-10-05. All five steps are built; what is not right yet is listed under each step.
 
 Before step 1 the race was one-dimensional: a car was a position along the lap, and the sideways position that was drawn (passing, the grid, cars spread side by side in 3D) never affected the race. This makes the sideways position real. Bikes still race the old way.
 
@@ -26,7 +26,7 @@ Before step 1 the race was one-dimensional: a car was a position along the lap, 
 | 2 **done** | The start and lap 1 on the same rules. What it took: a hole to move over into, two abreast through a corner, following measured in metres of road, and one cost per corner for a lane | The grid fanning out and funnelling into the first corners by room, in place of the three-abreast cap |
 | 3 **done** | Contact and mistakes. A driver's own trouble at the corners: running wide, a trip off the road, a spin, a crash. Contact between cars side by side: a touch, a spin, a car forced off, damage that needs the pits, a car out | Incidents where cars were fighting, with yellows and safety cars through the race control there is |
 | 4 **done** | Stewards: who is to blame for a contact, by the FIA's driving standards guidelines, and each series' own penalty for it, served in the race or added to the race time | Investigations and penalties in the timing tower, the feed and on TV, and a result that can change after the flag |
-| 5 | Restarts and safety-car queues; the TV director using all of it | Replays of contact, cameras picking side-by-side fights |
+| 5 **done** | Restarts and safety-car queues: the field closes up, lapped cars are sent round by the series' rule, the leader holds the field up and picks its moment, a standing restart goes as the start does; and the TV director using all of it | A restart shown on the front of the field, replays of contact with both cars and again at the penalty, cameras preferring side-by-side fights |
 
 **Also agreed**
 
@@ -37,36 +37,36 @@ Before step 1 the race was one-dimensional: a car was a position along the lap, 
 
 How it works is in ARCHITECTURE.md under Lanes. Three things changed beside the passing itself, all for cars only: the slipstream is weaker (a car loses 10% to 12% of its drag 0.3 s behind another, where the classes had 20% to 25%) and thins out faster with distance, as does the wake; and in the race the wing opens over the last 450 m of a DRS zone at most. With the old values every car in a tow passed the one ahead on any long straight.
 
-Overtakes for position after lap 1, Formula 1, each circuit's default race. Before: the one-line model, two races per circuit. After: lanes, three races per circuit. The same seed no longer gives the same race, so the columns are different races, and a single race can be well off these means. The last two columns are with contact and mistakes, and with the stewards.
+Overtakes for position after lap 1, Formula 1, each circuit's default race. Before: the one-line model, two races per circuit. After: lanes, three races per circuit. The same seed no longer gives the same race, so the columns are different races, and a single race can be well off these means. The last three columns are with contact and mistakes, with the stewards, and with the new restarts.
 
-| Circuit | Width (m) | Before | After step 1 | After step 2 | After step 3 | After step 4 |
-|---|---|---|---|---|---|---|
-| Austin | 13.9 | 31.0 | 40.0 | 28.7 | 32.0 | 33.0 |
-| Brands Hatch | 9.2 | 9.0 | 5.3 | 3.7 | 5.0 | 5.3 |
-| Budapest | 10.0 | 27.0 | 9.0 | 9.0 | 11.7 | 11.7 |
-| Catalunya | 11.2 | 13.5 | 21.3 | 11.0 | 18.0 | 18.0 |
-| Hockenheim | 12.6 | 27.0 | 21.7 | 4.3 | 3.7 | 3.7 |
-| Indianapolis | 15.3 | 0.0 | 24.3 | 28.0 | 29.3 | 29.3 |
-| Melbourne | 12.3 | 30.0 | 9.7 | 15.3 | 11.0 | 11.0 |
-| Mexico City | 12.2 | 57.5 | 59.7 | 53.7 | 46.0 | 45.3 |
-| Montreal | 9.7 | 83.0 | 39.0 | 40.7 | 49.0 | 49.0 |
-| Monza | 9.4 | 161.5 | 114.0 | 122.7 | 108.3 | 108.3 |
-| Moscow Raceway | 11.7 | 17.5 | 35.0 | 32.0 | 17.7 | 18.0 |
-| Norisring | 15.9 | 92.5 | 94.3 | 104.3 | 92.0 | 92.0 |
-| Nürburgring | 11.8 | 30.0 | 40.0 | 35.0 | 19.3 | 20.3 |
-| Oschersleben | 10.6 | 43.5 | 45.3 | 11.0 | 7.0 | 7.0 |
-| Sakhir | 13.4 | 83.5 | 70.0 | 50.0 | 56.7 | 55.3 |
-| São Paulo | 11.9 | 64.0 | 49.3 | 35.7 | 56.3 | 56.3 |
-| Sepang | 14.6 | 47.5 | 50.7 | 43.3 | 52.0 | 50.7 |
-| Shanghai | 13.0 | 19.0 | 33.0 | 51.3 | 46.3 | 46.3 |
-| Silverstone | 13.8 | 36.5 | 34.7 | 35.3 | 23.3 | 23.3 |
-| Sochi | 12.6 | 71.5 | 36.7 | 27.0 | 46.7 | 46.7 |
-| Spa | 9.8 | 37.0 | 57.0 | 68.3 | 70.0 | 69.7 |
-| Spielberg | 11.0 | 96.0 | 39.3 | 90.0 | 94.7 | 91.7 |
-| Suzuka | 9.8 | 15.0 | 63.7 | 64.7 | 69.7 | 69.7 |
-| Yas Marina | 12.9 | 76.0 | 67.7 | 82.7 | 99.3 | 102.3 |
-| Zandvoort | 10.5 | 20.5 | 39.0 | 38.0 | 32.3 | 32.3 |
-| **Mean** | | **47.6** | **44.0** | **43.4** | **43.9** | **43.9** |
+| Circuit | Width (m) | Before | After step 1 | After step 2 | After step 3 | After step 4 | After step 5 |
+|---|---|---|---|---|---|---|---|
+| Austin | 13.9 | 31.0 | 40.0 | 28.7 | 32.0 | 33.0 | 33.3 |
+| Brands Hatch | 9.2 | 9.0 | 5.3 | 3.7 | 5.0 | 5.3 | 5.3 |
+| Budapest | 10.0 | 27.0 | 9.0 | 9.0 | 11.7 | 11.7 | 14.0 |
+| Catalunya | 11.2 | 13.5 | 21.3 | 11.0 | 18.0 | 18.0 | 19.0 |
+| Hockenheim | 12.6 | 27.0 | 21.7 | 4.3 | 3.7 | 3.7 | 3.7 |
+| Indianapolis | 15.3 | 0.0 | 24.3 | 28.0 | 29.3 | 29.3 | 33.7 |
+| Melbourne | 12.3 | 30.0 | 9.7 | 15.3 | 11.0 | 11.0 | 11.0 |
+| Mexico City | 12.2 | 57.5 | 59.7 | 53.7 | 46.0 | 45.3 | 54.3 |
+| Montreal | 9.7 | 83.0 | 39.0 | 40.7 | 49.0 | 49.0 | 49.0 |
+| Monza | 9.4 | 161.5 | 114.0 | 122.7 | 108.3 | 108.3 | 127.0 |
+| Moscow Raceway | 11.7 | 17.5 | 35.0 | 32.0 | 17.7 | 18.0 | 17.0 |
+| Norisring | 15.9 | 92.5 | 94.3 | 104.3 | 92.0 | 92.0 | 92.0 |
+| Nürburgring | 11.8 | 30.0 | 40.0 | 35.0 | 19.3 | 20.3 | 19.0 |
+| Oschersleben | 10.6 | 43.5 | 45.3 | 11.0 | 7.0 | 7.0 | 7.0 |
+| Sakhir | 13.4 | 83.5 | 70.0 | 50.0 | 56.7 | 55.3 | 55.3 |
+| São Paulo | 11.9 | 64.0 | 49.3 | 35.7 | 56.3 | 56.3 | 53.3 |
+| Sepang | 14.6 | 47.5 | 50.7 | 43.3 | 52.0 | 50.7 | 50.7 |
+| Shanghai | 13.0 | 19.0 | 33.0 | 51.3 | 46.3 | 46.3 | 46.3 |
+| Silverstone | 13.8 | 36.5 | 34.7 | 35.3 | 23.3 | 23.3 | 23.7 |
+| Sochi | 12.6 | 71.5 | 36.7 | 27.0 | 46.7 | 46.7 | 49.0 |
+| Spa | 9.8 | 37.0 | 57.0 | 68.3 | 70.0 | 69.7 | 63.7 |
+| Spielberg | 11.0 | 96.0 | 39.3 | 90.0 | 94.7 | 91.7 | 88.7 |
+| Suzuka | 9.8 | 15.0 | 63.7 | 64.7 | 69.7 | 69.7 | 65.7 |
+| Yas Marina | 12.9 | 76.0 | 67.7 | 82.7 | 99.3 | 102.3 | 98.7 |
+| Zandvoort | 10.5 | 20.5 | 39.0 | 38.0 | 32.3 | 32.3 | 32.3 |
+| **Mean** | | **47.6** | **44.0** | **43.4** | **43.9** | **43.9** | **44.5** |
 
 GT3, one three-hour race of 30 cars per circuit, before and after: Monza 179 and 129, Spa 169 and 76, Budapest 118 and 36, Suzuka 164 and 35, Silverstone 175 and 141, Brands Hatch 131 and 25, Sakhir 204 and 162; mean 163 and 86. In a 60-minute race of 52 cars in three classes on the test circuit, bodies overlapped for 742 pair-seconds before (755 pairs of cars drove through each other) and for 0.3 after.
 
@@ -201,6 +201,43 @@ Not right yet:
 - **A car always serves a drive-through at the first chance**, where a team may use the laps the rules allow.
 - **In a race of several classes the fastest class's rules** hold for every car.
 - **Bikes** have no stewards: they race in one line and keep no record of contact.
+
+### Step 5 as built
+
+How it works is in ARCHITECTURE.md under Race control (the queue, lapped cars and the restart) and under Television (the director).
+
+- **The queue.** The safety car stays out until the track is clear and the field has closed up behind it (no gap over 120 m; it waits three laps for that at most). Every class may go as fast as the fastest class's safety car delta, so the slower classes of a multi-class race catch the queue too. Two cars for the pit entry go in one behind the other (they drove through each other), and a car takes the cheap stop once per neutralisation (some stopped twice).
+- **Lapped cars**, by the series' own rule from its regulations: Formula 1 (B5.13) and Formula 2 (Article 40.12) send every lapped car past the queue and the safety car, and the safety car stays out one more lap; the WEC (Article 14, used for the ELMS too) sends every car that is ahead of its class leader on the road, and waits for it. IndyCar, GT World Challenge, GT4 and TCR send nobody. In every series a car caught between the safety car and the leader is waved by.
+- **The rolling restart.** The leader slows the field once the safety car is coming in, goes at a point of its choosing over the last 80 to 380 m before the line, and every driver behind follows after a moment of their own. Nobody passes before the line. In IndyCar (7.7.1.3) the leader keeps its pace up to a restart zone and accelerates there.
+- **The standing restart** (Formula 1 after a red flag) goes as the start does: the field fans out off the grid and funnels into the first corner, no pass is counted before it, and the stewards treat that lap as a first lap. A lapped car takes the grid slot ahead of it and stays a lap down; before, it drove a lap through the cars standing on the grid to reach a slot a lap further on.
+- **The TV director** shows a restart on the front five of the field from the moment the safety car is coming in, and a standing restart from behind the grid as the start was. Two cars side by side for a place count for more than two that are close, and the shot stays on them up to 8 s longer. A contact is replayed with both cars in the picture, and once more when the stewards give a penalty for it; the broadcast keeps every contact for that.
+
+**Restarts, before and after.** The safety car sent out a third of the way into the race; what the 120 s after the green flag bring, per restart:
+
+| Class | Restarts | Passes | Contacts | Leader's speed at the green flag | First ten over the line within | Safety car out for |
+|---|---|---|---|---|---|---|
+| Formula 1 | 75 on 25 circuits | 1.25, 3.5 | 0.08, 0.32 | 234, 121 km/h | 8.0, 3.7 s | 5.8, 9.9 min |
+| GT3 | 14 on 7 | 1.2, 4.6 | 0.07, 0.21 | 166, 113 km/h | 13.3, 3.2 s | 7.3, 10.1 min |
+| IndyCar | 12 on 6 | 0.25, 0.25 | 0.08, 0 | 215, 199 km/h | 6.9, 5.8 s | 6.5, 12.0 min |
+
+In Formula 1, 15.5 of the 19 cars running are within 300 m of the leader at the green flag (8.3 before). The safety car is out longer because it waits for the field to close up, which takes a field spread round the lap three to five laps at the pace the delta allows.
+
+Lapped cars: at the Norisring ten lapped Formula 1 cars passed the queue and the safety car in 31 s and were all back on the lead lap at the restart, 0.14 to 0.39 of a lap behind the leader; no bodies overlapped while they went by (five circuits tried). In a six-hour race of three classes at Spa, 14 cars were waved by and 3 passed round, and the GT3 cars sent round restarted 0.1 of a lap behind their class leader where they had been 0.8 to 0.9 behind.
+
+**Whole races** change where a safety car comes out, which is in one Formula 1 race in six. Passes for position after lap 1: Formula 1 44.5 a race over the 75 races of the table above (43.9), and 42.5 against 42.4 over the 100 races of step 3's table; GT3 74.7 against 72.6 over 30 races, and one race per circuit Monza 210, Spa 45, Budapest 42, Suzuka 37, Silverstone 121, Brands Hatch 83, Sakhir 93, mean 90 (91). Three six-hour races of three classes at Spa: 147 passes a race (139), 119 mistakes and touches (129), 17 trips off, spins and cases of damage (18), 3.0 cars out through the driver (3.3).
+
+Seen in the app, at Bremgarten in a Formula 1 race: the director cut to the front five of the field 20 s before a restart, from a trackside camera, and the leader went at 123 km/h some 300 m before the line; a contact made between two cars was shown live on the car that spun and replayed 11 s later from the corner's camera with both cars as its subject; and when the stewards gave a 10-second penalty for it three minutes later, the same seven seconds were replayed again, with the stewards' message and +10 after the car's row in the tower.
+
+Not right yet:
+
+- **Lapped cars at a red flag** stay a lap down. Formula 1 and Formula 2 let them have their lap back before a standing restart.
+- **The WEC's drop-back** (the field sorted by class behind the safety car) is not built; the pass-around is.
+- **Restart zones** are this project's own (120 to 300 m before the line): IndyCar announces them per event.
+- **IndyCar restarts bring few passes** (0.25 in two minutes): the leader does not slow the field, and IndyCar has few passes here anyway.
+- **Cold tyres and brakes** at a restart make no difference; a driver's own trouble rises only because everyone has a rival right behind.
+- **The safety car** still appears ahead of the leader out of nowhere and vanishes at the pit entry; it does not drive out of and into the pit lane.
+- **The director was not seen picking a side-by-side fight by itself** in the app: the rule is tested, the picture is not.
+- **Bikes** restart as before.
 
 ## Graphics, phase 4: the cars
 

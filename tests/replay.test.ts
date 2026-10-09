@@ -34,6 +34,42 @@ describe('replays', () => {
     });
   });
 
+  it('keep a stretch that was asked for long after the rest is gone', () => {
+    const sim = start(car('f1'), { laps: 6, cars: 6 });
+    const buffer = new ReplayBuffer(10);
+    const past = new Map<number, number[]>();
+    let at = NaN;
+    for (let i = 0; i < 1500; i++) {
+      sim.step();
+      buffer.record(sim);
+      past.set(Math.round(sim.t / DT), sim.cars.map((c) => c.u));
+      // Asked for a moment after it happened, with its end still to come.
+      if (i === 300) {
+        at = sim.t;
+        buffer.keep(at - 4, at + 5);
+      }
+    }
+    expect(buffer.from).toBeGreaterThan(at + 60);
+    // The stretch itself is still there, step for step; what was around it is not.
+    // (Halfway between two steps each time: the step before, and the one after.)
+    for (const [t, step] of [[at - 4 + DT / 2, at - 4], [at + DT / 2, at], [at + 4.8 + DT / 2, at + 4.8]]) {
+      const r = buffer.view(sim, t)!;
+      expect(r).not.toBeNull();
+      const k = Math.round(step / DT);
+      r.view.cars.forEach((c, i) => {
+        expect(c.prevU).toBe(past.get(k)![i]);
+        expect(c.u).toBe(past.get(k + 1)![i]);
+      });
+    }
+    expect(buffer.view(sim, at - 6)).toBeNull();
+    expect(buffer.view(sim, at + 8)).toBeNull();
+    // And the last ten seconds as ever.
+    expect(buffer.view(sim, sim.t - 3)).not.toBeNull();
+    // A new race forgets it.
+    buffer.clear();
+    expect(buffer.view(sim, at)).toBeNull();
+  });
+
   it('remember a car standing in its pit box', () => {
     const sim = start(car('f1'), { laps: 12, cars: 4 });
     const buffer = new ReplayBuffer(30);

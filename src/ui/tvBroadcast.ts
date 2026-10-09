@@ -38,7 +38,7 @@ import { formatLapTime } from '../core/calibration.ts';
 import { type LapToBeat, type Split, captionName, lapToBeat, splitTime } from '../core/race/lapTimer.ts';
 import { type RaceView, ReplayBuffer } from '../core/race/replay.ts';
 import { SessionSim } from '../core/race/session.ts';
-import { DT, type RaceCar, type RaceSim } from '../core/race/sim.ts';
+import { DT, type RaceCar, type RaceEvent, type RaceSim } from '../core/race/sim.ts';
 import type { Vec3 } from '../core/shots.ts';
 import type { Track } from '../core/track.ts';
 import { h, setChildren } from './dom.ts';
@@ -96,6 +96,10 @@ const REPLAY_KEEP = 40;
 /** The qualifying lap timer: screen seconds a split and a finished lap stay up. */
 const SPLIT_HOLD = 4.5;
 const LAP_HOLD = 7;
+/** Race seconds kept of a contact, before and after it, for a replay when the stewards give a penalty for it; and how often the same two cars side by side are news (screen seconds). */
+const CLIP_BEFORE = 5;
+const CLIP_AFTER = 6;
+const FIGHT_AGAIN = 20;
 /** Seconds a message from the stewards stays up. */
 const CONTROL_HOLD = 6;
 const VIEW_LABEL: Record<OnboardView, string> = { tcam: 'Onboard', nose: 'Nose camera', rear: 'Rear camera', chase: 'Chase camera' };
@@ -148,6 +152,8 @@ export class TvBroadcast {
   private lapOn: { car: number; lap: number; target: LapToBeat | null; done: number } | null = null;
   private lapKey = '';
   private splitUntil = 0;
+  /** Pairs of cars side by side that the director has been told of, and when (screen seconds). */
+  private fights = new Map<string, number>();
 
   constructor(host: TvHost, race: RaceController, cameras: TvCamera[], n: number, ds: number) {
     this.host = host;
@@ -219,6 +225,7 @@ export class TvBroadcast {
       this.splitUntil = 0;
       this.controlQueue = [];
       this.controlUntil = 0;
+      this.fights.clear();
     }
     this.readEvents(sim);
     this.showControl();
@@ -236,7 +243,9 @@ export class TvBroadcast {
       }
       // Once the race is over, no more replays.
       if (sim.finished && this.director.shot?.replay) this.director.endShot();
-      const cars = sim.cars.map((c) => tvCar(sim, c, r.alpha, r.selected));
+      const beside = sideBySide(sim);
+      const cars = sim.cars.map((c) => tvCar(sim, c, r.alpha, r.selected, beside.get(c.id)));
+      this.noteFights(sim, beside);
       let shot = this.director.update(r.playing ? dt : 0, Math.max(0.05, r.speed), cars, sim.t);
       // A replay draws the race as it was; one that is no longer kept ends at once.
       this.replayed = shot?.replay ? this.buffer.view(sim, Math.min(shot.replay.to, shot.replay.from + (this.director.clock - shot.start) * shot.replay.speed)) : null;
@@ -598,6 +607,8 @@ export class TvBroadcast {
       const a = sim.cars[shot.subject.ahead];
       const b = sim.cars[shot.subject.behind];
       if (!a || !b) return null;
+      // (A contact looked at again is no battle: the two cars may be far apart by now.)
+      if (shot.replayOf === 'contact') return h('div', { class: 'fc' }, h('div', { class: 'fc-tag fom' }, 'Contact'), pairRow(sim, a, ''), pairRow(sim, b, ''));
       const gap = sim.classInterval(b);
       return h('div', { class: 'fc' },
         h('div', { class: 'fc-tag fom' }, `Battle for ${placeText(sim, a)}`),
@@ -722,10 +733,21 @@ export class TvBroadcast {
       const at = (id: number) => this.buffer.view(sim, e.t)?.view.cars[id]?.u ?? sim.cars[id]?.u ?? 0;
       // A pass for the lead of the race is a major event; any other pass is not.
       if (e.kind === 'overtake') this.director.note(sim.cars[e.car]?.position === 1 ? 'lead' : 'overtake', e.car, sim.cars[e.car]?.position <= 10 ? { other: e.other, raceTime: e.t, u: at(e.car) } : undefined);
-      // (Not a touch that cost the cars a little time and nothing else.)
-      if ((e.kind === 'off' || e.kind === 'contact') && !e.minor) this.director.note('incident', e.car, { raceTime: e.t, u: at(e.car) });
+      // (Not a touch that cost the cars a little time and nothing else.) A contact is replayed with both cars in
+      // the picture, and kept: the stewards may come back to it minutes later.
+      if ((e.kind === 'off' || e.kind === 'contact') && !e.minor) {
+        this.director.note('incident', e.car, { raceTime: e.t, u: at(e.car), ...(e.kind === 'contact' && e.other !== undefined ? { other: e.other } : {}) });
+        if (e.kind === 'contact') this.buffer.keep(e.t - CLIP_BEFORE, e.t + CLIP_AFTER);
+      }
       if (e.kind === 'retired') this.director.note('incident', e.car);
-      if (e.kind === 'steward') this.queueControl(e.text);
+      if (e.kind === 'steward') {
+        this.queueControl(e.text);
+        this.notePenalty(sim, e);
+      }
+      // A restart: the front of the field as the safety car comes in and as it goes green; from the grid, the start shot.
+      const leader = sim.order.find((c) => c.status === 'running');
+      if (leader && e.kind === 'flag' && (/^Safety car in this lap/.test(e.text) || (/^Green flag/.test(e.text) && sim.neutral[sim.neutral.length - 1]?.kind === 'sc'))) this.director.note('restart', leader.id);
+      if (leader && e.kind === 'start' && e.t > 0) this.director.note('start', leader.id);
       if (['overtake', 'fastest', 'off', 'contact', 'retired', 'pit', 'flag', 'weather'].includes(e.kind)) {
         const car = sim.cars[e.car];
         // Only the front of the field's passes and stops, to keep the screen clear.
@@ -735,6 +757,34 @@ export class TvBroadcast {
     }
     this.seenEvents = events.length;
     for (const el of [...this.pops.children] as HTMLElement[]) if (Number(el.dataset.until) < this.time) el.remove();
+  }
+
+  /** Two cars of a class, next to each other in it, that have come side by side: news for the director, once in a while. */
+  private noteFights(sim: RaceSim, beside: Map<number, number>): void {
+    for (const [id, other] of beside) {
+      if (id > other) continue;
+      const a = sim.cars[id];
+      const b = sim.cars[other];
+      if (Math.abs(a.classPosition - b.classPosition) !== 1) continue;
+      const key = `${id}-${other}`;
+      if (this.time - (this.fights.get(key) ?? -Infinity) < FIGHT_AGAIN) continue;
+      this.fights.set(key, this.time);
+      const [ahead, behind] = a.classPosition < b.classPosition ? [a, b] : [b, a];
+      this.director.note('fight', behind.id, undefined, ahead.id);
+    }
+  }
+
+  /**
+   * A penalty from the stewards: another look at the contact it is for, if
+   * that is still kept (see CLIP_BEFORE), with both cars in the picture.
+   */
+  private notePenalty(sim: RaceSim, e: RaceEvent): void {
+    if (e.minor || !/penalty for /.test(e.text)) return;
+    const found = sim.cases.find((c) => c.state === 'decided' && Math.abs(c.decidedAt - e.t) < 1e-6 && c.verdict?.blame === e.car);
+    const contact = found ? sim.contacts[found.contact] : null;
+    const then = contact ? this.buffer.view(sim, contact.t) : null;
+    if (!contact || !then) return;
+    this.director.note('penalty', e.car, { raceTime: contact.t, u: then.view.cars[e.car]?.u ?? contact.u, other: e.car === contact.ahead ? contact.behind : contact.ahead, since: e.t });
   }
 
   /**
@@ -820,7 +870,34 @@ function smooth(x: number): number {
   return u * u * (3 - 2 * u);
 }
 
-function tvCar(sim: RaceSim, c: RaceCar, alpha: number, selected: number | null): TvCar {
+/**
+ * The cars of a class that are side by side now, each with the other: both
+ * on the road, their bodies overlapping along it and clear of each other
+ * across it. Only in a race of cars under green.
+ */
+function sideBySide(sim: RaceSim): Map<number, number> {
+  const out = new Map<number, number>();
+  if (!sim.lanes || sim.setup.session || sim.phase !== 'green') return out;
+  const n = sim.model.n;
+  const ds = sim.model.track.ds;
+  const cars = sim.cars.filter((c) => c.status === 'running' && !c.offTrack);
+  for (let i = 0; i < cars.length; i++) {
+    for (let j = i + 1; j < cars.length; j++) {
+      const a = cars[i];
+      const b = cars[j];
+      if (a.cls !== b.cls) continue;
+      let d = (((a.u - b.u) % n) + n) % n;
+      if (d > n / 2) d -= n;
+      if (Math.abs(d * ds) < (a.cls.length + b.cls.length) / 2 && Math.abs(a.lateral - b.lateral) >= a.cls.half + b.cls.half) {
+        out.set(a.id, b.id);
+        out.set(b.id, a.id);
+      }
+    }
+  }
+  return out;
+}
+
+function tvCar(sim: RaceSim, c: RaceCar, alpha: number, selected: number | null, beside?: number): TvCar {
   const session = sim instanceof SessionSim ? sim : null;
   // In a session gaps are between best laps, not on track: no battles; and a car in its garage is no pit stop.
   const gap = session ? null : sim.classInterval(c);
@@ -842,6 +919,7 @@ function tvCar(sim: RaceSim, c: RaceCar, alpha: number, selected: number | null)
     stopLeft: stopped ? Math.max(0, c.pit!.stoppedUntil - sim.t) : 0,
     selected: c.id === selected,
     pushing: s && c.status === 'running' && s.phase === 'push' && s.fromLine ? (closing ? 2 : 1) : 0,
+    ...(beside === undefined ? {} : { beside }),
   };
 }
 

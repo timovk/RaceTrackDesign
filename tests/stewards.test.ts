@@ -6,7 +6,7 @@ import { calm, car, start } from './raceFixture.ts';
 
 /** A contact: car 2 behind car 1 and on its inside, half alongside, and car 1 spun; with whatever is different. */
 function contact(over: Partial<ContactRecord> = {}): ContactRecord {
-  return { t: 100, lap: 5, u: 0, ahead: 1, behind: 2, overlap: 0.5, inside: 2, speed: 40, lunging: -1, squeezed: -1, outcome: 'spin', hurt: [1], ...over };
+  return { t: 100, lap: 5, firstLap: false, u: 0, ahead: 1, behind: 2, overlap: 0.5, inside: 2, speed: 40, lunging: -1, squeezed: -1, outcome: 'spin', hurt: [1], ...over };
 }
 
 describe('who is to blame for a contact', () => {
@@ -138,7 +138,7 @@ describe('the stewards in a race', () => {
         expect(c.state).toBe('decided');
         // After a few minutes, or when the race is over.
         expect(c.decidedAt).toBeGreaterThanOrEqual(Math.min(c.t + 120, sim.t));
-        expect(c.verdict).toEqual(judge(rec, rec.lap === 1));
+        expect(c.verdict).toEqual(judge(rec, rec.firstLap));
         // The penalty is the series': ten seconds, or five in mitigating circumstances; none where nobody is to blame.
         if (c.verdict!.blame < 0) expect(c.penalty).toBeNull();
         else expect(c.penalty).toEqual({ kind: 'time', seconds: c.verdict!.mitigated ? 5 : 10 });

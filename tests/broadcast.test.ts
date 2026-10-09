@@ -378,6 +378,116 @@ describe('the director', () => {
     expect(count(shots(2))).toBeGreaterThan(count(normal));
   });
 
+  it('makes more of two cars that are side by side, and stays on them longer', () => {
+    // A close battle for fifth, and one further down that is side by side.
+    const field = (beside: boolean) => [
+      car(0, 3000), car(1, 2700, { interval: 5 }), car(2, 2400, { interval: 5 }), car(3, 2100, { interval: 5 }),
+      car(4, 1800, { interval: 5 }), car(5, 1795, { interval: 0.5 }),
+      car(6, 1200, { interval: 9, ...(beside ? { beside: 7 } : {}) }), car(7, 1199, { interval: 0.5, ...(beside ? { beside: 6 } : {}) }),
+    ];
+    expect(new Director(cams, track, rng(3)).update(0.1, 1, field(false))!.subject).toEqual({ kind: 'battle', ahead: 4, behind: 5 });
+    expect(new Director(cams, track, rng(3)).update(0.1, 1, field(true))!.subject).toEqual({ kind: 'battle', ahead: 6, behind: 7 });
+    // How long the first shot lasts, with the race running fast (so no trackside camera loses them).
+    const lasts = (beside: boolean) => {
+      const d = new Director(cams, track, rng(8));
+      const cars = [car(0, 3000), car(1, 2999, { interval: 0.3, ...(beside ? { beside: 0 } : {}) })];
+      if (beside) cars[0].beside = 1;
+      const first = d.update(0.1, 20, cars)!;
+      let time = 0;
+      while (time < 60 && d.update(0.1, 20, cars) === first) time += 0.1;
+      return { time, hold: first.hold };
+    };
+    const apart = lasts(false);
+    const together = lasts(true);
+    expect(apart.time).toBeLessThan(apart.hold + 0.2);
+    expect(together.time).toBeGreaterThan(together.hold + 7);
+    expect(together.time).toBeLessThan(together.hold + 8.3);
+  });
+
+  it('cuts from a car that is on for nothing in particular to two that go side by side', () => {
+    const d = new Director(cams, track, rng(5));
+    const cars = [car(0, 3000), car(1, 2000, { interval: 12 }), car(2, 1990, { interval: 0.9 }), car(3, 800, { interval: 15 })];
+    // (Not a battle yet: it follows the leader or looks round the field.)
+    cars[2].interval = 3;
+    let s = d.update(0.1, 1, cars)!;
+    expect(s.subject.kind).toBe('car');
+    for (let i = 0; i < 30; i++) s = d.update(0.1, 1, cars)!;
+    cars[2].interval = 0.2;
+    cars[1].beside = 2;
+    cars[2].beside = 1;
+    d.note('fight', 2, undefined, 1);
+    let cut = false;
+    for (let i = 0; i < 40 && !cut; i++) {
+      const now = d.update(0.1, 1, cars)!;
+      cut = now.subject.kind === 'battle' && now.subject.ahead === 1 && now.subject.behind === 2;
+    }
+    expect(cut).toBe(true);
+  });
+
+  it('shows a restart on the front of the field, and a start from the grid as the start', () => {
+    const d = new Director(cams, track, rng(6));
+    const queue = Array.from({ length: 10 }, (_, i) => car(i, 3000 - 20 * i, { speed: 35, interval: 0.6 }));
+    d.update(0.1, 1, queue, 500);
+    for (let i = 0; i < 40; i++) d.update(0.1, 1, queue, 500 + i / 10);
+    d.note('restart', 0);
+    let shown: TvShot | null = null;
+    for (let i = 0; i < 40 && !shown; i++) {
+      const s = d.update(0.1, 1, queue, 505 + i / 10)!;
+      if (s.reason === 'start') shown = s;
+    }
+    expect(shown).not.toBeNull();
+    expect(shown!.subject).toEqual({ kind: 'group', ids: [0, 1, 2, 3, 4] });
+    expect(shown!.hold).toBeGreaterThanOrEqual(2.5);
+    // From the grid again (a standing restart): the camera behind it, at once; not when the race runs fast.
+    const grid = Array.from({ length: 12 }, (_, i) => car(i, -10 - 4 * i, { speed: 0 }));
+    const again = new Director(cams, track, rng(4));
+    again.update(0.1, 1, grid, 900);
+    again.update(3, 1, grid, 903);
+    again.note('start', 0);
+    const s = again.update(0.1, 1, grid, 903.1)!;
+    expect(s.camera).toBe('start');
+    expect(s.reason).toBe('start');
+    expect(again.update(0.1, 1, grid, 903.2)).toBe(s);
+    const fast = new Director(cams, track, rng(4));
+    fast.update(0.1, 20, grid, 900);
+    fast.note('start', 0);
+    expect(fast.update(0.1, 20, grid, 902)!.reason).not.toBe('start');
+  });
+
+  it('replays a contact with both cars, and again when the stewards give a penalty for it much later', () => {
+    const d = new Director(cams, track, rng(9));
+    const cars = [car(0, 1500), car(1, 1000, { interval: 6 }), car(2, 990, { interval: 2 }), car(3, 300, { interval: 9 })];
+    let now = 100;
+    const step = (dt = 0.1) => {
+      now += dt;
+      for (const c of cars) c.u += (c.speed * dt) / t.ds;
+      return d.update(dt, 1, cars, now)!;
+    };
+    step();
+    const at = now;
+    const where = cars[2].u;
+    d.note('incident', 2, { raceTime: at, u: where, other: 1 });
+    let replay: TvShot | null = null;
+    for (let i = 0; i < 400 && !replay; i++) {
+      const s = step();
+      if (s.reason === 'replay') replay = s;
+    }
+    expect(replay).not.toBeNull();
+    expect(replay!.subject).toEqual({ kind: 'battle', ahead: 2, behind: 1 });
+    expect(replay!.replay).toEqual({ from: at - 3, to: at + 4, speed: 0.5 });
+    // Four minutes on, the penalty: the same stretch once more, though it is long past.
+    for (let i = 0; i < 2400; i++) step();
+    d.note('penalty', 1, { raceTime: at, u: where, other: 2, since: now });
+    let again: TvShot | null = null;
+    for (let i = 0; i < 400 && !again; i++) {
+      const s = step();
+      if (s.reason === 'replay') again = s;
+    }
+    expect(again).not.toBeNull();
+    expect(again!.subject).toEqual({ kind: 'battle', ahead: 1, behind: 2 });
+    expect(again!.replay).toEqual({ from: at - 3, to: at + 4, speed: 0.5 });
+  });
+
   it('shows the head of the queue in the pit lane while a red flag stops the race', () => {
     const d = new Director(cams, track, rng(6));
     const queue = [0, 1, 2].map((i) => car(i, 4000 - i * 2, { running: false, inPit: true, stopped: false }));
