@@ -370,6 +370,36 @@ And on 2026-10-11, of a Grand Prix circuit at its defaults lengthened to 17.9 km
 - **No crossings and no banking**, as the app has neither.
 - **The kinds of circuit and the ranges are my own**: the seven kinds, their numbers and how far each slider goes are not from a source.
 
+### Measured against real circuits (2026-10-11)
+
+After the third round he rated the generator "6/10; it's working now, but still far from the best it could be". The 25 real circuits in `data/circuits` and 36 generated Grand Prix circuits (4.3, 5.4 and 6.5 km, two seeds, six each, rolling map) were put through the same analysis (`analyseTrack`). Middle value, and the range that holds four in five:
+
+| | Real circuits | Generated |
+|---|---|---|
+| Share of its own hull the lap encloses | 0.65 (0.49 to 0.79) | 0.92 (0.83 to 0.96) |
+| Turning per kilometre | 308° (235 to 370) | 202° (170 to 285) |
+| Corners per kilometre | 3.2 (2.2 to 4.2) | 2.4 (2.1 to 2.6) |
+| Corners tighter than 45 m at the apex | 64% (35 to 78) | 33% (20 to 50) |
+| Corners faster than 120 m | 6% (0 to 23) | 14% (0 to 23) |
+| Share of a corner within a fifth of its tightest | 19% (13 to 24) | 34% (30 to 41) |
+| Lap with another part within 120 m | 32% (0 to 59) | 13% (8 to 18) |
+| Longest straight, and the next, as shares of the lap | 14% and 9% | 18% and 14% |
+| Corners that turn the other way from the one before | 67% | 53% |
+
+What it says: a generated lap is a blob with things on it (it fills nine tenths of its hull, a real circuit two thirds: real circuits wrap round themselves); it turns a third less and has fewer, gentler corners than the Grand Prix kind should; its corners are arcs of one radius where real ones tighten and open; and the six are far more alike than real circuits are. The kinds of circuit and the meaning of the sliders were set by judgement, not against these.
+
+The probe is not in the repo (scratch: `real.test.ts`); the table is what to beat.
+
+### Ideas for the next version (proposed, not decided)
+
+1. **Real circuits as the yardstick.** Set the kinds of circuit and the middle of each slider from the table; keep the measurement in the repo as a test (so many of the measures within the real range) and as part of the ranking. Small.
+2. **Another way of laying out a lap.** Not one loop with things on it. Either a lap put together from sectors (a main straight, a slow complex, a fast run out and back, a stadium), each from a few forms and joined, which is how circuits are designed and gives different families of lap; or corners and straights drawn in sequence from the real circuits' own figures and closed. Large; it is what the hull, turning and likeness figures ask for.
+3. **Corners with an anatomy.** Corners that tighten or open, two apexes, a hairpin that is not half a circle, chicanes of more than one kind. Medium.
+4. **The land first.** The lap is drawn blind and a place looked for. Instead: the start straight on the flattest strip, the lap along the contours and over the hill on purpose, so that the height asked is reached at gentle gradients (a mountain map now gives 30 to 50 m of 160 asked). Large.
+5. **Choosing as designing.** Six that differ (in form and in place), each shown on the map with its height profile and not as a thumbnail, "more like this one", and keeping part of a lap while the rest is drawn again. Medium.
+6. **Ranked as a place to race.** The lap simulation and the overtaking analysis are there: rank by places to pass, range of corner speeds and rhythm, and offer a target lap time. Medium.
+7. **A lap that can be edited.** Thirty to fifty control points for 5 km, at the corners, not 110. Small to medium.
+
 ## Proposed, not decided
 
 - Projects and backups.
