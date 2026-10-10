@@ -5,7 +5,7 @@
  * one makes it the design; undo brings the old one back.
  */
 import { formatLapTime } from '../core/calibration.ts';
-import { DEFAULT_GENERATOR, GENERATOR_STYLES, type GeneratedTrack, type GeneratorSettings, generateTracks } from '../core/generator.ts';
+import { DEFAULT_GENERATOR, GENERATOR_RANGE, GENERATOR_STYLES, type GeneratedTrack, type GeneratorSettings, generateTracks } from '../core/generator.ts';
 import { randomSeedString } from '../core/rng.ts';
 import { VEHICLES } from '../core/vehicles.ts';
 import { type Control, section, segmented, slider } from './controls.ts';
@@ -151,7 +151,7 @@ export function openGenerator(store: Store, onUse: () => void = () => {}): void 
     ...VEHICLES.map((v) => h('option', { value: v.id }, v.name)));
   controls.push({ el: vehicleSelect, update: () => { vehicleSelect.value = settings.vehicleId; } });
   const licence = add(tick('Build it to that class\'s licence', () => settings.licence, (v) => set({ licence: v }),
-    'Raises the width, the lap length and the start straight to what the licence needs, keeps room for run-off between the parts of the track, and prefers the tracks that pass the check'));
+    'Keeps room for run-off between the parts of the track, widens the grid, puts the start line where the licence wants it, and offers the tracks that pass first. It changes nothing you set: where a setting stands in the way of the licence, the result says so.'));
   const direction = add(segmented<GeneratorSettings['direction']>(
     [{ value: 'clockwise', label: 'Clockwise' }, { value: 'anticlockwise', label: 'Anticlockwise' }, { value: 'either', label: 'Either' }],
     () => settings.direction, (v) => set({ direction: v })));
@@ -208,18 +208,19 @@ export function openGenerator(store: Store, onUse: () => void = () => {}): void 
     }
   };
 
+  const R = GENERATOR_RANGE;
   const panel = h('div', { class: 'gen-settings' },
     section('Kind of circuit', styles, h('p', { class: 'hint' }, 'Each sets everything below at once; adjust from there.')),
     section('The lap',
-      number('Length', 'length', 1500, 12000, 100, (v) => `${(v / 1000).toFixed(1)} km`),
-      number('Width', 'width', 6, 20, 0.5, (v) => `${v} m`),
-      number('Height difference', 'heightDifference', 0, 300, 5, (v) => `${v} m`, 'Between the highest and the lowest point of the lap. The generator looks for a place on this map that has it.'),
-      share('Corners or speed', 'speed', 'corners', 'speed', 'From a lap of corner after corner to one of long straights and fast bends')),
+      number('Length', 'length', R.length[0], R.length[1], 100, (v) => `${(v / 1000).toFixed(1)} km`),
+      number('Width', 'width', R.width[0], R.width[1], 0.5, (v) => `${v} m`),
+      number('Height difference', 'heightDifference', R.heightDifference[0], R.heightDifference[1], 10, (v) => `${v} m`, 'Between the highest and the lowest point of the lap. The generator looks for a place on this map that has it, on slopes of up to 16% when a lot is asked.'),
+      share('Corners or speed', 'speed', 'corners', 'speed', 'From about nine corners a kilometre (a kart track) to hardly more than one (an oval with a bend in it), counted over the lap without its longest straight and its start straight')),
     section('Built for', vehicleSelect, licence.el),
     section('Straights and overtaking',
-      number('Longest straight', 'longestStraight', 200, 2500, 50, (v) => `${v} m`),
-      number('Start straight', 'startStraight', 200, 1500, 50, (v) => `${v} m`, 'The straight the start line and the pits are on'),
-      number('Heavy braking points', 'brakingPoints', 0, 8, 1, (v) => String(v), 'Places where the cars lose 90 km/h or more: where passing is done')),
+      number('Longest straight', 'longestStraight', R.longestStraight[0], R.longestStraight[1], 50, (v) => `${v} m`, `No straight comes out longer than this. At most ${Math.round(R.straightShare * 100)}% of the lap: two of them and the two ends make an oval.`),
+      number('Start straight', 'startStraight', R.startStraight[0], R.startStraight[1], 50, (v) => `${v} m`, 'The straight the start line and the pits are on; no longer than the longest'),
+      number('Heavy braking points', 'brakingPoints', R.brakingPoints[0], R.brakingPoints[1], 1, (v) => String(v), 'Places where the cars lose 90 km/h or more: where passing is done')),
     section('Corners',
       number('Slow corners', 'slow', 0, 3, 0.1, (v) => v.toFixed(1), 'Weight of corners under 45 m of radius in the mix'),
       number('Medium corners', 'medium', 0, 3, 0.1, (v) => v.toFixed(1), 'Weight of corners of 45 to 120 m'),
@@ -231,8 +232,8 @@ export function openGenerator(store: Store, onUse: () => void = () => {}): void 
         add(tick('A long sweeper', () => settings.sweeper, (v) => set({ sweeper: v }))).el)),
     section('Shape',
       direction.el,
-      share('Spread out or compact', 'compact', 'spread out', 'compact'),
-      share('Folding back on itself', 'foldBack', 'one loop', 'folded', 'How much the lap doubles back: parallel straights joined by tight turns'),
+      share('Spread out or compact', 'compact', 'spread out', 'compact', 'From a long thin loop to a lap that turns inward and fills its own middle'),
+      share('Folding back on itself', 'foldBack', 'one loop', 'folded', 'How much of the lap doubles back, and how close: from none, by way of wide loops, to rows of parallel straights joined by turns right round, as near each other as the track is wide and a strip of ground'),
       h('div', { class: 'gen-ticks' },
         add(tick('Keep clear of water', () => settings.avoidWater, (v) => set({ avoidWater: v }))).el,
         add(tick('Keep clear of woods', () => settings.avoidWoods, (v) => set({ avoidWoods: v }), 'Prefers open ground; where the map is all woods it says how much of the lap runs through them')).el)),

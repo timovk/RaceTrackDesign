@@ -337,22 +337,30 @@ Not right yet:
 
 Asked for on 2026-10-10: "Implement the race track generator. Make sure the user is able to pick parameters, like preferred track length, track width, high/low elevation, lots of corners or lots of high-speed sections". Chosen then: the track goes on the best spot of the map there is, and the landscape is left alone; sliders, plus kinds of circuit that set them all at once; beyond the basics the class and its licence, straights and overtaking, the make-up of the corners, and shape and direction; and several tracks to pick from, repeatable by a seed.
 
+Asked for later the same day, after trying it: "Track generator should be more extreme. If I select extreme variables, the track generator should allow those. Folding back on itself should also be more folding."
+
 ### As built
 
-- **Design, Generate a track.** A dialog with seven kinds of circuit, twelve sliders, seven tick boxes, the class and the direction, and a seed. Generate offers six tracks as cards (the lap drawn, length, corners, height difference, straights, the class's lap and top speed, heavy braking points, the licence verdict, and what the map could not give). Use this track makes one the design in one step that Undo takes back.
+- **Design, Generate a track.** A dialog with seven kinds of circuit, twelve sliders, seven tick boxes, the class and the direction, and a seed. Generate offers six tracks as cards (the lap drawn, length, corners, height difference, straights, the class's lap and top speed, heavy braking points, the licence verdict, and what the map or the lap had no room for). Use this track makes one the design in one step that Undo takes back.
 - **How it works** is in ARCHITECTURE.md (Track generator): laps drawn as polygons with rounded corners, sorted on shape, tried all over the map, and the best built and measured with the app's own analysis and licence check.
-- **Checked**: on the rolling, hilly and mountain landscapes at 8 km. On rolling ground (one seed), six of six Grand Prix circuits pass FIA grade 1 and six of six motorcycle circuits FIM Grade A, in about two seconds each; five of six high-speed circuits pass FIA grade 2, in three. The kinds built to no licence take half a second to one. Every track is within 1% of the length asked.
+- **The ends of the sliders** (the second request). The first version drew every lap much the same whatever was asked: the corners slider moved a 5 km lap from 3.1 corners a kilometre to 1.6, and folding back at its maximum left 17% of the lap with another part within 120 m, against 15% at the default. Now, on the same map and 5 km: 7.4 corners a kilometre at one end (with straights of 400 and 300 m) and 1.4 at the other; folding back at its maximum 64% of the lap, 74% with short straights, as rows of parallel legs joined by turns right round, 34 m apart for a track 12 m wide; a straight of 2 km on a 5 km lap comes out at 1.9 km on six tracks of six (it was 1.6 km on the one track that could be made); laps of 1 km and of 20 km are made (they were held to 1.2 and 14 km), and tracks 30 m wide (held to 20 m).
+- **What is set is what is built.** Building to a licence no longer raises the width, the lap length and the start straight or holds the longest straight down: it says which settings stand in the way, and the card says the check fails. This is my reading of "should allow those"; the first version did the opposite on the answer "class sets least width, straight and run-off needs".
+- **Checked**: on the rolling, hilly and mountain landscapes at 8 km and a rolling one at 16 km. On rolling ground (one seed), 17 of the 18 Grand Prix, motorcycle and high-speed circuits pass the licence they are built to (FIA grade 1, FIM Grade A, FIA grade 2), in two to three seconds for six. The kinds built to no licence take half a second to one. Every track is within 1% of the length asked.
 
 ### Not right yet
 
+- **The twisty end with long straights.** With the default straights (900 m and 600 m of a 5 km lap) the most corners is 23, 4.7 a kilometre: the two straights carry none, and what is left has room for no more. The nine a kilometre the slider stands for is of the lap without them.
+- **How much can fold.** At the maximum two thirds of a 5 km lap has another part within 120 m, not all of it: the longest straight and the start straight take 1.5 km, and the loop they are on is left open on one side. Shorter straights fold more.
+- **Legs or turns.** At the top of the fold slider the number of pairs of legs follows "corners or speed": few long ones for a fast lap, many short ones for a twisty one. That was my choice; nothing was asked about it.
+- **Compact without folding does little.** With folding at nothing, compact against spread out changes how far the lap is across from 44% of its length to 37%: a lap of one loop is that far across whatever its shape.
+- **The sweeper needs room.** It wants two straights of 380 m, and on a lap that folds or is to have short straights it mostly finds none; the card says so.
 - **The six do not stand apart on the map.** Each takes its own best place, and several often lie on the same spot. Nothing spreads them out.
-- **Height on rough maps.** On the mountain landscape a lap asked to climb 160 m gets 30 to 100 m: the generator keeps off slopes over 11% and does not touch the grading to make a steep place work (evening the profile out over a longer stretch was tried, and made the slopes worse where the cut and fill limit binds). The card says so.
-- **Run-off is estimated before building.** The speeds are rough, and water or the edge of the map beyond a corner is not looked at until the track is built and the licence check runs. That check is the judge: on the mountain map one Grand Prix circuit in six failed on a single escape path, and one came out with a grid at 2.1%.
-- **Fast corners and the sweeper need room.** Fewer corners come out fast than the mix asks, because a corner is tightened where it does not fit; a sweeper finds room in about two laps in three, one in three with all four features asked for. Under 2 km a hairpin rarely fits.
-- **About a hundred control points** on a 5 km track, one every 18 degrees of every corner: easy to nudge, slow to reshape by hand.
+- **Height on rough maps.** On the mountain landscape a lap asked to climb 160 m gets 30 to 50 m on five tracks of six and 130 m on one, and on the hilly one a lap asked 300 m gets about 80 m: the generator keeps off slopes over 16% and does not touch the grading to make a steep place work (evening the profile out over a longer stretch was tried, and made the slopes worse where the cut and fill limit binds). The card says so.
+- **Run-off is estimated before building.** The speeds are rough, and water or the edge of the map beyond a corner is not looked at until the track is built and the licence check runs. That check is the judge, and a track that fails says so on its card.
+- **Many control points.** About 120 on a 5 km track and up to 200 on a twisty one, one every 18 degrees of every corner: easy to nudge, slow to reshape by hand.
 - **On the main thread**: the page stands still for a moment at a time while the tracks are made. It is not in a worker.
 - **No crossings and no banking**, as the app has neither.
-- **The kinds of circuit are my own**: the seven and their numbers are not from a source.
+- **The kinds of circuit and the ranges are my own**: the seven kinds, their numbers and how far each slider goes are not from a source.
 
 ## Proposed, not decided
 

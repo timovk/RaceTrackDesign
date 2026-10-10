@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CORNER_RADII, DEFAULT_GENERATOR, GENERATOR_STYLES, type GeneratorSettings, type Shape,
-  classNeeds, cornersWanted, drawShape, findSite, generateTracks, measureShape, resolveSettings, scoreShape, shortRunoff, tracePath,
+  CORNER_RADII, DEFAULT_GENERATOR, GENERATOR_RANGE, GENERATOR_STYLES, type GeneratorSettings, type Shape,
+  classNeeds, cornersWanted, drawShape, findSite, gapFor, generateTracks, measureShape, resolveSettings, scoreShape, shortRunoff, tracePath,
 } from '../src/core/generator.ts';
 import { sampleHeight } from '../src/core/heightmap.ts';
 import { seededRandom } from '../src/core/rng.ts';
@@ -45,35 +45,53 @@ const ctx = { heightmap: hm, terrainSeed: terrainSettings.seed, vehicles: VEHICL
 
 describe('what is asked', () => {
   it('holds every setting within its range', () => {
-    const { settings: s, needs, notes } = resolveSettings(settings({ length: 90000, width: 2, speed: 3, compact: -1, brakingPoints: 40, slow: 0, medium: 0, fast: 0, longestStraight: 9000, startStraight: 9000, candidates: 99 }), vehicle('gt3'));
-    expect(s.length).toBeLessThanOrEqual(14000);
-    expect(s.width).toBe(6);
+    const { settings: s, needs, notes } = resolveSettings(settings({ length: 90000, width: 2, heightDifference: 5000, speed: 3, compact: -1, brakingPoints: 40, slow: 0, medium: 0, fast: 0, longestStraight: 90000, startStraight: 90000, candidates: 99 }), vehicle('gt3'));
+    expect(s.length).toBe(GENERATOR_RANGE.length[1]);
+    expect(s.width).toBe(GENERATOR_RANGE.width[0]);
+    expect(s.heightDifference).toBe(GENERATOR_RANGE.heightDifference[1]);
     expect(s.speed).toBe(1);
     expect(s.compact).toBe(0);
-    expect(s.brakingPoints).toBe(8);
+    expect(s.brakingPoints).toBe(GENERATOR_RANGE.brakingPoints[1]);
     expect(s.slow + s.medium + s.fast).toBeGreaterThan(0);
-    expect(s.longestStraight).toBeLessThanOrEqual(s.length * 0.4);
+    expect(s.longestStraight).toBe(GENERATOR_RANGE.longestStraight[1]);
     expect(s.startStraight).toBeLessThanOrEqual(s.longestStraight);
     expect(s.candidates).toBe(12);
     expect(needs).toBeNull();
     expect(notes).toEqual([]);
+    // A straight is at most the share of the lap that leaves room to come back.
+    const short = resolveSettings(settings({ length: 2000, longestStraight: 1900, startStraight: 1900 }), null).settings;
+    expect(short.longestStraight).toBeCloseTo(2000 * GENERATOR_RANGE.straightShare, 6);
+    expect(short.startStraight).toBe(short.longestStraight);
   });
 
-  it('raises a track built to a licence to what the licence needs, and says so', () => {
-    const { settings: s, needs, notes } = resolveSettings(settings({ licence: true, vehicleId: 'f1', length: 2500, width: 9, startStraight: 300, longestStraight: 400 }), vehicle('f1'));
+  it('lets the settings go a long way', () => {
+    expect(GENERATOR_RANGE.length[0]).toBeLessThanOrEqual(1000);
+    expect(GENERATOR_RANGE.length[1]).toBeGreaterThanOrEqual(20000);
+    expect(GENERATOR_RANGE.width[1]).toBeGreaterThanOrEqual(30);
+    expect(GENERATOR_RANGE.heightDifference[1]).toBeGreaterThanOrEqual(500);
+    expect(GENERATOR_RANGE.longestStraight[1]).toBeGreaterThanOrEqual(4000);
+    const asked = settings({ length: 20000, width: 30, heightDifference: 500, longestStraight: 4000, startStraight: 2500, brakingPoints: 12 });
+    expect(resolveSettings(asked, null).settings).toEqual(asked);
+  });
+
+  it('keeps what is asked of a track built to a licence, and says what stands in the way', () => {
+    const asked = settings({ licence: true, vehicleId: 'f1', length: 2500, width: 9, startStraight: 300, longestStraight: 400 });
+    const { settings: s, needs, notes } = resolveSettings(asked, vehicle('f1'));
     expect(needs).not.toBeNull();
-    expect(s.length).toBe(3500);
-    expect(s.width).toBe(12);
-    expect(s.startStraight).toBeGreaterThanOrEqual(GRID_LENGTH + 250);
-    expect(s.longestStraight).toBeGreaterThanOrEqual(s.startStraight);
+    expect(s).toEqual(asked);
     expect(notes.length).toBe(3);
     expect(notes.every((n) => n.includes('Formula 1'))).toBe(true);
+    expect(notes.some((n) => n.includes('9 m wide') && n.includes('12 m'))).toBe(true);
+    expect(notes.some((n) => n.includes('2.5 km') && n.includes('3.5 km'))).toBe(true);
+    expect(notes.some((n) => n.includes('300 m'))).toBe(true);
+    // Nothing to say when nothing stands in the way.
+    expect(resolveSettings({ ...DEFAULT_GENERATOR, ...style('grand-prix').settings }, vehicle('f1')).notes).toEqual([]);
   });
 
-  it('holds a motorcycle circuit to the straight the FIM allows', () => {
+  it('says so when a straight is longer than the FIM allows, and leaves it', () => {
     const { settings: s, notes } = resolveSettings(settings({ licence: true, vehicleId: 'motogp', length: 6000, longestStraight: 1800 }), vehicle('motogp'));
-    expect(s.longestStraight).toBe(1000);
-    expect(notes.some((n) => n.includes('1000 m'))).toBe(true);
+    expect(s.longestStraight).toBe(1800);
+    expect(notes.some((n) => n.includes('1800 m') && n.includes('1000 m'))).toBe(true);
   });
 
   it('knows what each body asks', () => {
@@ -94,6 +112,17 @@ describe('what is asked', () => {
   it('wants more corners of a twisty lap than of a fast one, and more of a long lap', () => {
     expect(cornersWanted(settings({ speed: 0.1 }))).toBeGreaterThan(cornersWanted(settings({ speed: 0.9 })) + 5);
     expect(cornersWanted(settings({ length: 7000 }))).toBeGreaterThan(cornersWanted(settings({ length: 3000 })));
+    // From a kart track to an oval with a bend in it: some nine corners a kilometre of what is not straight, to little more than one.
+    expect(cornersWanted(settings({ speed: 0 }))).toBeGreaterThan(30);
+    expect(cornersWanted(settings({ speed: 1 }))).toBeLessThan(8);
+    // The two straights carry none: shorter ones leave more lap for corners.
+    expect(cornersWanted(settings({ speed: 0, longestStraight: 400, startStraight: 300 }))).toBeGreaterThan(cornersWanted(settings({ speed: 0 })) + 5);
+  });
+
+  it('keeps the parts of a lap as far apart as the track is wide and a strip of ground, and further for a lap that does not fold', () => {
+    expect(gapFor(settings({ width: 12, foldBack: 1 }))).toBe(28);
+    expect(gapFor(settings({ width: 12, foldBack: 0 }))).toBe(60);
+    expect(gapFor(settings({ width: 30, foldBack: 1 }))).toBe(46);
   });
 
   it('has styles that name a class there is, each its own', () => {
@@ -229,6 +258,98 @@ describe('the lap as drawn', () => {
     const f1 = mean(drawn.map((shape) => measureShape(shape, vehicle('f1')).brakingPoints));
     const tcr = mean(drawn.map((shape) => measureShape(shape, vehicle('tcr')).brakingPoints));
     expect(f1).toBeGreaterThan(tcr);
+  });
+});
+
+describe('the ends of the sliders', () => {
+  const plain = { hairpin: false, chicane: false, esses: false, sweeper: false };
+  const drawn = (changes: Partial<GeneratorSettings>, tries = 50) => {
+    const s = resolveSettings(settings({ seed: 'ends', ...changes }), null).settings;
+    return { s, list: shapes(s, tries, gapFor(s)) };
+  };
+
+  it('draws most of what it tries, whatever is asked', () => {
+    for (const changes of [{}, { speed: 0 }, { speed: 1 }, { foldBack: 1, compact: 1 }, { foldBack: 0, compact: 0 }, { length: 1000, longestStraight: 300, startStraight: 250 }, { length: 20000 }, { longestStraight: 2000, startStraight: 1500 }, { width: 30 }] as Partial<GeneratorSettings>[]) {
+      expect(drawn(changes).list.length, JSON.stringify(changes)).toBeGreaterThan(20);
+    }
+  });
+
+  it('gives a lap of corner after corner when asked, and one of a few when not', () => {
+    const twisty = drawn({ speed: 0, longestStraight: 400, startStraight: 300 });
+    const fast = drawn({ speed: 1, foldBack: 0, compact: 0, ...plain });
+    const corners = (x: { list: Shape[] }) => mean(x.list.map((shape) => measureShape(shape).corners));
+    // Five kilometres: over thirty corners at one end, under nine at the other.
+    expect(corners(twisty)).toBeGreaterThan(30);
+    expect(corners(fast)).toBeLessThan(9);
+  });
+
+  it('folds a lap right back when asked: rows of legs side by side, turning right round at their ends', () => {
+    const folded = drawn({ foldBack: 1, compact: 1, ...plain, longestStraight: 500, startStraight: 400 });
+    const open = drawn({ foldBack: 0, compact: 0, ...plain, longestStraight: 500, startStraight: 400 });
+    const share = (x: { list: Shape[] }) => mean(x.list.map((shape) => measureShape(shape).folded));
+    expect(share(folded)).toBeGreaterThan(0.5);
+    expect(share(open)).toBeLessThan(0.12);
+    // The best of them: two thirds of the lap or more has another part of it within 120 m.
+    const best = folded.list.map((shape) => measureShape(shape).folded).sort((a, b) => b - a).slice(0, 5);
+    expect(Math.min(...best)).toBeGreaterThan(0.66);
+    for (const shape of folded.list) {
+      // Turns right round are two corners of the same radius, a leg's width apart.
+      const turns = shape.v.filter((p) => p.feature === 'fold' && p.fixed);
+      expect(turns.length).toBeGreaterThanOrEqual(4);
+      for (const p of turns) expect(p.r).toBeGreaterThanOrEqual(15);
+    }
+    for (const shape of open.list) expect(shape.v.some((p) => p.feature === 'fold')).toBe(false);
+  });
+
+  it('keeps the legs of a fold a gap apart', () => {
+    const { s, list } = drawn({ foldBack: 1, compact: 1 });
+    const gap = gapFor(s);
+    for (const shape of list) {
+      const p = tracePath(shape, 10);
+      let nearest = Infinity;
+      for (let i = 0; i < p.x.length; i++) {
+        for (let j = i + 1; j < p.x.length; j++) {
+          const along = p.s[j] - p.s[i];
+          if (along < 110 || p.length - along < 110) continue;
+          nearest = Math.min(nearest, Math.hypot(p.x[i] - p.x[j], p.y[i] - p.y[j]));
+        }
+      }
+      // (The points are up to 10 m apart, so two may stand a little nearer than the lines they are on.)
+      expect(nearest).toBeGreaterThan(gap - 3);
+    }
+  });
+
+  it('is small across when compact and folded, and long when spread out', () => {
+    const across = (x: { list: Shape[] }) => mean(x.list.map((shape) => measureShape(shape).spread));
+    const compact = across(drawn({ foldBack: 1, compact: 1 }));
+    const spread = across(drawn({ foldBack: 0, compact: 0 }));
+    expect(compact).toBeLessThan(0.3);
+    expect(spread).toBeGreaterThan(0.4);
+  });
+
+  it('gives the longest straight asked, and none longer', () => {
+    for (const [length, longest, start] of [[5000, 2000, 1500], [5000, 300, 250], [5000, 900, 600], [12000, 900, 600]] as const) {
+      const { list } = drawn({ length, longestStraight: longest, startStraight: start });
+      const got = list.map((shape) => measureShape(shape).longestStraight).sort((a, b) => a - b);
+      const middle = got[Math.floor(got.length / 2)];
+      expect(Math.abs(middle - longest), `${longest} m of ${length}`).toBeLessThan(0.08 * longest + 20);
+      // Nine in ten within a sixth of it.
+      expect(got[Math.floor(got.length * 0.9)], `${longest} m of ${length}`).toBeLessThan(longest * 1.17 + 20);
+    }
+  });
+
+  it('draws the shortest lap and a very long one to their length', () => {
+    for (const changes of [{ length: 1000, longestStraight: 300, startStraight: 250 }, { length: 20000 }] as Partial<GeneratorSettings>[]) {
+      const { s, list } = drawn(changes, 30);
+      for (const shape of list) expect(Math.abs(measureShape(shape).length - s.length)).toBeLessThan(s.length * 0.01);
+    }
+  });
+
+  it('follows the mix to the end: nothing but slow corners, nothing but fast ones', () => {
+    const slow = drawn({ slow: 3, medium: 0, fast: 0, ...plain }).list.map((shape) => measureShape(shape));
+    const fast = drawn({ slow: 0, medium: 0, fast: 3, speed: 0.9, foldBack: 0, ...plain }).list.map((shape) => measureShape(shape));
+    expect(mean(slow.map((m) => m.slow / m.corners))).toBeGreaterThan(0.9);
+    expect(mean(fast.map((m) => m.fast / m.corners))).toBeGreaterThan(0.8);
   });
 });
 
@@ -406,6 +527,65 @@ describe('built to a licence', async () => {
     for (const result of [gp, bikes]) {
       const order = result.tracks.map((t) => (t.figures.licence?.passes ? 1 : 0));
       expect(order).toEqual([...order].sort((a, b) => b - a));
+    }
+  });
+});
+
+describe('tracks at the ends of the sliders', () => {
+  const built = async (changes: Partial<GeneratorSettings>, context = ctx) => {
+    const result = await generateTracks(settings({ seed: 'built', candidates: 3, ...changes }), context);
+    for (const t of result.tracks) {
+      const raw = buildTrack(t.design, (x, y) => sampleHeight(context.heightmap, x, y))!;
+      expect(raw).not.toBeNull();
+      expect(validateTrack(raw, context.heightmap, t.design.grading).filter((i) => i.severity === 'error')).toEqual([]);
+    }
+    return result;
+  };
+
+  it('builds a lap folded right back without one part on another', async () => {
+    const result = await built({ foldBack: 1, compact: 1 });
+    expect(result.tracks.length).toBe(3);
+    for (const t of result.tracks) expect(Math.abs(t.figures.length - 5000)).toBeLessThan(100);
+  });
+
+  it('builds a track 30 m wide and one 6 m wide', async () => {
+    for (const width of [30, 6]) {
+      const result = await built({ width, foldBack: 1 });
+      expect(result.tracks.length, `${width} m`).toBe(3);
+      for (const t of result.tracks) expect(t.design.defaultWidth).toBe(width);
+    }
+  });
+
+  it('builds a kilometre and twenty', async () => {
+    const short = await built({ length: 1000, longestStraight: 300, startStraight: 250 });
+    expect(short.tracks.length).toBe(3);
+    for (const t of short.tracks) expect(Math.abs(t.figures.length - 1000)).toBeLessThan(25);
+    const big = generateHeightmap({ ...defaultTerrainSettings('alpha', 'rolling'), mapSize: 16384, resolution: 512 });
+    const long = await built({ length: 20000 }, { heightmap: big, terrainSeed: 'alpha', vehicles: VEHICLES });
+    expect(long.tracks.length).toBe(3);
+    for (const t of long.tracks) expect(Math.abs(t.figures.length - 20000)).toBeLessThan(400);
+  });
+
+  it('has far more corners at one end of corners or speed than at the other', async () => {
+    const twisty = await built({ speed: 0, longestStraight: 400, startStraight: 300 });
+    const fast = await built({ speed: 1, foldBack: 0, compact: 0, hairpin: false, esses: false, sweeper: false });
+    expect(mean(twisty.tracks.map((t) => t.figures.corners))).toBeGreaterThan(26);
+    expect(mean(fast.tracks.map((t) => t.figures.corners))).toBeLessThan(10);
+  });
+
+  it('gives a two kilometre straight on a five kilometre lap', async () => {
+    const result = await built({ longestStraight: 2000, startStraight: 1500 });
+    expect(result.tracks.length).toBe(3);
+    for (const t of result.tracks) expect(t.figures.longestStraight).toBeGreaterThan(1750);
+  });
+
+  it('builds what is asked whatever the licence, and says the licence is not met', async () => {
+    const result = await generateTracks({ ...DEFAULT_GENERATOR, vehicleId: 'f1', licence: true, width: 8, seed: 'built', candidates: 2 }, ctx);
+    expect(result.notes.some((n) => n.includes('8 m wide'))).toBe(true);
+    expect(result.tracks.length).toBe(2);
+    for (const t of result.tracks) {
+      expect(t.design.defaultWidth).toBe(8);
+      expect(t.figures.licence?.passes).toBe(false);
     }
   });
 });
