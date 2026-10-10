@@ -233,7 +233,7 @@ export function openGenerator(store: Store, onUse: () => void = () => {}): void 
     section('Shape',
       direction.el,
       share('Spread out or compact', 'compact', 'spread out', 'compact', 'From a long thin loop to a lap that turns inward and fills its own middle'),
-      share('Folding back on itself', 'foldBack', 'one loop', 'folded', 'How much of the lap doubles back, and how close: from none, by way of wide loops, to rows of parallel straights joined by turns right round, as near each other as the track is wide and a strip of ground'),
+      share('Folding back on itself', 'foldBack', 'one loop', 'folded', 'How much of the lap turns in on itself: from none, by way of arms that go off to one side and come back, to rows of parallel straights joined by turns right round, as near each other as the track is wide and a strip of ground. The rows come only in the top fifth of the slider.'),
       h('div', { class: 'gen-ticks' },
         add(tick('Keep clear of water', () => settings.avoidWater, (v) => set({ avoidWater: v }))).el,
         add(tick('Keep clear of woods', () => settings.avoidWoods, (v) => set({ avoidWoods: v }), 'Prefers open ground; where the map is all woods it says how much of the lap runs through them')).el)),

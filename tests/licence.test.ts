@@ -9,13 +9,14 @@ import { validateTrack } from '../src/core/validate.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
 import { bigRectangle, design, makeHeightmap } from './helpers.ts';
 
-function assess(points: ControlPoint[], heightAt: (x: number, y: number) => number = () => 100, waterLevel = -Infinity) {
+function assess(points: ControlPoint[], heightAt: (x: number, y: number) => number = () => 100, waterLevel = -Infinity, change?: (metrics: ReturnType<typeof analyseTrack>) => void) {
   const hm = makeHeightmap(heightAt, { waterLevel });
   const d = design(points, { smoothing: 0, maxCutFill: 0 });
   const raw = buildTrack(d, heightAt)!;
   const sf = placeStartFinish(raw);
   const track = rotateTrack(raw, sf.station);
   const metrics = analyseTrack(track);
+  change?.(metrics);
   const issues = validateTrack(track, hm, d.grading);
   const performance = analysePerformance(track, VEHICLES);
   const facilities = placeFacilities({ track, startFinish: sf, performance, vehicles: VEHICLES, heightAt, waterLevel, extent: hm.extent, overrides: {} });
@@ -63,5 +64,17 @@ describe('licence estimate', () => {
     expect(runoff.detail).toMatch(/water/);
     expect(lic.runoff.some((r) => r.blockedBy === 'water')).toBe(true);
     expect(lic.fia.grade).not.toBe('1');
+  });
+
+  it('lets an escape path run on down the road it is on', () => {
+    // A car that runs wide at the very end of a corner goes on down the straight that follows. With every corner's
+    // apex put at its end, the paths from there run along straights of 800 and 1500 m: the road itself is not in their way.
+    const lic = assess(bigRectangle(15), () => 100, -Infinity, (m) => {
+      for (const c of m.corners) c.apex = c.end;
+    });
+    const apex = lic.runoff.filter((r) => r.kind === 'apex');
+    expect(apex.length).toBeGreaterThan(0);
+    expect(apex.filter((r) => r.blockedBy === 'track')).toEqual([]);
+    expect(lic.checks.find((c) => c.id === 'fia-runoff-1')!.pass).toBe(true);
   });
 });

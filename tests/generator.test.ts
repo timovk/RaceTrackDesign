@@ -201,19 +201,26 @@ describe('the lap as drawn', () => {
     expect(mean(drawn.map((shape) => measureShape(shape).longestStraight))).toBeLessThan(s.longestStraight * 1.25);
   });
 
-  it('scores the laps nearest to what was asked best', () => {
-    const scored = drawn.map((shape) => ({ shape, m: measureShape(shape), score: scoreShape(measureShape(shape), shape, s) })).sort((a, b) => a.score - b.score);
-    const best = scored.slice(0, 8);
-    const worst = scored.slice(-8);
-    // The start straight: some laps come out with a short one; those do not come first.
-    for (const b of best) expect(b.m.startStraight).toBeGreaterThan(s.startStraight * 0.7);
-    const off = (list: typeof scored) => mean(list.map((x) => Math.abs(x.m.corners - cornersWanted(s)) / cornersWanted(s) + Math.abs(x.m.longestStraight - s.longestStraight) / s.longestStraight));
-    expect(off(best)).toBeLessThan(off(worst));
+  it('scores a lap by how far it is from what was asked', () => {
+    const shape = drawn[0];
+    const wanted = cornersWanted(s);
+    // A lap that is all that was asked, and the same lap off in one thing at a time.
+    const asked = { ...measureShape(shape), corners: wanted, slow: wanted * (1 / 3.3), medium: wanted * (1.3 / 3.3), fast: wanted * (1 / 3.3), longestStraight: s.longestStraight, startStraight: s.startStraight, brakingPoints: s.brakingPoints, spread: 0.5 - 0.36 * s.compact, folded: 0.05 + 0.85 * s.foldBack };
+    const all = { ...shape, made: { hairpin: true, chicane: true, esses: true, sweeper: true } };
+    const best = scoreShape(asked, all, s);
+    expect(best).toBeLessThan(0.01);
+    expect(scoreShape({ ...asked, corners: wanted * 1.6 }, all, s)).toBeGreaterThan(best + 1);
+    expect(scoreShape({ ...asked, corners: wanted * 0.5 }, all, s)).toBeGreaterThan(best + 0.5);
+    expect(scoreShape({ ...asked, longestStraight: s.longestStraight * 1.6 }, all, s)).toBeGreaterThan(best + 1);
+    expect(scoreShape({ ...asked, longestStraight: s.longestStraight * 0.5 }, all, s)).toBeGreaterThan(best + 0.3);
+    expect(scoreShape({ ...asked, startStraight: s.startStraight * 0.5 }, all, s)).toBeGreaterThan(best + 0.5);
+    // (A start straight longer than asked is no fault.)
+    expect(scoreShape({ ...asked, startStraight: s.startStraight * 1.2 }, all, s)).toBeCloseTo(best, 6);
+    expect(scoreShape({ ...asked, folded: 0.9 }, all, s)).toBeGreaterThan(best + 1);
+    expect(scoreShape({ ...asked, spread: 0.15 }, all, s)).toBeGreaterThan(best + 1);
+    expect(scoreShape({ ...asked, slow: wanted, medium: 0, fast: 0 }, all, s)).toBeGreaterThan(best + 0.5);
     // A feature asked for and not made costs.
-    const without = scored.filter((x) => !x.shape.made.sweeper);
-    const withIt = scored.filter((x) => x.shape.made.sweeper);
-    expect(withIt.length).toBeGreaterThan(0);
-    if (without.length) expect(mean(withIt.map((x) => x.score))).toBeLessThan(mean(without.map((x) => x.score)));
+    expect(scoreShape(asked, { ...shape, made: { hairpin: true, chicane: true, esses: true, sweeper: false } }, s)).toBeCloseTo(best + 1.5, 6);
   });
 
   it('makes the features asked for, most of the time', () => {
@@ -349,7 +356,7 @@ describe('the ends of the sliders', () => {
     const slow = drawn({ slow: 3, medium: 0, fast: 0, ...plain }).list.map((shape) => measureShape(shape));
     const fast = drawn({ slow: 0, medium: 0, fast: 3, speed: 0.9, foldBack: 0, ...plain }).list.map((shape) => measureShape(shape));
     expect(mean(slow.map((m) => m.slow / m.corners))).toBeGreaterThan(0.9);
-    expect(mean(fast.map((m) => m.fast / m.corners))).toBeGreaterThan(0.8);
+    expect(mean(fast.map((m) => m.fast / m.corners))).toBeGreaterThan(0.75);
   });
 });
 

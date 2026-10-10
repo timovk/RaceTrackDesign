@@ -101,7 +101,7 @@ export const GENERATOR_STYLES: readonly GeneratorStyle[] = [
   },
   {
     id: 'street', name: 'Street circuit', summary: 'Short blocks and right angles: slow corners, short straights, a hairpin and a chicane.',
-    settings: { length: 3400, width: 10, heightDifference: 15, speed: 0.25, vehicleId: 'f2', licence: false, longestStraight: 650, startStraight: 420, brakingPoints: 4, slow: 2, medium: 1, fast: 0.3, hairpin: true, chicane: true, esses: false, sweeper: false, compact: 0.8, foldBack: 0.7, direction: 'clockwise' },
+    settings: { length: 3400, width: 10, heightDifference: 15, speed: 0.25, vehicleId: 'f2', licence: false, longestStraight: 650, startStraight: 420, brakingPoints: 4, slow: 2, medium: 1, fast: 0.3, hairpin: true, chicane: true, esses: false, sweeper: false, compact: 0.8, foldBack: 0.6, direction: 'clockwise' },
   },
   {
     id: 'club', name: 'Club circuit', summary: 'A short lap for touring cars and track days, folded onto a small site.',
@@ -386,16 +386,19 @@ const CHICANE_EDGE = 390;
  *    and one each long enough for the esses and the chicane.
  * 2. The chicane and the esses go on their edges, and the hairpin on the
  *    longest that is left, unless the folds are to be hairpins themselves.
- * 3. Folds: from the longest free edge the lap turns in and comes back,
- *    again and again, each leg as far as it can go before it comes near
- *    another part of the lap: wide lobes with corners of their own when the
- *    lap is only to be compact, a comb of parallel legs joined by U-turns as
- *    tight as the gap allows when it is to fold back. The length to be
- *    folded is shared out evenly over the legs; what the inside has no room
- *    for goes on the next edge, or outward.
- * 4. A sweeper, then bends: single ones and runs of them until the lap has
- *    the corners it should, and one in any straight longer than the one
- *    that is to be the longest.
+ * 3. Folds, for the share of the lap that is to turn inward. Arms: the lap
+ *    goes off to one side of an edge and comes back, its legs wider apart
+ *    where they leave than at the far end, leaning one way or the other,
+ *    ending in a turn right round or in two corners; each is put where it
+ *    comes no nearer another part of the lap than a gap and a bit. Near the
+ *    top of "folding back" combs take their place: pairs of legs side by
+ *    side as close as the gap allows, each pair joined by one turn right
+ *    round, as deep as the inside has room, the length shared out evenly.
+ * 4. A sweeper, then bends, until the lap has the corners it should: a
+ *    point of an edge pushed to one side, two to either side (an S) or two
+ *    to the same (a bay), on a long edge sooner than a short one and then on
+ *    its pieces, so that the lap gets its shape at every scale. And a fast
+ *    bend in any straight longer than the one that is to be the longest.
  * 5. Radii from the mix, made smaller where a corner does not fit.
  *
  * Null when a corner comes out too tight to drive.
@@ -410,9 +413,9 @@ function sketch(s: GeneratorSettings, seed: number, gap: number, size: number, r
   const startEdge = Math.min((s.startStraight * 1.1 + 70) * lead, 0.95 * mainEdge);
   // The share of the lap that turns inward: all of what folding back asks, and most of what compactness does.
   const folding = 0.78 * Math.max(s.foldBack, 0.6 * s.compact);
-  // How far apart the legs of a fold stand, in turns of their own radius: side by side when the lap is to fold right back.
-  const spacing = 1 + 1.6 * Math.pow(1 - s.foldBack, 1.5);
-  const uTurns = folding > 0.05 && spacing < 1.35;
+  // How many of the folds are combs (rows of legs side by side, joined by turns right round) and not arms: none
+  // below four fifths of the way up "folding back", every one at the top.
+  const combShare = clamp(Math.round((s.foldBack - 0.8) * 500) / 100, 0, 1);
   // What goes on an edge of its own, as far as the lap has the length for it: the two straights first, then the
   // folds, the hairpin (unless the folds are hairpins themselves), the chicane and the esses.
   const outAndBack = 2 * mainEdge + Math.max(2.4 * gap, (0.3 - 0.22 * s.foldBack) * mainEdge);
@@ -423,7 +426,7 @@ function sketch(s: GeneratorSettings, seed: number, gap: number, size: number, r
     return true;
   };
   const folded = fitsOn(folding > 0.05, 260);
-  const ownHairpin = fitsOn(s.hairpin && !(uTurns && folded), 320);
+  const ownHairpin = fitsOn(s.hairpin && !(combShare >= 1 && folded), 320);
   const chicane = fitsOn(s.chicane, CHICANE_EDGE);
   const esses = fitsOn(s.esses, ESSES_EDGE);
   const edgesNeeded = 1 + (ownStart ? 1 : 0) + (folded ? 1 : 0) + (ownHairpin ? 1 : 0) + (chicane ? 1 : 0) + (esses ? 1 : 0);
@@ -646,116 +649,211 @@ function sketch(s: GeneratorSettings, seed: number, gap: number, size: number, r
     }
   }
 
+  /**
+   * Whether a stretch of new road, through `fresh` from the vertex before them to the one after, comes too near
+   * another part of the lap: within a gap and an eighth of a stretch that is not its neighbour along the lap.
+   */
+  const crowds = (fresh: Vertex[]): boolean => {
+    const n = v.length;
+    const from = mod(v.indexOf(fresh[0]) - 1, n);
+    const count = fresh.length + 1;
+    const lens = v.map((p, i) => Math.hypot(v[(i + 1) % n].x - p.x, v[(i + 1) % n].y - p.y));
+    const cum = [0];
+    for (let i = 0; i < n; i++) cum.push(cum[i] + lens[i]);
+    const keep = 1.12 * gap;
+    const near = Math.max(2.5 * gap, 110);
+    const step = 0.8 * gap;
+    for (let k = 0; k < count; k++) {
+      const i = (from + k) % n;
+      const a = v[i], b = v[(i + 1) % n];
+      const pieces = Math.max(1, Math.ceil(lens[i] / step));
+      for (let m = 0; m <= pieces; m++) {
+        const x = a.x + ((b.x - a.x) * m) / pieces, y = a.y + ((b.y - a.y) * m) / pieces;
+        const here = cum[i] + (lens[i] * m) / pieces;
+        for (let j = 0; j < n; j++) {
+          if (mod(j - from, n) < count) continue;
+          const c = v[j], d = v[(j + 1) % n];
+          if (x < Math.min(c.x, d.x) - keep || x > Math.max(c.x, d.x) + keep || y < Math.min(c.y, d.y) - keep || y > Math.max(c.y, d.y) + keep) continue;
+          const dx = d.x - c.x, dy = d.y - c.y;
+          const u = clamp(((x - c.x) * dx + (y - c.y) * dy) / (dx * dx + dy * dy || 1), 0, 1);
+          if (Math.hypot(x - c.x - dx * u, y - c.y - dy * u) >= keep) continue;
+          const apart = Math.abs(cum[j] + lens[j] * u - here);
+          if (Math.min(apart, cum[n] - apart) >= near) return true;
+        }
+      }
+    }
+    return false;
+  };
+  // (A bend pushed out takes some of the turn from the corners either side of it. Where that would leave an end of
+  // one of the two straights with hardly a corner, the straight would run on round it.)
+  const runsOn = () => {
+    const { angle } = turns(v);
+    return kept.some((k) => Math.abs(angle[v.indexOf(k)]) < 0.3 || Math.abs(angle[(v.indexOf(k) + 1) % v.length]) < 0.3);
+  };
+  /** Puts new road on an edge, the first way of those offered that neither crowds another part of the lap nor lets a straight run on. */
+  const put = (at: Vertex, make: (way: number) => Point[], ways: number[]): Vertex[] | null => {
+    for (const way of ways) {
+      const fresh = along(at, make(way));
+      if (!runsOn() && !crowds(fresh)) return fresh;
+      v.splice(v.indexOf(fresh[0]), fresh.length);
+    }
+    return null;
+  };
+
   // 3. Folds, until the lap has its length: what the loop and the hairpin leave over.
   let budget = folded ? Math.min(s.length - 0.93 * loop - added, 1.4 * folding * s.length) : 0;
   const tight = Math.max(1.06 * gap, 2 * TIGHTEST);
-  const deep = 0.6 + 0.4 * Math.max(s.compact, s.foldBack);
+  // Things on a long lap are bigger than on a short one.
+  const scale = clamp(Math.sqrt(s.length / 5000), 0.75, 2);
   let folds = 0;
-  for (const at of free()) {
-    if (budget < 2 * (tight + 60)) break;
-    const r = stream(`fold${folds++}`);
-    const e = edgeLength(at);
-    // The turn at the end of a pair of legs comes from the mix, the tighter the more the lap is to fold; the legs stand as far apart as it needs.
-    const pitch = Math.max(tight, 2.15 * drawRadius(s, r, 1, s.foldBack)) * spacing;
-    const uTurn = spacing < 1.35;
-    const margin = Math.max(55, 1.35 * gap, e * 0.08);
-    const usable = e - 2 * margin;
-    const most = Math.floor((usable + pitch) / (2 * pitch));
-    if (most < 1) continue;
-    const s0 = margin + (usable - (2 * most - 1) * pitch) * r();
-    const shallowest = pitch + 60;
-    // (No leg with more straight in it than the straight that is to be the longest.)
-    const cap = Math.min(0.3 * s.length, budget / 2, 0.9 * s.longestStraight + (spacing < 1.35 ? pitch / 2 : 40));
-    if (cap < shallowest) break;
-    const measure = (inside: boolean) => {
-      const out: number[] = [];
-      for (let k = 0; k < most; k++) {
-        const s1 = s0 + 2 * k * pitch;
-        const d = Math.min(room(at, s1, inside, cap), room(at, s1 + pitch, inside, cap)) * (inside ? deep : 1) * between(r, 0.9, 1);
-        out.push(d >= shallowest ? d : 0);
-      }
-      return out;
-    };
-    const sum = (list: number[]) => list.reduce((a, d) => a + d, 0);
-    let rooms = measure(true);
-    let side = 1;
-    // A lap that is to fold back and has no room left inside folds outward.
-    if (s.foldBack > 0.5 && sum(rooms) < 0.5 * Math.min(budget / 2, most * cap)) {
-      const outside = measure(false);
-      if (sum(outside) > 1.5 * sum(rooms)) {
-        rooms = outside;
-        side = -1;
-      }
-    }
-    // The length to fold, shared out evenly: every leg as deep as the others, or as deep as it has room.
-    const all = rooms.map((d, k) => ({ k, d })).filter((t) => t.d > 0);
-    if (!all.length) continue;
-    const share = budget / 2;
-    // As many pairs of legs as the lap is to have corners (each turn at an end is one), and more only where fewer
-    // have no room for the length: side by side where that is, at the deepest place there is.
-    let teeth = all;
-    const fewest = clamp(Math.round((wanted - cornersOf(v).length - 1) / 2), 1, all.length);
-    const most2 = Math.max(1, Math.min(all.length, Math.floor(share / shallowest)));
-    for (let n = Math.min(fewest, most2); n <= most2; n++) {
-      let best: typeof all = [];
-      for (let from = 0; from + n <= all.length; from++) {
-        const run = all.slice(from, from + n);
-        if (run[n - 1].k - run[0].k === n - 1 && sum(run.map((t) => t.d)) > sum(best.map((t) => t.d))) best = run;
-      }
-      if (!best.length) best = [...all].sort((p, q) => q.d - p.d).slice(0, n).sort((p, q) => p.k - q.k);
-      teeth = best;
-      if (sum(best.map((t) => t.d)) >= share) break;
-    }
-    let level = Infinity;
-    if (sum(teeth.map((t) => t.d)) > share) {
-      const sorted = teeth.map((t) => t.d).sort((p, q) => p - q);
-      let left = share;
-      for (let n = 0; n < sorted.length; n++) {
-        const each = left / (sorted.length - n);
-        if (sorted[n] >= each) {
-          level = each;
-          break;
+  /** Vertices whose edge to the next lies on the loop still, and may take an arm. */
+  const onLoop = new Set<Vertex>(free());
+  for (let pass = 0; pass < 2 && budget > 300; pass++) {
+    for (const at of [...onLoop].filter((p) => v.includes(p) && !closed.has(p) && (pass > 0 || !used.has(p))).sort((p, q) => edgeLength(q) - edgeLength(p))) {
+      if (budget < 2 * (tight + 60)) break;
+      const r = stream(`fold${folds++}`);
+      const e = edgeLength(at);
+      if (r() < combShare) {
+        // A comb: pairs of legs side by side, as close as the gap allows, each pair joined by one turn right round.
+        const pitch = Math.max(tight, 2.15 * drawRadius(s, r, 1, 1));
+        const margin = Math.max(55, 1.35 * gap, e * 0.08);
+        const usable = e - 2 * margin;
+        const most = Math.floor((usable + pitch) / (2 * pitch));
+        if (most < 1) continue;
+        const s0 = margin + (usable - (2 * most - 1) * pitch) * r();
+        const shallowest = pitch + 60;
+        // (No leg with more straight in it than the straight that is to be the longest.)
+        const cap = Math.min(0.3 * s.length, budget / 2, 0.9 * s.longestStraight + pitch / 2);
+        if (cap < shallowest) break;
+        const measure = (inside: boolean) => {
+          const out: number[] = [];
+          for (let k = 0; k < most; k++) {
+            const s1 = s0 + 2 * k * pitch;
+            const d = Math.min(room(at, s1, inside, cap), room(at, s1 + pitch, inside, cap)) * between(r, 0.9, 1);
+            out.push(d >= shallowest ? d : 0);
+          }
+          return out;
+        };
+        const sum = (list: number[]) => list.reduce((a, d) => a + d, 0);
+        let rooms = measure(true);
+        let side = 1;
+        // Where the inside has no room left, it folds outward.
+        if (sum(rooms) < 0.5 * Math.min(budget / 2, most * cap)) {
+          const outside = measure(false);
+          if (sum(outside) > 1.5 * sum(rooms)) {
+            rooms = outside;
+            side = -1;
+          }
         }
-        left -= sorted[n];
+        // The length to fold, shared out evenly: every leg as deep as the others, or as deep as it has room.
+        const all = rooms.map((d, k) => ({ k, d })).filter((t) => t.d > 0);
+        if (!all.length) continue;
+        const share = budget / 2;
+        // As many pairs of legs as the lap is to have corners (each turn at an end is one), and more only where fewer
+        // have no room for the length: side by side where that is, at the deepest place there is.
+        let teeth = all;
+        const fewest = clamp(Math.round((wanted - cornersOf(v).length - 1) / 2), 1, all.length);
+        const most2 = Math.max(1, Math.min(all.length, Math.floor(share / shallowest)));
+        for (let n = Math.min(fewest, most2); n <= most2; n++) {
+          let best: typeof all = [];
+          for (let from = 0; from + n <= all.length; from++) {
+            const run = all.slice(from, from + n);
+            if (run[n - 1].k - run[0].k === n - 1 && sum(run.map((t) => t.d)) > sum(best.map((t) => t.d))) best = run;
+          }
+          if (!best.length) best = [...all].sort((p, q) => q.d - p.d).slice(0, n).sort((p, q) => p.k - q.k);
+          teeth = best;
+          if (sum(best.map((t) => t.d)) >= share) break;
+        }
+        let level = Infinity;
+        if (sum(teeth.map((t) => t.d)) > share) {
+          const sorted = teeth.map((t) => t.d).sort((p, q) => p - q);
+          let left = share;
+          for (let n = 0; n < sorted.length; n++) {
+            const each = left / (sorted.length - n);
+            if (sorted[n] >= each) {
+              level = each;
+              break;
+            }
+            left -= sorted[n];
+          }
+        }
+        const has = new Set(teeth.map((t) => t.k));
+        // Where the lap is short of corners the legs swing from side to side on their way, all of them together, so
+        // that they stay as far apart as they were (less by the slope of the swing, which the gap sets a limit to).
+        const lacking = wanted - cornersOf(v).length - 2 * teeth.length - 1;
+        const swing = clamp((0.6 * s.length) / wanted, 60, 160);
+        const slope = Math.min(0.5, Math.sqrt(Math.max(0, (pitch / (1.03 * gap)) ** 2 - 1)));
+        const swings = lacking > 0 && slope > 0.2 ? Math.ceil(lacking / (2 * teeth.length)) : 0;
+        const sway = 0.45 * swing * slope * (r() < 0.5 ? 1 : -1);
+        // (A leg comes to a turn right round nearly square on: the last swing is four times its width short of it.)
+        const square = Math.max(30, 4 * Math.abs(sway));
+        const ends = [10 + square, pitch / 2 + square];
+        const points: Point[] = [];
+        for (const t of teeth) {
+          const far = Math.max(shallowest, Math.min(t.d, level));
+          const s1 = s0 + 2 * t.k * pitch;
+          const n = Math.max(0, Math.min(swings, Math.floor((far - ends[0] - ends[1]) / swing)));
+          const leg = (from: number, back: boolean): Point[] => {
+            const out: Point[] = [];
+            for (let j = 0; j < n; j++) out.push({ s: from + sway * (j % 2 ? -1 : 1), side: (ends[0] + (j + 0.5) * swing) * side, r: 60, feature: 'fold', fixed: false });
+            return back ? out.reverse() : out;
+          };
+          points.push(
+            { s: s1, side: 0, r: pitch / 2, feature: 'fold', fixed: has.has(t.k - 1) },
+            ...leg(s1, false),
+            { s: s1, side: far * side, r: pitch / 2, feature: 'fold', fixed: true },
+            { s: s1 + pitch, side: far * side, r: pitch / 2, feature: 'fold', fixed: true },
+            ...leg(s1 + pitch, true),
+            { s: s1 + pitch, side: 0, r: pitch / 2, feature: 'fold', fixed: has.has(t.k + 1) },
+          );
+          budget -= 2 * far;
+        }
+        const fresh = along(at, points);
+        fresh.slice(0, -1).forEach((p) => closed.add(p));
+        used.add(at);
+        onLoop.delete(at);
+        if (s.hairpin) made.hairpin = true;
+        continue;
       }
+      // An arm: the lap goes off to one side and comes back, as a real circuit does round a hill or a paddock. Its
+      // two legs stand wider apart where they leave than at the far end, it leans one way or the other, and its end
+      // is a turn right round where that is narrow and two corners where it is wide. Bends come to its legs later.
+      const margin = Math.max(55, 1.35 * gap, e * 0.08);
+      const narrowest = Math.max(1.5 * gap, 2.4 * TIGHTEST);
+      const turn = drawRadius(s, r, 0.8);
+      const tip = clamp(2.15 * turn * between(r, 0.9, 1.5), narrowest, Math.max(1.3 * narrowest, 420 * scale));
+      const base = Math.min(tip * between(r, 1, 2.2), e - 2 * margin);
+      if (base < narrowest || e < base + 2 * margin) continue;
+      const end = Math.min(tip, base);
+      const centre = between(r, margin + base / 2, e - margin - base / 2);
+      // (No needle: no deeper than some five times what its legs stand apart.)
+      const wish = Math.min(0.9 * s.longestStraight, 0.22 * s.length, budget / 2 + 60, e * between(r, 0.55, 1.4), 2.5 * (base + end) + 80) * between(r, 0.55, 1);
+      const lean = between(r, -0.35, 0.35);
+      // One turn right round where the end is no wider than the turn drawn for it needs, else two corners.
+      const round = end <= 2.5 * turn;
+      const least = Math.max(110 * scale, end + 60);
+      let fresh: Vertex[] | null = null;
+      let depth = 0;
+      const inside = r() < 0.75 ? [1, -1] : [-1, 1];
+      for (const shrink of [1, 0.75, 0.55, 0.4]) {
+        depth = wish * shrink;
+        if (depth < least) break;
+        const far = depth;
+        fresh = put(at, (way) => [
+          { s: centre - base / 2, side: 0, r: 40, feature: 'detour', fixed: false },
+          { s: centre + lean * far - end / 2, side: way * far, r: round ? end / 2 : 40, feature: 'fold', fixed: round },
+          { s: centre + lean * far + end / 2, side: way * far, r: round ? end / 2 : 40, feature: 'fold', fixed: round },
+          { s: centre + base / 2, side: 0, r: 40, feature: 'detour', fixed: false },
+        ], inside);
+        if (fresh) break;
+      }
+      if (!fresh) continue;
+      // (The end of an arm takes no bend; its legs do, and so may what is left of the edge either side of it.)
+      closed.add(fresh[1]);
+      onLoop.add(fresh[3]);
+      used.add(at);
+      budget -= 2 * Math.hypot(depth, (base - end) / 2) + end - base;
     }
-    const has = new Set(teeth.map((t) => t.k));
-    // Where the lap is short of corners the legs swing from side to side on their way, all of them together, so
-    // that they stay as far apart as they were (less by the slope of the swing, which the gap sets a limit to).
-    const lacking = wanted - cornersOf(v).length - (uTurn ? 2 : 4) * teeth.length - 1;
-    const swing = clamp((0.6 * s.length) / wanted, 60, 160);
-    const slope = Math.min(0.5, Math.sqrt(Math.max(0, (pitch / (1.03 * gap)) ** 2 - 1)));
-    const swings = lacking > 0 && slope > 0.2 ? Math.ceil(lacking / (2 * teeth.length)) : 0;
-    const sway = 0.45 * swing * slope * (r() < 0.5 ? 1 : -1);
-    // (A leg comes to a turn right round nearly square on: the last swing is four times its width short of it.)
-    const square = Math.max(30, (uTurn ? 4 : 2.2) * Math.abs(sway));
-    const ends = [10 + square, (uTurn ? pitch / 2 : 40) + square];
-    const points: Point[] = [];
-    for (const t of teeth) {
-      const far = Math.max(shallowest, Math.min(t.d, level));
-      const depth = far * side;
-      const s1 = s0 + 2 * t.k * pitch;
-      const turn = uTurn ? pitch / 2 : 40;
-      const n = Math.max(0, Math.min(swings, Math.floor((far - ends[0] - ends[1]) / swing)));
-      const leg = (from: number, back: boolean): Point[] => {
-        const out: Point[] = [];
-        for (let j = 0; j < n; j++) out.push({ s: from + sway * (j % 2 ? -1 : 1), side: (ends[0] + (j + 0.5) * swing) * side, r: 60, feature: 'fold', fixed: false });
-        return back ? out.reverse() : out;
-      };
-      points.push(
-        { s: s1, side: 0, r: turn, feature: 'fold', fixed: uTurn && has.has(t.k - 1) },
-        ...leg(s1, false),
-        { s: s1, side: depth, r: turn, feature: 'fold', fixed: uTurn },
-        { s: s1 + pitch, side: depth, r: turn, feature: 'fold', fixed: uTurn },
-        ...leg(s1 + pitch, true),
-        { s: s1 + pitch, side: 0, r: turn, feature: 'fold', fixed: uTurn && has.has(t.k + 1) },
-      );
-      budget -= 2 * far;
-    }
-    const fresh = along(at, points);
-    fresh.slice(0, -1).forEach((p) => closed.add(p));
-    used.add(at);
-    if (uTurn && s.hairpin) made.hairpin = true;
   }
 
   // 4. A sweeper: one corner opened right out. It needs the length of both straights it joins, so the bends keep off them.
@@ -773,32 +871,15 @@ function sketch(s: GeneratorSettings, seed: number, gap: number, size: number, r
       made.sweeper = true;
     }
   }
-  // Bends, until the lap has the corners it should; and one in any straight longer than the one that is to be the
-  // longest. Outward where the inside has folds in it.
+  // Bends, until the lap has the corners it should: a point of an edge pushed to one side, two pushed to either side
+  // (an S) or two to the same (a bay), on a long edge more often than a short one and then on its pieces, so that the
+  // lap gets its shape at every scale. And a fast bend in any straight longer than the one that is to be the longest.
   const rk = stream('bends');
   const longest = edgeLength(mainFrom);
-  const pitch = clamp((0.5 * s.length) / wanted, 55, 150);
-  const shortest = clamp(2.4 * pitch, 130, 280);
-  // (A bend pushed out takes some of the turn from the corners either side of it. Where that would leave an end of
-  // one of the two straights with hardly a corner, the straight would run on round it: the bend goes the other
-  // way, or not on that edge at all.)
-  const runsOn = () => {
-    const { angle } = turns(v);
-    return kept.some((k) => Math.abs(angle[v.indexOf(k)]) < 0.3 || Math.abs(angle[(v.indexOf(k) + 1) % v.length]) < 0.3);
-  };
-  const bendOn = (at: Vertex, make: (way: number) => Point[], ways: number[], failed: Set<Vertex>): Vertex[] | null => {
-    for (const way of ways) {
-      const fresh = along(at, make(way));
-      if (!runsOn()) return fresh;
-      v.splice(v.indexOf(fresh[0]), fresh.length);
-    }
-    failed.add(at);
-    return null;
-  };
+  const shortest = clamp((0.9 * s.length) / wanted, 110, 300);
   /** Edges that took no bend for a corner, and those that took none to shorten them either. */
   const bare = new Set<Vertex>();
   const stuck = new Set<Vertex>();
-  const out = folds || thin;
   // No straight but the main one may be longer than this: a little under the main edge, or the straight asked and a corner's share.
   const limit = Math.min(0.92 * longest, s.longestStraight + 30);
   for (let round = 0; round < 3; round++) {
@@ -811,33 +892,39 @@ function sketch(s: GeneratorSettings, seed: number, gap: number, size: number, r
       if (!slight.length) break;
       for (const p of slight) v.splice(v.indexOf(p), 1);
     }
-    for (let guard = 0; guard < 160; guard++) {
-      const open = v.filter((p) => !kept.includes(p) && !closed.has(p)).sort((p, q) => edgeLength(q) - edgeLength(p));
-      const at = open.find((p) => !spared.has(p) && !bare.has(p));
+    for (let guard = 0; guard < 320; guard++) {
+      const open = v.filter((p) => !kept.includes(p) && !closed.has(p));
       const need = wanted - cornersOf(v).length;
-      if (at && need > 0 && edgeLength(at) >= shortest) {
+      const able = need > 0 ? open.filter((p) => !spared.has(p) && !bare.has(p) && edgeLength(p) >= shortest) : [];
+      if (able.length) {
+        // One of them, a long one sooner than a short one.
+        const weights = able.map((p) => Math.pow(edgeLength(p), 1.5));
+        let pick = rk() * weights.reduce((a, w) => a + w, 0);
+        const at = able[Math.max(0, weights.findIndex((w) => (pick -= w) < 0))] ?? able[0];
         const e = edgeLength(at);
-        const fits = Math.floor(e / pitch) - 1;
-        if (need >= 3 && fits >= 3) {
-          // A run of them, from side to side (to one side and back, where the other is taken).
-          const n = Math.min(fits, need, 16);
-          const step = e / (n + 1);
-          const wide = step * (out ? between(rk, 0.28, 0.42) : between(rk, 0.18, 0.36));
-          const sizes = Array.from({ length: n }, () => between(rk, 0.8, 1));
-          const fresh = bendOn(at, (way) => sizes.map((size2, k): Point => ({ s: step * (k + 1), side: way * wide * (k % 2 ? (out ? 0.1 : -1) : 1) * size2, r: 60, feature: 'kink', fixed: false })), out ? [-1] : rk() < 0.5 ? [-1, 1] : [1, -1], bare);
-          if (fresh) {
-            fresh.forEach((p) => closed.add(p));
-            closed.add(at);
+        const kind = e >= 2.2 * shortest && need >= 2 ? rk() : 0;
+        const first = thin || rk() < 0.55 ? -1 : 1;
+        const p1 = between(rk, 0.27, 0.4), p2 = between(rk, 0.6, 0.73), size = between(rk, 0, 1), other = between(rk, 0.7, 1.2);
+        const where = between(rk, 0.3, 0.7);
+        const make = (way: number, less: number): Point[] => {
+          if (kind >= 0.75) {
+            // A bay: two points to the same side.
+            const wide = e * (0.07 + 0.13 * size) * less;
+            return [{ s: e * p1, side: way * wide, r: 60, feature: 'kink', fixed: false }, { s: e * p2, side: way * wide * other, r: 60, feature: 'kink', fixed: false }];
           }
-        } else {
-          const where = between(rk, e * 0.35, e * 0.65);
-          const wide = Math.max(0.09 * e, Math.min(160, e * between(rk, 0.1, 0.26)));
-          bendOn(at, (way) => [{ s: where, side: way * wide, r: 60, feature: 'kink', fixed: false }], out ? [-1] : rk() < 0.6 ? [-1, 1] : [1, -1], bare);
-        }
+          if (kind >= 0.5) {
+            // An S: one to either side.
+            const wide = e * (0.06 + 0.1 * size) * less;
+            return [{ s: e * p1, side: way * wide, r: 60, feature: 'kink', fixed: false }, { s: e * p2, side: -way * wide * other, r: 60, feature: 'kink', fixed: false }];
+          }
+          return [{ s: e * where, side: way * Math.max(0.09 * e, e * (0.1 + 0.17 * size) * less), r: 60, feature: 'kink', fixed: false }];
+        };
+        const done = put(at, (way) => make(way, 1), [first, -first]) ?? put(at, (way) => make(way, 0.55), [first, -first]);
+        if (!done) bare.add(at);
         continue;
       }
       // A fast bend, to keep a straight under the longest: beside a sweeper at the far end of the straight from it.
-      const long = open.find((p) => !stuck.has(p));
+      const long = open.filter((p) => !stuck.has(p)).sort((p, q) => edgeLength(q) - edgeLength(p))[0];
       if (!long || edgeLength(long) <= limit || edgeLength(long) < 240) break;
       const e = edgeLength(long);
       const fromSweeper = long.feature === 'sweeper';
@@ -845,8 +932,10 @@ function sketch(s: GeneratorSettings, seed: number, gap: number, size: number, r
       const where = e * (fromSweeper ? between(rk, 0.58, 0.72) : toSweeper ? between(rk, 0.28, 0.42) : between(rk, 0.4, 0.6));
       const wide = e * between(rk, 0.08, 0.13);
       const radius = between(rk, 150, 350);
-      const fresh = bendOn(long, (way) => [{ s: where, side: way * wide, r: radius, feature: 'kink', fixed: true }], out ? [-1, 1] : rk() < 0.5 ? [-1, 1] : [1, -1], stuck);
-      if (fresh && toSweeper) {
+      const first = thin || rk() < 0.5 ? -1 : 1;
+      const fresh = put(long, (way) => [{ s: where, side: way * wide, r: radius, feature: 'kink', fixed: true }], [first, -first]);
+      if (!fresh) stuck.add(long);
+      else if (toSweeper) {
         spared.delete(long);
         spared.add(fresh[0]);
       }
@@ -1261,6 +1350,8 @@ export function scoreShape(m: ShapeMetrics, shape: Shape, s: GeneratorSettings):
   let score = 4 * ((m.corners - wanted) / wanted) ** 2;
   score += 2 * ((m.slow / count - s.slow / total) ** 2 + (m.medium / count - s.medium / total) ** 2 + (m.fast / count - s.fast / total) ** 2);
   score += 2 * ((m.longestStraight - s.longestStraight) / s.longestStraight) ** 2;
+  // (A straight well over the longest asked is not what was asked at all.)
+  if (m.longestStraight > 1.2 * s.longestStraight) score += 4 * (m.longestStraight / s.longestStraight - 1.2);
   if (m.startStraight < s.startStraight) score += 3 * ((s.startStraight - m.startStraight) / s.startStraight) ** 2;
   score += 0.6 * ((m.brakingPoints - s.brakingPoints) / Math.max(1, s.brakingPoints)) ** 2;
   // A plain loop is nearly half its length across; a lap folded tight a seventh of it.
@@ -1328,7 +1419,12 @@ export function findSite(shape: Shape, hm: Heightmap, s: GeneratorSettings, wood
   const hasWater = Number.isFinite(hm.waterLevel);
   const steep = steepLimit(s);
   const h = new Float64Array(n);
+  // Where the grid stands: the 250 m of the start straight that end where the line is, 320 m short of its end.
   const onStart = path.straight.map((e) => e === shape.start);
+  let startEnd = 0;
+  for (let i = 0; i < n; i++) if (onStart[i]) startEnd = Math.max(startEnd, path.s[i]);
+  const onGrid = onStart.map((on, i) => on && startEnd - path.s[i] > 250 && startEnd - path.s[i] < 600);
+  const gridKnown = onGrid.filter(Boolean).length >= 3;
   const evaluate = (cx: number, cy: number, turn: number): Site | null => {
     const co = Math.cos(turn), si = Math.sin(turn);
     let min = Infinity, max = -Infinity, wet = 0, wooded = 0;
@@ -1343,22 +1439,21 @@ export function findSite(shape: Shape, hm: Heightmap, s: GeneratorSettings, wood
       if (s.avoidWoods && woods(x, y) > 0.5) wooded++;
     }
     if (s.avoidWater && wet) return null;
-    // Slopes along the lap, over two steps so that one bump does not count; and the slope of the start straight, where the grid stands.
-    let steepest = 0, grid = 0, gridCount = 0;
+    // Slopes along the lap, over two steps so that one bump does not count; and the steepest where the grid stands.
+    let steepest = 0, grid = 0;
     for (let i = 0; i < n; i++) {
       const j = (i + 2) % n;
       const run = mod(path.s[j] - path.s[i], path.length) || 1;
       const g = Math.abs(h[j] - h[i]) / run;
       if (g > steepest) steepest = g;
-      if (onStart[i] && onStart[j]) {
-        grid += g;
-        gridCount++;
-      }
+      const next = (i + 1) % n;
+      if (gridKnown ? onGrid[i] && onGrid[next] : onStart[i] && onStart[next]) grid = Math.max(grid, Math.abs(h[next] - h[i]) / (mod(path.s[next] - path.s[i], path.length) || 1));
     }
     const range = max - min;
     let cost = ((range - s.heightDifference) / Math.max(12, 0.35 * s.heightDifference + 8)) ** 2;
     cost += Math.max(0, (steepest - steep) / 0.03) ** 2;
-    if (gridCount) cost += 0.5 * Math.max(0, (grid / gridCount - 0.015) / 0.01) ** 2;
+    // (A licence takes a grid of 2% at most: a place that has more is nearly as bad as none.)
+    cost += s.licence ? 4 * Math.max(0, (grid - 0.016) / 0.008) ** 2 : 0.5 * Math.max(0, (grid - 0.02) / 0.01) ** 2;
     cost += 3 * (wet / n) + 4 * (wooded / n);
     return { x: cx, y: cy, turn, cost, range, steepest, wet: wet / n, wooded: wooded / n };
   };
@@ -1614,7 +1709,11 @@ export async function generateTracks(
   const { settings: s, needs, notes } = resolveSettings(request, vehicle);
   const hm = ctx.heightmap;
   const gap = needs ? needs.gap : gapFor(s);
-  const steps = 2 + Math.ceil(s.candidates * BUILT);
+  // (A lap asked at the least length the licence takes is drawn a hair longer, not to fall short by a metre.)
+  const drawn2 = needs && s.length >= needs.minLength && s.length < needs.minLength * 1.004 ? { ...s, length: needs.minLength * 1.004 } : s;
+  // How many are built to choose from: fewer to spare on a long lap, where building one takes several times as long.
+  const toBuild = s.candidates + Math.ceil(s.candidates * (BUILT - 1) * clamp(6000 / s.length, 0.3, 1));
+  const steps = 2 + toBuild;
   let done = 0;
   const tick = async (doing: string) => {
     hooks.progress?.(Math.min(done++, steps - 1), steps, doing);
@@ -1624,8 +1723,9 @@ export async function generateTracks(
   await tick('Drawing laps');
   const rng = seededRandom(`generator:${s.seed}`);
   const drawn: { shape: Shape; score: number; seed: string }[] = [];
-  for (let i = 0; i < DRAWN * s.candidates; i++) {
-    const shape = drawShape(s, rng, gap);
+  const draws = Math.round(DRAWN * clamp(8000 / s.length, 0.35, 1)) * s.candidates;
+  for (let i = 0; i < draws; i++) {
+    const shape = drawShape(drawn2, rng, gap);
     if (!shape) continue;
     let score = scoreShape(measureShape(shape, vehicle), shape, s);
     if (needs && vehicle) score += SHORT_RUNOFF * shortRunoff(shape, s.width, vehicle);
@@ -1654,7 +1754,7 @@ export async function generateTracks(
   let passing = 0;
   for (const p of placed) {
     // Enough built to choose from; built to a licence, on until there are enough that pass, as far as the places found go.
-    if (tracks.length >= Math.ceil(s.candidates * BUILT) && (!needs || passing >= s.candidates)) break;
+    if (tracks.length >= toBuild && (!needs || passing >= s.candidates)) break;
     await tick(`Building track ${tracks.length + 1}`);
     const { design, startFinish, outline } = toDesign(p.shape, p.site, s, needs);
     const raw = buildTrack(design, (x, y) => sampleHeight(hm, x, y));
@@ -1667,17 +1767,18 @@ export async function generateTracks(
     let lapTime = NaN, topSpeed = NaN, braking = 0;
     let licence: TrackFigures['licence'] = null;
     if (vehicle && needs) {
-      // Built to a licence: the whole of the analysis, as the app will do it, for the verdict.
-      const performance = analysePerformance(t, ctx.vehicles);
+      // Built to a licence: the analysis as the app will do it, for the verdict, with the classes that need this
+      // licence (the others' laps have no part in it, and a lap of each is most of the work).
+      const classes = ctx.vehicles.filter((x) => x.licence.body === vehicle.licence.body && x.licence.grade === vehicle.licence.grade);
+      const performance = analysePerformance(t, classes);
       const facilities = placeFacilities({
-        track: t, startFinish: start, performance, vehicles: ctx.vehicles, heightAt: (x, y) => sampleHeight(hm, x, y), waterLevel: hm.waterLevel, extent: hm.extent,
+        track: t, startFinish: start, performance, vehicles: classes, heightAt: (x, y) => sampleHeight(hm, x, y), waterLevel: hm.waterLevel, extent: hm.extent,
         overrides: { startFinish },
       });
-      const verdict = assessLicence({ track: t, metrics, issues, performance, facilities, heightmap: hm, vehicles: ctx.vehicles });
-      const own = verdict.classes.find((x) => x.id === vehicle.id);
+      const verdict = assessLicence({ track: t, metrics, issues, performance, facilities, heightmap: hm, vehicles: classes });
       const body = vehicle.licence.body === 'FIM' ? verdict.fim : verdict.fia;
       const failures = body.results.find((r) => r.grade === vehicle.licence.grade)?.failures.filter((f) => f.level === 'required').map((f) => `${f.label}: ${f.detail}`) ?? [];
-      licence = { needs: `${vehicle.licence.body} ${vehicle.licence.grade}`, passes: own?.allowed ?? failures.length === 0, failures };
+      licence = { needs: `${vehicle.licence.body} ${vehicle.licence.grade}`, passes: failures.length === 0, failures };
       const lap = performance.laps.find((l) => l.vehicleId === vehicle.id);
       if (lap) {
         lapTime = lap.time;
@@ -1693,7 +1794,7 @@ export async function generateTracks(
     const warnings = issues.filter((i) => i.severity === 'warning').length;
     const own: string[] = [];
     const off = metrics.elevationRange - s.heightDifference;
-    if (Math.abs(off) > Math.max(10, 0.35 * s.heightDifference)) {
+    if (Math.abs(off) > Math.max(15, 0.4 * s.heightDifference)) {
       own.push(off > 0
         ? `The map has no ground this flat for a lap this size: ${Math.round(metrics.elevationRange)} m of height, where ${Math.round(s.heightDifference)} m was asked.`
         : `The map gives a lap this size no more height than this without slopes too steep: ${Math.round(metrics.elevationRange)} m, where ${Math.round(s.heightDifference)} m was asked.`);

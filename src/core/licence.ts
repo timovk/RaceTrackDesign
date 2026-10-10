@@ -372,11 +372,15 @@ function traceRunoff(
   const hx = Math.cos(t.heading[k]);
   const hy = Math.sin(t.heading[k]);
   const localReach = Math.round(300 / ds);
+  // The stretch of road the path belongs to: 300 m either way of where it is on the road. That is where it leaves
+  // from, and moves along with a path that runs on down the road (the tangent at the end of a corner is the straight
+  // that follows): the road ahead is then its own road, not another part of the track in its way.
+  let home = k;
   const isLocal = (j: number) => {
-    const d = Math.abs(j - k);
+    const d = Math.abs(j - home);
     return Math.min(d, n - d) <= localReach;
   };
-  // Distance to the nearest station, split by whether it belongs to this corner.
+  // Distance to the nearest station, split by whether it belongs to this stretch.
   const nearest = (x: number, y: number, local: boolean) => {
     let best = Infinity;
     let at = -1;
@@ -399,6 +403,7 @@ function traceRunoff(
   for (let guard = 0; guard < 200; guard++) {
     const near = nearest(x, y, true);
     if (near.at < 0 || near.d > t.width[near.at] / 2 + 1) break;
+    home = near.at;
     s += step;
     x = t.x[k] + hx * s;
     y = t.y[k] + hy * s;
