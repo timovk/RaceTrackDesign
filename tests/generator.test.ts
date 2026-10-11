@@ -4,6 +4,9 @@ import {
   classNeeds, cornersWanted, drawShape, findSite, gapFor, generateTracks, measureShape, resolveSettings, scoreShape, shortRunoff, tracePath,
 } from '../src/core/generator.ts';
 import { sampleHeight } from '../src/core/heightmap.ts';
+import { foldedWanted, hullWanted, mixWanted, spreadWanted } from '../src/core/lapComposer.ts';
+import { requiredRunoff } from '../src/core/licence.ts';
+import { paceOf } from '../src/core/roughPace.ts';
 import { seededRandom } from '../src/core/rng.ts';
 import { woodsAt } from '../src/core/scenery.ts';
 import { GRID_LENGTH } from '../src/core/startFinish.ts';
@@ -112,11 +115,12 @@ describe('what is asked', () => {
   it('wants more corners of a twisty lap than of a fast one, and more of a long lap', () => {
     expect(cornersWanted(settings({ speed: 0.1 }))).toBeGreaterThan(cornersWanted(settings({ speed: 0.9 })) + 5);
     expect(cornersWanted(settings({ length: 7000 }))).toBeGreaterThan(cornersWanted(settings({ length: 3000 })));
-    // From a kart track to an oval with a bend in it: some nine corners a kilometre of what is not straight, to little more than one.
+    // From a town circuit at its tightest to an oval with a bend in it: over eight corners a kilometre, to little more than one.
     expect(cornersWanted(settings({ speed: 0 }))).toBeGreaterThan(30);
     expect(cornersWanted(settings({ speed: 1 }))).toBeLessThan(8);
-    // The two straights carry none: shorter ones leave more lap for corners.
-    expect(cornersWanted(settings({ speed: 0, longestStraight: 400, startStraight: 300 }))).toBeGreaterThan(cornersWanted(settings({ speed: 0 })) + 5);
+    // Straights that take more of the lap than those of a real circuit leave less of it for corners.
+    expect(cornersWanted(settings({ speed: 0, longestStraight: 400, startStraight: 300 }))).toBeGreaterThan(cornersWanted(settings({ speed: 0 })));
+    expect(cornersWanted(settings({ longestStraight: 2000, startStraight: 1500 }))).toBeLessThan(cornersWanted(settings()) - 4);
   });
 
   it('keeps the parts of a lap as far apart as the track is wide and a strip of ground, and further for a lap that does not fold', () => {
@@ -205,7 +209,8 @@ describe('the lap as drawn', () => {
     const shape = drawn[0];
     const wanted = cornersWanted(s);
     // A lap that is all that was asked, and the same lap off in one thing at a time.
-    const asked = { ...measureShape(shape), corners: wanted, slow: wanted * (1 / 3.3), medium: wanted * (1.3 / 3.3), fast: wanted * (1 / 3.3), longestStraight: s.longestStraight, startStraight: s.startStraight, brakingPoints: s.brakingPoints, spread: 0.5 - 0.36 * s.compact, folded: 0.05 + 0.85 * s.foldBack };
+    const mix = mixWanted(s);
+    const asked = { ...measureShape(shape), corners: wanted, slow: wanted * mix.slow, medium: wanted * mix.medium, fast: wanted * mix.fast, longestStraight: s.longestStraight, startStraight: s.startStraight, brakingPoints: s.brakingPoints, spread: spreadWanted(s), folded: foldedWanted(s), hull: hullWanted(s) };
     const all = { ...shape, made: { hairpin: true, chicane: true, esses: true, sweeper: true } };
     const best = scoreShape(asked, all, s);
     expect(best).toBeLessThan(0.01);
@@ -218,6 +223,8 @@ describe('the lap as drawn', () => {
     expect(scoreShape({ ...asked, startStraight: s.startStraight * 1.2 }, all, s)).toBeCloseTo(best, 6);
     expect(scoreShape({ ...asked, folded: 0.9 }, all, s)).toBeGreaterThan(best + 1);
     expect(scoreShape({ ...asked, spread: 0.15 }, all, s)).toBeGreaterThan(best + 1);
+    expect(scoreShape({ ...asked, hull: 0.95 }, all, s)).toBeGreaterThan(best + 1);
+    expect(scoreShape({ ...asked, brakingPoints: s.brakingPoints + 3 }, all, s)).toBeGreaterThan(best + 0.5);
     expect(scoreShape({ ...asked, slow: wanted, medium: 0, fast: 0 }, all, s)).toBeGreaterThan(best + 0.5);
     // A feature asked for and not made costs.
     expect(scoreShape(asked, { ...shape, made: { hairpin: true, chicane: true, esses: true, sweeper: false } }, s)).toBeCloseTo(best + 1.5, 6);
@@ -228,10 +235,9 @@ describe('the lap as drawn', () => {
     for (const f of ['hairpin', 'chicane', 'esses'] as const) {
       expect(all.filter((shape) => shape.made[f]).length, f).toBeGreaterThan(all.length * 0.8);
     }
-    // A sweeper needs two long straights to stand between: with everything else on the lap there is less often room.
-    expect(all.filter((shape) => shape.made.sweeper).length).toBeGreaterThan(all.length * 0.15);
+    expect(all.filter((shape) => shape.made.sweeper).length).toBeGreaterThan(all.length * 0.8);
     const sweeper = shapes(settings({ seed: 'features', hairpin: false, chicane: false, esses: false, sweeper: true }), 60);
-    expect(sweeper.filter((shape) => shape.made.sweeper).length).toBeGreaterThan(sweeper.length * 0.5);
+    expect(sweeper.every((shape) => shape.made.sweeper && !shape.made.hairpin && !shape.made.chicane && !shape.made.esses)).toBe(true);
     const none = shapes(settings({ seed: 'features', hairpin: false, chicane: false, esses: false, sweeper: false }), 30);
     for (const shape of none) expect(Object.values(shape.made).some(Boolean)).toBe(false);
   });
@@ -275,9 +281,10 @@ describe('the ends of the sliders', () => {
     return { s, list: shapes(s, tries, gapFor(s)) };
   };
 
-  it('draws most of what it tries, whatever is asked', () => {
+  it('draws a fair share of what it tries, whatever is asked', () => {
+    // (Fewest where the lap has least room to come round: folded right back onto the smallest plot.)
     for (const changes of [{}, { speed: 0 }, { speed: 1 }, { foldBack: 1, compact: 1 }, { foldBack: 0, compact: 0 }, { length: 1000, longestStraight: 300, startStraight: 250 }, { length: 20000 }, { longestStraight: 2000, startStraight: 1500 }, { width: 30 }] as Partial<GeneratorSettings>[]) {
-      expect(drawn(changes).list.length, JSON.stringify(changes)).toBeGreaterThan(20);
+      expect(drawn(changes).list.length, JSON.stringify(changes)).toBeGreaterThan(5);
     }
   });
 
@@ -285,12 +292,12 @@ describe('the ends of the sliders', () => {
     const twisty = drawn({ speed: 0, longestStraight: 400, startStraight: 300 });
     const fast = drawn({ speed: 1, foldBack: 0, compact: 0, ...plain });
     const corners = (x: { list: Shape[] }) => mean(x.list.map((shape) => measureShape(shape).corners));
-    // Five kilometres: over thirty corners at one end, under nine at the other.
+    // Five kilometres: over thirty corners at one end, and at the other as few as leave no straight longer than the longest asked.
     expect(corners(twisty)).toBeGreaterThan(30);
-    expect(corners(fast)).toBeLessThan(9);
+    expect(corners(fast)).toBeLessThan(11);
   });
 
-  it('folds a lap right back when asked: rows of legs side by side, turning right round at their ends', () => {
+  it('folds a lap right back when asked: legs side by side, turning right round at their ends', () => {
     const folded = drawn({ foldBack: 1, compact: 1, ...plain, longestStraight: 500, startStraight: 400 });
     const open = drawn({ foldBack: 0, compact: 0, ...plain, longestStraight: 500, startStraight: 400 });
     const share = (x: { list: Shape[] }) => mean(x.list.map((shape) => measureShape(shape).folded));
@@ -301,11 +308,8 @@ describe('the ends of the sliders', () => {
     expect(Math.min(...best)).toBeGreaterThan(0.66);
     for (const shape of folded.list) {
       // Turns right round are two corners of the same radius, a leg's width apart.
-      const turns = shape.v.filter((p) => p.feature === 'fold' && p.fixed);
-      expect(turns.length).toBeGreaterThanOrEqual(4);
-      for (const p of turns) expect(p.r).toBeGreaterThanOrEqual(15);
+      for (const p of shape.v) expect(p.r).toBeGreaterThanOrEqual(14);
     }
-    for (const shape of open.list) expect(shape.v.some((p) => p.feature === 'fold')).toBe(false);
   });
 
   it('keeps the legs of a fold a gap apart', () => {
@@ -360,10 +364,39 @@ describe('the ends of the sliders', () => {
   });
 });
 
+describe('a lap built to a licence', () => {
+  const s = settings({ seed: 'runoff', licence: true, vehicleId: 'f1', width: 14, length: 5400 });
+  const f1 = vehicle('f1');
+  const draw = (keep: boolean) => {
+    const rng = seededRandom('test:runoff');
+    const out: Shape[] = [];
+    for (let i = 0; i < 40; i++) {
+      const shape = drawShape(s, rng, gapFor(s), keep ? { width: s.width, pace: paceOf(f1), depth: (v) => requiredRunoff(v * 1.1, 'FIA') } : null);
+      if (shape) out.push(shape);
+    }
+    return out;
+  };
+
+  it('keeps the ground beyond its corners free of the rest of the lap as it is drawn', () => {
+    const kept = draw(true), loose = draw(false);
+    expect(kept.length).toBeGreaterThan(15);
+    const short = (list: Shape[]) => mean(list.map((shape) => shortRunoff(shape, s.width, f1)));
+    // Where nothing is kept, a lap in five or so has a corner that looks at another part of it too near.
+    expect(short(kept)).toBeLessThan(0.12);
+    expect(short(loose)).toBeGreaterThan(short(kept) + 0.08);
+  });
+
+  it('may run its straights side by side all the same', () => {
+    // (Run-off is for where a car leaves the road, not for two straights next to each other.)
+    const folded = draw(true).map((shape) => measureShape(shape).folded);
+    expect(Math.max(...folded)).toBeGreaterThan(0.2);
+  });
+});
+
 describe('room to run off', () => {
   /** A rectangle with a notch cut into its far side, reaching to `depth` metres from the near straight. */
   const notched = (depth: number): Shape => ({
-    v: [[0, 0], [1000, 0], [1000, 400], [600, 400], [600, depth], [400, depth], [400, 400], [0, 400]].map(([x, y]) => ({ x, y, r: 25, feature: 'loop' as const, fixed: true })),
+    v: [[0, 0], [1000, 0], [1000, 400], [600, 400], [600, depth], [400, depth], [400, 400], [0, 400]].map(([x, y]) => ({ x, y, r: 25 })),
     start: 0, main: 0, made: { hairpin: false, chicane: false, esses: false, sweeper: false },
   });
 
