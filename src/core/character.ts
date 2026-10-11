@@ -1,7 +1,8 @@
 /**
  * What a circuit is like, in figures that can be set against real circuits:
  * how many corners it has and how much it turns, the mix of slow and fast,
- * how its straights divide the lap, and how the lap lies on the ground
+ * how its straights divide the lap and how much of it is dead straight,
+ * gently curved or long corners, and how the lap lies on the ground
  * (spread out or compact, one loop or wrapped round itself).
  *
  * The same measures are taken of the real circuits in data/circuits and of
@@ -28,6 +29,12 @@ export interface Character {
   /** The longest straight and the next, as shares of the lap. */
   longestStraight: number;
   secondStraight: number;
+  /** Share of the lap that is dead straight: the road, evened out over 60 m, at over 2 km of radius for 150 m or more. */
+  deadStraight: number;
+  /** Share of the lap that is gently curved: the road, evened out over 60 m, at 300 m to 2 km of radius. */
+  bowed: number;
+  /** Share of the lap that is long corners: the road, evened out over 60 m, turning one way at under 300 m for 150 m or more. */
+  longBends: number;
   /** The lap's greatest extent (the diagonal of the box round it) as a share of its length. */
   spread: number;
   /** Share of the smallest outline without a dent round the lap that the lap encloses. */
@@ -54,6 +61,9 @@ export const REAL_CIRCUITS: Readonly<Record<keyof Character, readonly [number, n
   alternating: [0.33, 0.67, 0.78],
   longestStraight: [0.1, 0.14, 0.21],
   secondStraight: [0.05, 0.09, 0.15],
+  deadStraight: [0.21, 0.32, 0.5],
+  bowed: [0.1, 0.22, 0.29],
+  longBends: [0.04, 0.16, 0.31],
   spread: [0.29, 0.35, 0.43],
   hull: [0.49, 0.65, 0.79],
   folded: [0, 0.32, 0.59],
@@ -65,6 +75,12 @@ const SLOW_BELOW = 45;
 const FAST_ABOVE = 120;
 const FOLD_WITHIN = 120;
 const FOLD_APART = 300;
+/** The road is evened out over this length (metres) to see what it does, not the wobble of how it was drawn or built. */
+const EVEN_OVER = 60;
+const BOWED_FROM = 300;
+const STRAIGHT_FROM = 2000;
+const STRAIGHT_FOR = 150;
+const LONG_BEND = 150;
 
 export function trackCharacter(t: Track, metrics: TrackMetrics = analyseTrack(t)): Character {
   const { n, ds } = t;
@@ -91,6 +107,44 @@ export function trackCharacter(t: Track, metrics: TrackMetrics = analyseTrack(t)
     if (middle < SLOW_BELOW) slow++;
     else if (middle > FAST_ABOVE) fast++;
     else medium++;
+  }
+  // Straight, bowed or cornering: by the curvature evened out along the lap.
+  const half = Math.max(1, Math.round(EVEN_OVER / 2 / ds));
+  const even = new Float64Array(n);
+  let sum = 0;
+  for (let k = -half; k <= half; k++) sum += t.curvature[(k + n) % n];
+  for (let k = 0; k < n; k++) {
+    even[k] = sum / (2 * half + 1);
+    sum += t.curvature[(k + half + 1) % n] - t.curvature[(k - half + n) % n];
+  }
+  let bowed = 0, dead = 0;
+  for (let k = 0; k < n; k++) {
+    const r = 1 / Math.max(1e-9, Math.abs(even[k]));
+    if (r >= BOWED_FROM && r <= STRAIGHT_FROM) bowed++;
+  }
+  // (Counted from where the road turns most, so that no straight lies across the place the count begins.)
+  let origin = 0;
+  for (let k = 1; k < n; k++) if (Math.abs(even[k]) > Math.abs(even[origin])) origin = k;
+  for (let i = 0, run = 0; i <= n; i++) {
+    if (i < n && Math.abs(even[(origin + i) % n]) < 1 / STRAIGHT_FROM) run++;
+    else {
+      if (run * ds >= STRAIGHT_FOR) dead += run;
+      run = 0;
+    }
+  }
+  // Long corners, counted from where the road is straightest.
+  let straightest = 0;
+  for (let k = 1; k < n; k++) if (Math.abs(even[k]) < Math.abs(even[straightest])) straightest = k;
+  let long = 0;
+  for (let i = 0, run = 0, side = 0; i <= n; i++) {
+    const c = i < n ? even[(straightest + i) % n] : 0;
+    const now = Math.abs(c) > 1 / BOWED_FROM ? Math.sign(c) : 0;
+    if (now && now === side) run++;
+    else {
+      if (side && run * ds >= LONG_BEND) long += run;
+      side = now;
+      run = now ? 1 : 0;
+    }
   }
   const middleOf = (list: number[]) => (list.length ? [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)] : 0);
   const alternating = corners.length > 1 ? corners.filter((c, i) => c.direction !== corners[(i + 1) % corners.length].direction).length / corners.length : 0;
@@ -131,6 +185,7 @@ export function trackCharacter(t: Track, metrics: TrackMetrics = analyseTrack(t)
     tightening: middleOf(tighter),
     alternating,
     longestStraight: (straights[0] ?? 0) / t.length, secondStraight: (straights[1] ?? 0) / t.length,
+    deadStraight: dead / n, bowed: bowed / n, longBends: long / n,
     spread: Math.hypot(x1 - x0, y1 - y0) / t.length,
     hull: Math.abs(area) / Math.max(1e-9, hullArea2(xs, ys)),
     folded: folded / m,

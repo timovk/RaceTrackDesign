@@ -134,7 +134,7 @@ export function openGenerator(store: Store, onUse: () => void = () => {}): void 
   };
   const number = (label: string, key: 'length' | 'width' | 'heightDifference' | 'longestStraight' | 'startStraight' | 'brakingPoints' | 'slow' | 'medium' | 'fast', min: number, max: number, step: number, format: (v: number) => string, title?: string) =>
     add(slider({ label, min, max, step, format, title, get: () => settings[key], onInput: (v) => set({ [key]: v } as Partial<GeneratorSettings>) })).el;
-  const share = (label: string, key: 'speed' | 'compact' | 'foldBack', low: string, high: string, title?: string) =>
+  const share = (label: string, key: 'speed' | 'flow' | 'compact' | 'foldBack', low: string, high: string, title?: string) =>
     add(slider({ label, min: 0, max: 1, step: 0.05, title, format: (v) => (v < 0.15 ? low : v < 0.4 ? `mostly ${low}` : v <= 0.6 ? 'in between' : v <= 0.85 ? `mostly ${high}` : high), get: () => settings[key], onInput: (v) => set({ [key]: v } as Partial<GeneratorSettings>) })).el;
 
   // The kinds of circuit.
@@ -222,6 +222,7 @@ export function openGenerator(store: Store, onUse: () => void = () => {}): void 
       number('Start straight', 'startStraight', R.startStraight[0], R.startStraight[1], 50, (v) => `${v} m`, 'The straight the start line and the pits are on; no longer than the longest'),
       number('Heavy braking points', 'brakingPoints', R.brakingPoints[0], R.brakingPoints[1], 1, (v) => String(v), 'Places where the cars lose 90 km/h or more: where passing is done. Each gets a straight of its own to brake at the end of.')),
     section('Corners',
+      share('Stop and go or flowing', 'flow', 'stop and go', 'flowing', 'From straights with short sharp corners at their ends, to a lap that is seldom straight for long: straights that curve, corners eased in and out, and long corners that go on round, as Zandvoort and Brands Hatch have. The middle is what real circuits have: a fifth of the lap gently curved, a sixth of it long corners. The straights and the places to brake that are asked for stay, so the more of those, the less room there is to flow.'),
       number('Slow corners', 'slow', 0, 3, 0.1, (v) => v.toFixed(1), 'How many of the corners are slow ones, under 45 m of radius, against the mix of real circuits: at 1.0 for all three, nearly half are slow, two in five medium and one in seven fast'),
       number('Medium corners', 'medium', 0, 3, 0.1, (v) => v.toFixed(1), 'Corners of 45 to 120 m of radius; 1.0 is as on real circuits'),
       number('Fast corners', 'fast', 0, 3, 0.1, (v) => v.toFixed(1), 'Corners over 120 m of radius; 1.0 is as on real circuits'),

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { type Character, REAL_CIRCUITS, spreadOf, trackCharacter } from '../src/core/character.ts';
 import { DEFAULT_GENERATOR, GENERATOR_STYLES, generateTracks } from '../src/core/generator.ts';
 import { sampleHeight } from '../src/core/heightmap.ts';
-import { DRAWN_PER_READ, cornersWanted, foldedWanted, hullWanted, mixWanted, spreadWanted } from '../src/core/lapComposer.ts';
+import { DRAWN_PER_READ, bowedWanted, cornersWanted, foldedWanted, hullWanted, longBendsWanted, mixWanted, spreadWanted } from '../src/core/lapComposer.ts';
 import { defaultTerrainSettings, generateHeightmap } from '../src/core/terrain.ts';
 import { buildTrack } from '../src/core/track.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
@@ -34,6 +34,17 @@ describe('what a circuit is like', () => {
     }
   });
 
+  it('knows a circuit that flows from one of straights and short corners', () => {
+    const of = (name: string) => trackCharacter(buildTrack(loadCircuitDesign(name), () => 0)!);
+    const zandvoort = of('Zandvoort'), brands = of('BrandsHatch'), montreal = of('Montreal'), norisring = of('Norisring');
+    // Zandvoort and Brands Hatch are a third long corners; Montreal and the Norisring have none, but Montreal's straights all curve.
+    for (const c of [zandvoort, brands]) expect(c.longBends).toBeGreaterThan(0.28);
+    for (const c of [montreal, norisring]) expect(c.longBends).toBeLessThan(0.03);
+    expect(montreal.bowed).toBeGreaterThan(0.3);
+    expect(zandvoort.deadStraight).toBeLessThan(0.3);
+    for (const c of [zandvoort, brands, montreal, norisring]) expect(c.deadStraight + c.bowed + c.longBends).toBeLessThan(1);
+  });
+
   it('keeps the figures of the real circuits as they measure', () => {
     expect(real.length).toBe(25);
     for (const k of keys) {
@@ -51,6 +62,8 @@ describe('the generator, set from real circuits', () => {
     expect(spreadWanted(middle)).toBeCloseTo(REAL_CIRCUITS.spread[1], 6);
     expect(foldedWanted(middle)).toBeCloseTo(REAL_CIRCUITS.folded[1], 6);
     expect(hullWanted(middle)).toBeCloseTo(REAL_CIRCUITS.hull[1], 6);
+    expect(bowedWanted(middle)).toBeCloseTo(REAL_CIRCUITS.bowed[1], 6);
+    expect(longBendsWanted(middle)).toBeCloseTo(REAL_CIRCUITS.longBends[1], 6);
     const mix = mixWanted(middle);
     expect(mix.slow).toBeCloseTo(REAL_CIRCUITS.slow[1], 6);
     expect(mix.medium).toBeCloseTo(REAL_CIRCUITS.medium[1], 6);
@@ -63,6 +76,7 @@ describe('the generator, set from real circuits', () => {
   it('goes from one end of what real circuits have to beyond the other', () => {
     for (const [wanted, key, low, high] of [
       [spreadWanted, 'spread', { compact: 1 }, { compact: 0 }], [foldedWanted, 'folded', { foldBack: 0 }, { foldBack: 1 }], [hullWanted, 'hull', { foldBack: 1 }, { foldBack: 0 }],
+      [bowedWanted, 'bowed', { flow: 0 }, { flow: 1 }], [longBendsWanted, 'longBends', { flow: 0 }, { flow: 1 }],
     ] as const) {
       expect(wanted({ ...middle, ...low }), key).toBeLessThanOrEqual(REAL_CIRCUITS[key][0] + 0.03);
       expect(wanted({ ...middle, ...high }), key).toBeGreaterThanOrEqual(REAL_CIRCUITS[key][2]);

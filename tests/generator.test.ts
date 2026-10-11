@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CORNER_RADII, DEFAULT_GENERATOR, GENERATOR_RANGE, GENERATOR_STYLES, type GeneratorSettings, type Shape,
+  DEFAULT_GENERATOR, GENERATOR_RANGE, GENERATOR_STYLES, type GeneratorSettings, type Shape,
   classNeeds, cornersWanted, drawShape, findSite, gapFor, generateTracks, measureShape, resolveSettings, scoreShape, shortRunoff, tracePath,
 } from '../src/core/generator.ts';
 import { sampleHeight } from '../src/core/heightmap.ts';
-import { foldedWanted, hullWanted, mixWanted, spreadWanted } from '../src/core/lapComposer.ts';
+import { bowedWanted, foldedWanted, hullWanted, longBendsWanted, mixWanted, spreadWanted } from '../src/core/lapComposer.ts';
 import { requiredRunoff } from '../src/core/licence.ts';
 import { paceOf } from '../src/core/roughPace.ts';
 import { seededRandom } from '../src/core/rng.ts';
@@ -189,7 +189,8 @@ describe('the lap as drawn', () => {
     for (const shape of drawn) {
       for (const v of shape.v) {
         expect(v.r).toBeGreaterThanOrEqual(12.5);
-        expect(v.r).toBeLessThanOrEqual(CORNER_RADII.fast[1] * 2);
+        // (The widest are the arcs a straight bows in.)
+        expect(v.r).toBeLessThanOrEqual(3600 * 1.08);
       }
       const p = tracePath(shape, 30);
       expect(p.x.every(Number.isFinite) && p.y.every(Number.isFinite)).toBe(true);
@@ -210,7 +211,7 @@ describe('the lap as drawn', () => {
     const wanted = cornersWanted(s);
     // A lap that is all that was asked, and the same lap off in one thing at a time.
     const mix = mixWanted(s);
-    const asked = { ...measureShape(shape), corners: wanted, slow: wanted * mix.slow, medium: wanted * mix.medium, fast: wanted * mix.fast, longestStraight: s.longestStraight, startStraight: s.startStraight, brakingPoints: s.brakingPoints, spread: spreadWanted(s), folded: foldedWanted(s), hull: hullWanted(s) };
+    const asked = { ...measureShape(shape), corners: wanted, slow: wanted * mix.slow, medium: wanted * mix.medium, fast: wanted * mix.fast, longestStraight: s.longestStraight, startStraight: s.startStraight, brakingPoints: s.brakingPoints, spread: spreadWanted(s), folded: foldedWanted(s), hull: hullWanted(s), bowed: bowedWanted(s), longBends: longBendsWanted(s) };
     const all = { ...shape, made: { hairpin: true, chicane: true, esses: true, sweeper: true } };
     const best = scoreShape(asked, all, s);
     expect(best).toBeLessThan(0.01);
@@ -219,6 +220,8 @@ describe('the lap as drawn', () => {
     expect(scoreShape({ ...asked, longestStraight: s.longestStraight * 1.6 }, all, s)).toBeGreaterThan(best + 1);
     expect(scoreShape({ ...asked, longestStraight: s.longestStraight * 0.5 }, all, s)).toBeGreaterThan(best + 0.3);
     expect(scoreShape({ ...asked, startStraight: s.startStraight * 0.5 }, all, s)).toBeGreaterThan(best + 0.5);
+    expect(scoreShape({ ...asked, bowed: bowedWanted(s) + 0.15 }, all, s)).toBeGreaterThan(best + 1);
+    expect(scoreShape({ ...asked, longBends: 0 }, all, s)).toBeGreaterThan(best + 1);
     // (A start straight longer than asked is no fault.)
     expect(scoreShape({ ...asked, startStraight: s.startStraight * 1.2 }, all, s)).toBeCloseTo(best, 6);
     expect(scoreShape({ ...asked, folded: 0.9 }, all, s)).toBeGreaterThan(best + 1);
@@ -271,6 +274,92 @@ describe('the lap as drawn', () => {
     const f1 = mean(drawn.map((shape) => measureShape(shape, vehicle('f1')).brakingPoints));
     const tcr = mean(drawn.map((shape) => measureShape(shape, vehicle('tcr')).brakingPoints));
     expect(f1).toBeGreaterThan(tcr);
+  });
+});
+
+/** A lap of four sides alike: each the corners given, in order, with so much straight after each (degrees, metres). */
+function fourSided(side: { turn: number; r: number; after: number }[]): Shape {
+  const all = [...side, ...side, ...side, ...side];
+  const tangent = all.map((c) => c.r * Math.tan((Math.abs(c.turn) * Math.PI) / 360));
+  const v: Shape['v'] = [];
+  let x = 0, y = 0, h = 0;
+  all.forEach((c, i) => {
+    v.push({ x, y, r: c.r });
+    h += (c.turn * Math.PI) / 180;
+    const edge = tangent[i] + c.after + tangent[(i + 1) % all.length];
+    x += edge * Math.cos(h);
+    y += edge * Math.sin(h);
+  });
+  return { v, start: 0, main: 0, made: { hairpin: false, chicane: false, esses: false, sweeper: false } };
+}
+
+describe('a lap of curves, as it is measured', () => {
+  it('counts the braking for a corner once, however it is eased in or tightens', () => {
+    const plain = measureShape(fourSided([{ turn: 90, r: 30, after: 700 }]));
+    const eased = measureShape(fourSided([{ turn: 5, r: 600, after: 0 }, { turn: 85, r: 30, after: 700 }]));
+    const tightens = measureShape(fourSided([{ turn: 45, r: 90, after: 0 }, { turn: 45, r: 25, after: 700 }]));
+    for (const m of [plain, eased, tightens]) expect(m.brakingPoints).toBe(4);
+    // (And none for a corner taken as fast as a car comes at it.)
+    expect(measureShape(fourSided([{ turn: 90, r: 280, after: 100 }])).brakingPoints).toBe(0);
+  });
+
+  it('reads a straight that bows as one straight, and what of the lap is gently curved', () => {
+    const side = [{ turn: 90, r: 40, after: 100 }, { turn: 6, r: 1500, after: 150 }, { turn: -6, r: 1500, after: 100 }];
+    const m = measureShape(fourSided(side));
+    const arc = (1500 * 6 * Math.PI) / 180;
+    expect(m.longestStraight).toBeCloseTo(350 + 2 * arc - 50, 0);
+    expect(m.bowed).toBeCloseTo((8 * arc) / m.length, 3);
+    expect(m.deadStraight).toBeCloseTo((4 * 150) / m.length, 3);
+    // A tighter bend ends the straight.
+    const bent = measureShape(fourSided([{ turn: 90, r: 40, after: 100 }, { turn: 14, r: 500, after: 150 }, { turn: -14, r: 500, after: 100 }]));
+    expect(bent.longestStraight).toBeLessThan(160);
+  });
+
+  it('finds the long corners: arcs one way, one after the other, for 150 m or more', () => {
+    // A third of the way round at 100 m, and a short one back the other way.
+    const one = measureShape(fourSided([{ turn: 120, r: 100, after: 300 }, { turn: -30, r: 200, after: 300 }]));
+    expect(one.longBends).toBeCloseTo((4 * 100 * 120 * Math.PI) / 180 / one.length, 3);
+    // Two arcs with no straight between them are one corner; with a straight between them, two short ones.
+    const joined = measureShape(fourSided([{ turn: 45, r: 60, after: 0 }, { turn: 45, r: 140, after: 400 }]));
+    expect(joined.longBends).toBeCloseTo((4 * (60 + 140) * 45 * Math.PI) / 180 / joined.length, 3);
+    const apart = measureShape(fourSided([{ turn: 45, r: 60, after: 80 }, { turn: 45, r: 140, after: 400 }]));
+    expect(apart.longBends).toBe(0);
+    // And an arc so wide that it is no corner is none.
+    expect(measureShape(fourSided([{ turn: 90, r: 400, after: 300 }])).longBends).toBe(0);
+  });
+});
+
+describe('stop and go, or flowing', () => {
+  const at = (flow: number) => {
+    const s = resolveSettings(settings({ seed: 'flow', flow }), null).settings;
+    return shapes(s, 50, gapFor(s)).map((shape) => measureShape(shape));
+  };
+  const still = at(0), middle = at(0.5), flowing = at(1);
+
+  it('draws a fair share of what it tries at either end', () => {
+    for (const list of [still, middle, flowing]) expect(list.length).toBeGreaterThan(15);
+  });
+
+  it('is gently curved for more of the lap the more it flows, and dead straight for less', () => {
+    expect(mean(still.map((m) => m.bowed))).toBeLessThan(0.03);
+    expect(mean(middle.map((m) => m.bowed))).toBeGreaterThan(0.1);
+    expect(mean(flowing.map((m) => m.bowed))).toBeGreaterThan(mean(middle.map((m) => m.bowed)) + 0.03);
+    expect(mean(still.map((m) => m.deadStraight))).toBeGreaterThan(mean(middle.map((m) => m.deadStraight)) + 0.05);
+    expect(mean(middle.map((m) => m.deadStraight))).toBeGreaterThan(mean(flowing.map((m) => m.deadStraight)));
+  });
+
+  it('has more of the lap in long corners the more it flows', () => {
+    // (Of all the laps drawn; the laps offered are the ones nearest what was asked, and differ by more.)
+    expect(mean(flowing.map((m) => m.longBends))).toBeGreaterThan(mean(still.map((m) => m.longBends)) + 0.02);
+    expect(mean(middle.map((m) => m.longBends))).toBeGreaterThan(mean(still.map((m) => m.longBends)));
+  });
+
+  it('keeps the straights asked for and its places to brake, all the same', () => {
+    for (const list of [still, middle, flowing]) {
+      expect(Math.abs(mean(list.map((m) => m.longestStraight)) - 800)).toBeLessThan(80);
+      expect(mean(list.map((m) => m.startStraight))).toBeGreaterThan(520);
+      expect(mean(list.map((m) => m.brakingPoints))).toBeGreaterThanOrEqual(2.5);
+    }
   });
 });
 
@@ -360,7 +449,8 @@ describe('the ends of the sliders', () => {
   it('follows the mix to the end: nothing but slow corners, nothing but fast ones', () => {
     const slow = drawn({ slow: 3, medium: 0, fast: 0, ...plain }).list.map((shape) => measureShape(shape));
     const fast = drawn({ slow: 0, medium: 0, fast: 3, speed: 0.9, foldBack: 0, ...plain }).list.map((shape) => measureShape(shape));
-    expect(mean(slow.map((m) => m.slow / m.corners))).toBeGreaterThan(0.9);
+    // (Not all of them: two slow corners eased one into the other read as one corner, wider in its middle.)
+    expect(mean(slow.map((m) => m.slow / m.corners))).toBeGreaterThan(0.85);
     expect(mean(fast.map((m) => m.fast / m.corners))).toBeGreaterThan(0.75);
   });
 });

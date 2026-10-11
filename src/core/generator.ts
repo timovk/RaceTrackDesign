@@ -21,8 +21,8 @@
 import { analyseTrack } from './analysis.ts';
 import { placeFacilities } from './facilities.ts';
 import { type Heightmap, sampleHeight } from './heightmap.ts';
-import { type Runoff, composeLap, cornersWanted, foldedWanted, hullWanted, mixWanted, spreadWanted } from './lapComposer.ts';
-import { type Shape, FAST_ABOVE, READS_WIDER, SLOW_BELOW, STRAIGHT_CREEP, cells, centroid, clamp, clear, cornerGroups, cornersOf, hasNeighbour, hullShare, lapLength, mod, tracePath, turns } from './lapShape.ts';
+import { type Runoff, bowedWanted, composeLap, cornersWanted, foldedWanted, hullWanted, longBendsWanted, mixWanted, spreadWanted } from './lapComposer.ts';
+import { type Shape, FAST_ABOVE, NO_CORNER, READS_WIDER, SLOW_BELOW, STRAIGHT_CREEP, cells, centroid, clamp, clear, cornerGroups, cornersOf, hasNeighbour, hullShare, lapLength, mod, tracePath, turns } from './lapShape.ts';
 import { simulateLap } from './lapSim.ts';
 import { assessLicence, requiredRunoff } from './licence.ts';
 import { analysePerformance } from './performance.ts';
@@ -66,6 +66,8 @@ export interface GeneratorSettings {
   compact: number;
   /** From 0, one open loop, to 1, folding back on itself with parallel straights. */
   foldBack: number;
+  /** From 0, stop and go (straights with short sharp corners at their ends), to 1, flowing (straights that curve, corners eased in and out, long corners that go on round); 0.5 is what real circuits have. */
+  flow: number;
   avoidWater: boolean;
   avoidWoods: boolean;
   /** How many tracks to offer. */
@@ -75,7 +77,7 @@ export interface GeneratorSettings {
 export const DEFAULT_GENERATOR: GeneratorSettings = {
   seed: '1', length: 5000, width: 12, heightDifference: 30, speed: 0.5, vehicleId: 'gt3', licence: true,
   longestStraight: 800, startStraight: 580, brakingPoints: 3, slow: 1, medium: 1, fast: 1,
-  hairpin: true, chicane: false, esses: true, sweeper: true, direction: 'clockwise', compact: 0.5, foldBack: 0.5,
+  hairpin: true, chicane: false, esses: true, sweeper: true, direction: 'clockwise', compact: 0.5, foldBack: 0.5, flow: 0.5,
   avoidWater: true, avoidWoods: false, candidates: 6,
 };
 
@@ -90,31 +92,31 @@ export interface GeneratorStyle {
 export const GENERATOR_STYLES: readonly GeneratorStyle[] = [
   {
     id: 'grand-prix', name: 'Grand Prix circuit', summary: 'A modern permanent circuit for Formula 1: wide, a long start straight, every kind of corner.',
-    settings: { length: 5400, width: 14, heightDifference: 35, speed: 0.5, vehicleId: 'f1', licence: true, longestStraight: 880, startStraight: 620, brakingPoints: 4, slow: 1, medium: 1, fast: 1, hairpin: true, chicane: false, esses: true, sweeper: true, compact: 0.5, foldBack: 0.5, direction: 'clockwise' },
+    settings: { length: 5400, width: 14, heightDifference: 35, speed: 0.5, vehicleId: 'f1', licence: true, longestStraight: 880, startStraight: 620, brakingPoints: 4, slow: 1, medium: 1, fast: 1, hairpin: true, chicane: false, esses: true, sweeper: true, compact: 0.5, foldBack: 0.5, flow: 0.5, direction: 'clockwise' },
   },
   {
     id: 'road-course', name: 'Old road course', summary: 'Public roads closed for the day: narrow, long and fast, across the country and back.',
-    settings: { length: 7200, width: 9, heightDifference: 70, speed: 0.8, vehicleId: 'f1-1950', licence: false, longestStraight: 1500, startStraight: 550, brakingPoints: 2, slow: 0.5, medium: 1, fast: 1.6, hairpin: true, chicane: false, esses: true, sweeper: true, compact: 0.15, foldBack: 0.1, direction: 'clockwise' },
+    settings: { length: 7200, width: 9, heightDifference: 70, speed: 0.8, vehicleId: 'f1-1950', licence: false, longestStraight: 1500, startStraight: 550, brakingPoints: 2, slow: 0.5, medium: 1, fast: 1.6, hairpin: true, chicane: false, esses: true, sweeper: true, compact: 0.15, foldBack: 0.1, flow: 0.8, direction: 'clockwise' },
   },
   {
     id: 'street', name: 'Street circuit', summary: 'Short blocks and right angles: slow corners, short straights, a hairpin and a chicane.',
-    settings: { length: 3400, width: 10, heightDifference: 15, speed: 0.25, vehicleId: 'f2', licence: false, longestStraight: 650, startStraight: 420, brakingPoints: 4, slow: 2, medium: 1, fast: 0.3, hairpin: true, chicane: true, esses: false, sweeper: false, compact: 0.8, foldBack: 0.6, direction: 'clockwise' },
+    settings: { length: 3400, width: 10, heightDifference: 15, speed: 0.25, vehicleId: 'f2', licence: false, longestStraight: 650, startStraight: 420, brakingPoints: 4, slow: 2, medium: 1, fast: 0.3, hairpin: true, chicane: true, esses: false, sweeper: false, compact: 0.8, foldBack: 0.6, flow: 0.2, direction: 'clockwise' },
   },
   {
     id: 'club', name: 'Club circuit', summary: 'A short lap for touring cars and track days, folded onto a small site.',
-    settings: { length: 2600, width: 11, heightDifference: 15, speed: 0.45, vehicleId: 'tcr', licence: false, longestStraight: 520, startStraight: 380, brakingPoints: 2, slow: 1.2, medium: 1.1, fast: 0.6, hairpin: true, chicane: false, esses: false, sweeper: false, compact: 0.75, foldBack: 0.55, direction: 'clockwise' },
+    settings: { length: 2600, width: 11, heightDifference: 15, speed: 0.45, vehicleId: 'tcr', licence: false, longestStraight: 520, startStraight: 380, brakingPoints: 2, slow: 1.2, medium: 1.1, fast: 0.6, hairpin: true, chicane: false, esses: false, sweeper: false, compact: 0.75, foldBack: 0.55, flow: 0.5, direction: 'clockwise' },
   },
   {
     id: 'bikes', name: 'Motorcycle circuit', summary: 'Flowing and wide for MotoGP: medium and fast corners, no straight too long.',
-    settings: { length: 4600, width: 13, heightDifference: 30, speed: 0.6, vehicleId: 'motogp', licence: true, longestStraight: 850, startStraight: 600, brakingPoints: 3, slow: 0.8, medium: 1.2, fast: 1.3, hairpin: true, chicane: false, esses: true, sweeper: true, compact: 0.55, foldBack: 0.5, direction: 'clockwise' },
+    settings: { length: 4600, width: 13, heightDifference: 30, speed: 0.6, vehicleId: 'motogp', licence: true, longestStraight: 850, startStraight: 600, brakingPoints: 3, slow: 0.8, medium: 1.2, fast: 1.3, hairpin: true, chicane: false, esses: true, sweeper: true, compact: 0.55, foldBack: 0.5, flow: 0.8, direction: 'clockwise' },
   },
   {
     id: 'speed', name: 'High-speed circuit', summary: 'Long straights broken by chicanes, and fast curves between them.',
-    settings: { length: 5800, width: 14, heightDifference: 10, speed: 0.95, vehicleId: 'hypercar', licence: true, longestStraight: 1700, startStraight: 900, brakingPoints: 3, slow: 0.5, medium: 0.8, fast: 1.8, hairpin: false, chicane: true, esses: false, sweeper: true, compact: 0.3, foldBack: 0.15, direction: 'clockwise' },
+    settings: { length: 5800, width: 14, heightDifference: 10, speed: 0.95, vehicleId: 'hypercar', licence: true, longestStraight: 1700, startStraight: 900, brakingPoints: 3, slow: 0.5, medium: 0.8, fast: 1.8, hairpin: false, chicane: true, esses: false, sweeper: true, compact: 0.3, foldBack: 0.15, flow: 0.6, direction: 'clockwise' },
   },
   {
     id: 'mountain', name: 'Mountain course', summary: 'Up the hill and down again: a big height difference, as far as the map has one.',
-    settings: { length: 6000, width: 11, heightDifference: 160, speed: 0.5, vehicleId: 'gt3', licence: false, longestStraight: 800, startStraight: 500, brakingPoints: 3, slow: 1.2, medium: 1.1, fast: 0.8, hairpin: true, chicane: false, esses: true, sweeper: true, compact: 0.35, foldBack: 0.4, direction: 'clockwise' },
+    settings: { length: 6000, width: 11, heightDifference: 160, speed: 0.5, vehicleId: 'gt3', licence: false, longestStraight: 800, startStraight: 500, brakingPoints: 3, slow: 1.2, medium: 1.1, fast: 0.8, hairpin: true, chicane: false, esses: true, sweeper: true, compact: 0.35, foldBack: 0.4, flow: 0.7, direction: 'clockwise' },
   },
 ];
 
@@ -176,7 +178,7 @@ export function resolveSettings(s: GeneratorSettings, vehicle: VehicleClass | nu
     ...s,
     length: clamp(s.length, R.length[0], R.length[1]), width: clamp(s.width, R.width[0], R.width[1]),
     heightDifference: clamp(s.heightDifference, R.heightDifference[0], R.heightDifference[1]),
-    speed: clamp(s.speed, 0, 1), compact: clamp(s.compact, 0, 1), foldBack: clamp(s.foldBack, 0, 1),
+    speed: clamp(s.speed, 0, 1), compact: clamp(s.compact, 0, 1), foldBack: clamp(s.foldBack, 0, 1), flow: clamp(s.flow ?? 0.5, 0, 1),
     brakingPoints: clamp(Math.round(s.brakingPoints), R.brakingPoints[0], R.brakingPoints[1]), candidates: clamp(Math.round(s.candidates), 1, 12),
     slow: Math.max(0, s.slow), medium: Math.max(0, s.medium), fast: Math.max(0, s.fast),
   };
@@ -230,22 +232,37 @@ export interface ShapeMetrics {
   hull: number;
   /** Degrees turned, either way, per kilometre. */
   turning: number;
+  /** Share of the lap that is gently curved: arcs that will read as of 300 m to 2 km of radius. */
+  bowed: number;
+  /** Share of the lap that is dead straight for 150 m or more. */
+  deadStraight: number;
+  /** Share of the lap that is long corners: arcs one after the other that turn one way at under 300 m as they will read, for 150 m or more. */
+  longBends: number;
 }
 
 /** A part of the lap with another part this near (metres) is folded back on it. */
 const NEAR = 120;
+/** A corner is a long one from this length, metres; and two arcs the same way are one corner with under this much straight between them. */
+const LONG_BEND = 150;
+const JOINED = 30;
 
 /** The rough speeds are taken this much higher for the depth of run-off they ask: the real lap, on its racing line, is quicker than the estimate. */
 const RUNOFF_SPEED = 1.2;
 
 /**
- * Each arc's speed, the highest speed on the straight into it, and the straights (the one after each vertex). An
- * arc is taken on the line a car takes through the corner it is part of, on a road of this width.
+ * Each arc's speed, the speed a car comes at it, the straights (the one after each vertex), and how many times
+ * round the lap a car brakes hard. An arc is taken on the line a car takes through the corner it is part of, on
+ * a road of this width.
+ *
+ * A car does not slow for one arc alone: a corner is eased in by a wide arc it is still slowing through, and may
+ * tighten from one arc to the next. So the speed it comes at an arc with no straight before it is carried from
+ * the arc before, where that one was no slower: for the run-off, through an arc that is no corner of its own;
+ * for the braking, through any, and one slowing down is counted once, where it ends.
  */
-function shapeSpeeds(shape: Shape, vehicle: VehicleClass | null, width: number): { corner: number[]; into: number[]; straights: number[] } {
+function shapeSpeeds(shape: Shape, vehicle: VehicleClass | null, width: number): { corner: number[]; into: number[]; straights: number[]; braking: number } {
   const v = shape.v;
   const n = v.length;
-  const { tangent, edge } = turns(v);
+  const { angle, tangent, edge } = turns(v);
   const pace = paceOf(vehicle);
   const straights = v.map((_, i) => edge[i] - tangent[i] - tangent[(i + 1) % n]);
   const turn = new Array<number>(n).fill(0);
@@ -254,10 +271,35 @@ function shapeSpeeds(shape: Shape, vehicle: VehicleClass | null, width: number):
     if (i === g.to) break;
   }
   const corner = v.map((p, i) => Math.min(pace.top, pace.corner(lineRadius(p.r, turn[i], width))));
-  const into = new Array<number>(n).fill(0);
-  for (let i = 0; i < n; i++) into[(i + 1) % n] = peakSpeed(pace, corner[i], corner[(i + 1) % n], Math.max(0, straights[i]));
-  return { corner, into, straights };
+  // Round the lap from its slowest arc: the speed each arc is come at (for the run-off, and since a car last gained speed) and left at.
+  let slowest = 0;
+  for (let i = 1; i < n; i++) if (corner[i] < corner[slowest]) slowest = i;
+  const into = new Array<number>(n).fill(corner[slowest]);
+  const since = new Array<number>(n).fill(corner[slowest]);
+  const left = new Array<number>(n).fill(corner[slowest]);
+  const isCorner = (i: number) => Math.abs(angle[i]) >= RUNOFF_FROM && v[i].r < NO_CORNER;
+  for (let step = 1; step <= n; step++) {
+    const i = (slowest + step) % n, before = mod(i - 1, n);
+    const straight = Math.max(0, straights[before]);
+    if (straight > 1) since[i] = into[i] = peakSpeed(pace, left[before], corner[i], straight);
+    else {
+      const slowing = left[before] >= corner[i];
+      since[i] = slowing ? Math.max(since[before], left[before]) : left[before];
+      into[i] = slowing && !isCorner(before) ? Math.max(into[before], left[before]) : left[before];
+    }
+    const entered = Math.min(corner[i], since[i]);
+    left[i] = Math.min(corner[i], Math.sqrt(entered * entered + 2 * Math.max(0, pace.drive(entered)) * v[i].r * Math.abs(angle[i])));
+  }
+  let braking = 0;
+  for (let i = 0; i < n; i++) {
+    const goesOn = straights[i] <= 1 && left[i] >= corner[(i + 1) % n];
+    if (!goesOn && since[i] - corner[i] >= HEAVY_BRAKING) braking++;
+  }
+  return { corner, into, straights, braking };
 }
+
+/** An arc that turns this much (radians) at under 300 m has escape paths of its own. */
+const RUNOFF_FROM = 0.17;
 
 /**
  * Escape paths that would come out short, as the licence check looks at
@@ -290,7 +332,7 @@ export function shortRunoff(shape: Shape, width: number, vehicle: VehicleClass):
   };
   let short = 0;
   for (let i = 0; i < n; i++) {
-    if (Math.abs(angle[i]) < 0.17 || v[i].r >= 300 || firstOf[i] < 0) continue;
+    if (Math.abs(angle[i]) < RUNOFF_FROM || v[i].r >= NO_CORNER || firstOf[i] < 0) continue;
     const p = v[mod(i - 1, n)];
     const c = v[i];
     const l1 = Math.hypot(c.x - p.x, c.y - p.y);
@@ -318,20 +360,34 @@ export function measureShape(shape: Shape, vehicle: VehicleClass | null = null, 
     else if (read > FAST_ABOVE) fast++;
     else medium++;
   }
-  // Heavy braking: the speed reached on the straight into a corner, against the speed the corner takes.
-  const { corner, into, straights } = shapeSpeeds(shape, vehicle, width);
-  let braking = 0;
-  for (let i = 0; i < n; i++) if (into[i] - corner[i] >= HEAVY_BRAKING) braking++;
-  // A straight runs on through a corner too slight to be one (under 12 degrees), as the analysis will read it.
+  // Heavy braking: the speed a car comes at a corner, against the speed the corner takes.
+  const { straights, braking } = shapeSpeeds(shape, vehicle, width);
+  // A straight runs on through a bend too slight to end it, as the analysis will read it: one of under 12 degrees that
+  // is over in a few metres, or is so wide (over 1 km as built) that the straight only bows.
   const { angle } = turns(v);
-  const slight = (i: number) => Math.abs(angle[i]) < 0.21;
+  const arc = (i: number) => v[i].r * Math.abs(angle[i]);
+  const slight = (i: number) => Math.abs(angle[i]) < 0.21 && (arc(i) < 20 || v[i].r * READS_WIDER >= 1000);
   const run = (i: number) => {
     let length = straights[i];
-    for (let k = i, guard = 0; slight(k) && guard < n; k = mod(k - 1, n), guard++) length += straights[mod(k - 1, n)];
-    for (let k = (i + 1) % n, guard = 0; slight(k) && guard < n; k = (k + 1) % n, guard++) length += straights[k];
+    for (let k = i, guard = 0; slight(k) && guard < n; k = mod(k - 1, n), guard++) length += arc(k) + straights[mod(k - 1, n)];
+    for (let k = (i + 1) % n, guard = 0; slight(k) && guard < n; k = (k + 1) % n, guard++) length += arc(k) + straights[k];
     return length;
   };
   const runs = v.map((_, i) => run(i));
+  // Long corners: arcs that turn one way, one after the other with no straight to speak of between them.
+  const bends = (i: number) => v[i].r * READS_WIDER < NO_CORNER && Math.abs(angle[i]) > 1e-3;
+  const joins = (i: number) => bends(i) && bends(mod(i - 1, n)) && Math.sign(angle[i]) === Math.sign(angle[mod(i - 1, n)]) && straights[mod(i - 1, n)] < JOINED;
+  let from = 0;
+  while (from < n && joins(from)) from++;
+  let longBends = 0;
+  for (let step = 0, bend = 0; step <= n; step++) {
+    const i = (from + step) % n;
+    if (step < n && step > 0 && joins(i)) bend += Math.max(0, straights[mod(i - 1, n)]) + arc(i);
+    else {
+      if (bend >= LONG_BEND) longBends += bend;
+      bend = step < n && bends(i) ? arc(i) : 0;
+    }
+  }
   const path = tracePath(shape, 25);
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   for (let k = 0; k < path.x.length; k++) {
@@ -349,6 +405,9 @@ export function measureShape(shape: Shape, vehicle: VehicleClass | null = null, 
     longestStraight: Math.max(0, Math.max(...runs) - STRAIGHT_CREEP), startStraight: Math.max(0, runs[shape.start] - STRAIGHT_CREEP), brakingPoints: braking,
     spread: Math.hypot(x1 - x0, y1 - y0) / path.length, folded: folded / path.x.length, hull: hullShare(path),
     turning: (angle.reduce((a, x) => a + Math.abs(x), 0) * 180) / Math.PI / (path.length / 1000),
+    bowed: v.reduce((a, p, i) => a + (p.r * READS_WIDER >= 300 && p.r * READS_WIDER <= 2000 ? arc(i) : 0), 0) / path.length,
+    deadStraight: straights.reduce((a, l) => a + (l >= 150 ? l : 0), 0) / path.length,
+    longBends: longBends / path.length,
   };
 }
 
@@ -369,6 +428,8 @@ export function scoreShape(m: ShapeMetrics, shape: Shape, s: GeneratorSettings):
   if (m.startStraight < s.startStraight) score += 3 * ((s.startStraight - m.startStraight) / s.startStraight) ** 2;
   score += ((m.brakingPoints - s.brakingPoints) / Math.max(1, s.brakingPoints)) ** 2;
   score += 0.5 * ((m.spread - spreadWanted(s)) / 0.1) ** 2;
+  score += 0.6 * ((m.bowed - bowedWanted(s)) / 0.1) ** 2;
+  score += 0.6 * ((m.longBends - longBendsWanted(s)) / 0.1) ** 2;
   // (How a lap lies on the ground counts for less than what it has in it: real circuits differ in it more than in
   // anything, and six that were all the middle one would be six of a kind.)
   score += 0.8 * ((m.folded - foldedWanted(s)) / 0.2) ** 2;
@@ -643,7 +704,8 @@ function toDesign(shape: Shape, site: Site, s: GeneratorSettings, needs: ClassNe
     if (arc < 14 && Math.abs(angle[i]) < 0.3) {
       put(a0 + angle[i] / 2, dist + arc / 2);
     } else {
-      const parts = Math.max(1, Math.min(Math.ceil(Math.abs(angle[i]) / 0.32), Math.floor(arc / 5)));
+      // (And one every 120 m of a long gentle arc, to hold it to its bow.)
+      const parts = Math.max(1, Math.min(Math.ceil(Math.abs(angle[i]) / 0.32), Math.floor(arc / 5)), Math.ceil(arc / 120));
       for (let k = 0; k <= parts; k++) put(a0 + (angle[i] * k) / parts, dist + (arc * k) / parts);
     }
     dist += arc;
@@ -687,11 +749,13 @@ function toDesign(shape: Shape, site: Site, s: GeneratorSettings, needs: ClassNe
     return out >= ease ? s.width : gridWidth - (extra * out) / ease;
   };
   if (extra > 0) {
-    // A point where the width starts and stops changing, when that is on a straight and no point is near.
+    // A point where the width starts and stops changing, when that is on a straight and no point is right there. (A
+    // point that holds the straight straight may be a few metres from it: it has the width of its own place, part
+    // of the way, and without this one the grid's width would be reached only at the next point, far up the straight.)
     for (const at of [wideFrom - ease, wideFrom, wideEnd, wideEnd + ease]) {
       const d = mod(at, lap);
       const on = straights.find((x) => d > x.from + 25 && d < x.from + x.len - 25);
-      if (on && !pts.some((q) => Math.abs(q.d - d) < 25)) pts.push({ x: on.x + on.dx * (d - on.from), y: on.y + on.dy * (d - on.from), d });
+      if (on && !pts.some((q) => Math.abs(q.d - d) < 6)) pts.push({ x: on.x + on.dx * (d - on.from), y: on.y + on.dy * (d - on.from), d });
     }
     pts.sort((a, b) => a.d - b.d);
   }
@@ -854,7 +918,9 @@ export async function generateTracks(
     const score = p.score + 0.25 * warnings + (licence ? FAILED_CHECK * licence.failures.length : 0);
     tracks.push({ seed: p.seed, design, startFinish, figures, outline, notes: own, score });
   }
-  tracks.sort((a, b) => a.score - b.score);
+  // (Those that pass the check they were built to come first, whatever their shapes come to.)
+  const failed = (t: GeneratedTrack) => (t.figures.licence && !t.figures.licence.passes ? 1 : 0);
+  tracks.sort((a, b) => failed(a) - failed(b) || a.score - b.score);
   hooks.progress?.(steps, steps, 'Done');
   if (!tracks.length) notes.push('None of the laps drawn could be built here without an error: try another seed, or ask for less.');
   return { tracks: tracks.slice(0, s.candidates), notes };

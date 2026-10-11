@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_GENERATOR, type GeneratorSettings, gapFor } from '../src/core/generator.ts';
 import { type Plan, REAL_MIX, composeLap, cornersWanted, drawPlan, mixWanted, ownStart } from '../src/core/lapComposer.ts';
-import { type Shape, STRAIGHT_CREEP, cornersOf, lapLength, signedArea, turns } from '../src/core/lapShape.ts';
+import { type Shape, NO_CORNER, READS_WIDER, STRAIGHT_CREEP, cornersOf, lapLength, signedArea, turns } from '../src/core/lapShape.ts';
 import { seededRandom } from '../src/core/rng.ts';
 
 const settings = (changes: Partial<GeneratorSettings> = {}): GeneratorSettings => ({ ...DEFAULT_GENERATOR, licence: false, ...changes });
@@ -40,8 +40,8 @@ describe('the plan of a lap', () => {
     for (const plan of drawn) {
       const start = plan.passages[0];
       expect(start.hold).toBe('asked');
-      // (Drawn a little longer than asked: a straight reads shorter on the track.)
-      expect(start.straight).toBeGreaterThan(s.startStraight + STRAIGHT_CREEP);
+      // (Drawn a little longer than asked: a straight reads shorter on the track. The arc its corner is eased in by is part of it, where it turns little.)
+      expect(start.straight + start.eased[0]).toBeGreaterThan(s.startStraight + STRAIGHT_CREEP);
       expect(start.straight).toBeLessThan(s.startStraight * 1.06 + STRAIGHT_CREEP);
     }
   });
@@ -71,9 +71,10 @@ describe('the plan of a lap', () => {
 
   it('has about as many corners as the lap is to have, the two that bring it home counted', () => {
     const wanted = cornersWanted(s);
-    const corners = drawn.map((plan) => plan.passages.reduce((a, p) => a + p.bends.filter((b) => b.turn >= 15 * DEG && b.radius < 300).length, 0) + 2);
-    expect(Math.abs(mean(corners) - wanted)).toBeLessThan(1.5);
-    for (const c of corners) expect(Math.abs(c - wanted)).toBeLessThanOrEqual(6);
+    const corners = drawn.map((plan) => plan.passages.reduce((a, p) => a + p.bends.filter((b) => b.turn >= 15 * DEG && b.radius * READS_WIDER < NO_CORNER).length, 0) + 2);
+    // (A lap that has not room for them all has fewer: its long corners and the arcs its corners are eased by take more of it.)
+    expect(Math.abs(mean(corners) - wanted)).toBeLessThan(2.6);
+    for (const c of corners) expect(Math.abs(c - wanted)).toBeLessThanOrEqual(8);
   });
 
   it('has what is asked for by name, and none of what is not', () => {
@@ -88,11 +89,11 @@ describe('the plan of a lap', () => {
   });
 
   it('gives each place to brake hard a straight of its own', () => {
-    const braking = (plan: Plan) => plan.passages.filter((p) => ['stop', 'hairpin', 'ess', 'triple', 'chicane'].includes(p.kind) && p.straight >= 250).length;
-    expect(mean(plans(settings({ seed: 'brake', brakingPoints: 5 }), 30).map(braking))).toBeGreaterThan(mean(plans(settings({ seed: 'brake', brakingPoints: 1 }), 30).map(braking)) + 2);
+    const braking = (plan: Plan) => plan.passages.filter((p) => ['stop', 'hairpin', 'ess', 'triple', 'chicane', 'long'].includes(p.kind) && p.straight >= 250).length;
+    expect(mean(plans(settings({ seed: 'brake', brakingPoints: 5 }), 30).map(braking))).toBeGreaterThan(mean(plans(settings({ seed: 'brake', brakingPoints: 1 }), 30).map(braking)) + 1.5);
     for (const plan of plans(settings({ seed: 'brake', brakingPoints: 4, length: 6000 }), 20)) expect(braking(plan)).toBeGreaterThanOrEqual(4);
     // With none asked, the first corner is one that is not braked hard for.
-    for (const plan of plans(settings({ seed: 'brake', brakingPoints: 0 }), 20)) expect(['turn', 'sweeper', 'kink']).toContain(plan.passages[0].kind);
+    for (const plan of plans(settings({ seed: 'brake', brakingPoints: 0 }), 20)) expect(['turn', 'long', 'sweeper', 'kink']).toContain(plan.passages[0].kind);
   });
 
   it('gives a lap that is to fold back turns right round, wide enough for its legs to run side by side', () => {
@@ -164,6 +165,110 @@ describe('the plan of a lap', () => {
     // A kilometre with the longest straights a kilometre takes, and more named corners than it has room for: fewer passages, or none.
     const tight = plans(settings({ seed: 'tight', length: 1000, longestStraight: 420, startStraight: 330, hairpin: true, chicane: true, esses: true, sweeper: true, brakingPoints: 8 }), 30);
     for (const plan of tight) expect(plan.passages.reduce((a, p) => a + p.straight + p.length, 0) + plan.reserve).toBeLessThan(1000 * 1.03);
+  });
+});
+
+describe('a lap that flows, and one that stops and goes', () => {
+  const of = (flow: number, changes: Partial<GeneratorSettings> = {}) => plans(settings({ seed: 'flow', flow, ...changes }), 40);
+  const still = of(0), middle = of(0.5), flowing = of(1);
+  const share = (list: Plan[], is: (p: Plan['passages'][number]) => boolean) => mean(list.map((plan) => plan.passages.filter(is).length / plan.passages.length));
+
+  it('has straights that are straight and corners that begin at once, at one end of the slider', () => {
+    expect(still.length).toBe(40);
+    for (const plan of still) {
+      for (const p of plan.passages) {
+        expect(p.bow).toBeNull();
+        expect(p.eased).toEqual([0, 0]);
+        expect(['long', 'winding']).not.toContain(p.kind);
+      }
+    }
+  });
+
+  it('bows its straights, more of them the more it flows, but never the one the grid stands on', () => {
+    expect(share(middle, (p) => p.bow !== null)).toBeGreaterThan(0.08);
+    expect(share(flowing, (p) => p.bow !== null)).toBeGreaterThan(share(middle, (p) => p.bow !== null));
+    for (const plan of [...middle, ...flowing]) expect(plan.passages[0].bow).toBeNull();
+    // The longest straight bows only above the middle, and then so little that it reads as one straight of the length asked.
+    for (const plan of middle) expect(plan.passages[plan.main].bow).toBeNull();
+    const longest = flowing.map((plan) => plan.passages[plan.main]).filter((p) => p.bow !== null);
+    expect(longest.length).toBeGreaterThan(10);
+    for (const p of longest) {
+      for (const arc of p.bow!.arcs) {
+        expect(arc.turn).toBeLessThanOrEqual(7 * DEG + 1e-9);
+        expect((arc.share * p.straight) / arc.turn).toBeGreaterThanOrEqual(2200 - 1e-6);
+      }
+    }
+  });
+
+  it('keeps a bow gentle, and clear of the corners at the ends of its straight', () => {
+    let bows = 0;
+    for (const plan of [...middle, ...flowing]) {
+      for (const p of plan.passages) {
+        if (!p.bow) continue;
+        bows++;
+        const bowed = p.bow.arcs.reduce((a, arc) => a + arc.share, 0);
+        expect(p.bow.from * p.straight).toBeGreaterThanOrEqual(40 - 1e-6);
+        expect((1 - p.bow.from - bowed) * p.straight).toBeGreaterThanOrEqual(40 - 1e-6);
+        for (const arc of p.bow.arcs) {
+          expect(arc.turn).toBeGreaterThanOrEqual(5 * DEG - 1e-9);
+          expect(arc.turn).toBeLessThanOrEqual(28 * DEG + 1e-9);
+          expect((arc.share * p.straight) / arc.turn).toBeGreaterThanOrEqual(450 - 1e-6);
+        }
+      }
+    }
+    expect(bows).toBeGreaterThan(100);
+  });
+
+  it('eases its corners in and out by a wide arc, more of them the more it flows', () => {
+    const eased = (p: Plan['passages'][number]) => p.eased[0] > 0 || p.eased[1] > 0;
+    expect(share(middle, eased)).toBeGreaterThan(0.3);
+    expect(share(flowing, eased)).toBeGreaterThan(share(middle, eased));
+    for (const plan of [...still, ...middle, ...flowing]) {
+      for (const p of plan.passages) {
+        // (Whatever arcs a corner is made of, they are the whole of its turn.)
+        for (const b of p.bends) expect(b.arcs.reduce((a, arc) => a + arc.share, 0)).toBeCloseTo(1, 6);
+        const first = p.bends[0];
+        if (p.eased[0] > 0 && first.arcs.length > 1) {
+          expect(first.arcs[0].ratio * first.radius).toBeGreaterThanOrEqual(320 - 1e-6);
+          expect(first.arcs[0].ratio * first.radius).toBeLessThanOrEqual(800 + 1e-6);
+          expect(first.arcs[0].share * first.turn).toBeLessThan(11 * DEG);
+        }
+      }
+    }
+  });
+
+  it('has long corners, more of them the more it flows: of two or three apexes, or one radius', () => {
+    const long = (list: Plan[]) => list.flatMap((plan) => plan.passages.filter((p) => p.kind === 'long'));
+    expect(long(middle).length).toBeGreaterThan(10);
+    expect(long(flowing).length).toBeGreaterThan(1.5 * long(middle).length);
+    const all = [...long(middle), ...long(flowing)];
+    for (const p of all) {
+      expect(p.bends.length).toBe(1);
+      expect(p.bends[0].radius).toBeGreaterThanOrEqual(16);
+      expect(p.bends[0].radius).toBeLessThanOrEqual(190 + 1e-6);
+    }
+    expect(mean(all.map((p) => p.length))).toBeGreaterThan(200);
+    expect(mean(all.map((p) => p.bends[0].turn))).toBeGreaterThan(100 * DEG);
+    // (The arcs it is eased in and out by not counted.)
+    const arcs = new Set(all.map((p) => p.bends[0].arcs.filter((a) => a.ratio * p.bends[0].radius < 300).length));
+    for (const count of [1, 2, 3]) expect(arcs, `${count} arcs`).toContain(count);
+    expect(Math.max(...arcs)).toBeGreaterThanOrEqual(5);
+  });
+
+  it('has no long corner and no winding road where the corners are all to be slow', () => {
+    for (const plan of of(1, { slow: 3, medium: 0, fast: 0 })) for (const p of plan.passages) expect(['long', 'winding']).not.toContain(p.kind);
+  });
+
+  it('turns no tighter than a wide road can be built', () => {
+    for (const [width, least] of [[12, 14], [30, 17.5]] as const) {
+      for (const plan of plans(settings({ seed: 'wide', width }), 20)) {
+        for (const p of plan.passages) for (const b of p.bends) expect(b.radius * Math.min(...b.arcs.map((a) => a.ratio)), `${width} m`).toBeGreaterThanOrEqual(least - 1e-6);
+      }
+    }
+  });
+
+  it('comes round as a lap at either end', () => {
+    for (const flow of [0, 1]) expect(laps(settings({ seed: 'flow', flow }), 30).length, `flow ${flow}`).toBeGreaterThan(10);
   });
 });
 
