@@ -29,6 +29,12 @@ export const CORNER_RADII = { slow: [16, 45], medium: [45, 120], fast: [120, 290
 /** A corner under this radius is slow, and over that one fast. */
 export const SLOW_BELOW = 45;
 export const FAST_ABOVE = 120;
+/**
+ * A corner reads this much wider on the track as built than it is drawn: the
+ * line through its points eases into it and out of it, and rounds its apex.
+ * So a corner that is to read as one of 45 m is drawn at 37.5 m.
+ */
+export const READS_WIDER = 1.2;
 /** A straight reads this much shorter on the track as built than it is drawn: the corners at its ends begin before their arcs. */
 export const STRAIGHT_CREEP = 50;
 /** A bend of this radius or more is no corner as the analysis reads a track: it is part of a straight, or a curve in one. */
@@ -79,14 +85,27 @@ export function signedArea(v: readonly { x: number; y: number }[]): number {
   return a / 2;
 }
 
+/** A corner of a lap: one arc, or several the same way with no straight to speak of between them. */
+export interface CornerGroup {
+  /** The first and the last vertex of it. */
+  from: number;
+  to: number;
+  /** 1 to the right, -1 to the left. */
+  sign: number;
+  /** How far it turns, radians. */
+  turn: number;
+  /** Its tightest radius, and the radius the middle half of its turning is made at. */
+  radius: number;
+  middle: number;
+}
+
 /**
- * The corners of a lap as the analysis will count them: arcs the same way
- * with no straight to speak of between them are one corner (a corner that
- * tightens, the two halves of a turn right round), and a turn of under 15
- * degrees, or of 300 m radius or more, is none. Each with how far it turns,
- * its tightest radius, and the radius the middle of its turning is made at.
+ * The corners of a lap, each with the arcs it is made of: arcs the same way
+ * with under 40 m of straight between them are one corner, as the analysis
+ * reads them on the track (a corner that tightens, the two halves of a turn
+ * right round). Every arc is in one, the slightest kink too.
  */
-export function cornersOf(v: readonly Vertex[]): { turn: number; radius: number; middle: number }[] {
+export function cornerGroups(v: readonly Vertex[]): CornerGroup[] {
   const n = v.length;
   const { angle, tangent, edge } = turns(v);
   const joins = (i: number) => {
@@ -100,9 +119,10 @@ export function cornersOf(v: readonly Vertex[]): { turn: number; radius: number;
       break;
     }
   }
-  const out: { turn: number; radius: number; middle: number }[] = [];
+  const out: CornerGroup[] = [];
   for (let k = 0; k < n; k++) {
     let i = (first + k) % n;
+    const from = i;
     const arcs = [{ turn: Math.abs(angle[i]), radius: v[i].r }];
     while (k < n - 1 && joins(i)) {
       k++;
@@ -110,19 +130,22 @@ export function cornersOf(v: readonly Vertex[]): { turn: number; radius: number;
       arcs.push({ turn: Math.abs(angle[i]), radius: v[i].r });
     }
     const turn = arcs.reduce((a, c) => a + c.turn, 0);
-    const radius = Math.min(...arcs.map((a) => a.radius));
-    if (turn < 0.26 || radius >= NO_CORNER) continue;
     // The radius the middle half of the turning is made at: the length of that half over its angle.
     let length = 0;
     let before = 0;
     for (const arc of arcs) {
-      const from = Math.max(before, 0.25 * turn), to = Math.min(before + arc.turn, 0.75 * turn);
-      if (to > from) length += (to - from) * arc.radius;
+      const lo = Math.max(before, 0.25 * turn), hi = Math.min(before + arc.turn, 0.75 * turn);
+      if (hi > lo) length += (hi - lo) * arc.radius;
       before += arc.turn;
     }
-    out.push({ turn, radius, middle: length / (0.5 * turn) });
+    out.push({ from, to: i, sign: Math.sign(angle[from]) || 1, turn, radius: Math.min(...arcs.map((c) => c.radius)), middle: turn > 0 ? length / (0.5 * turn) : v[from].r });
   }
   return out;
+}
+
+/** The corners of a lap as the analysis will count them: a turn of under 15 degrees, or one that will read as of 300 m radius or more, is none. */
+export function cornersOf(v: readonly Vertex[]): CornerGroup[] {
+  return cornerGroups(v).filter((c) => c.turn >= 0.26 && c.radius * READS_WIDER < NO_CORNER);
 }
 
 /** The lap as points every `step` metres or closer, each with the distance from the first. */

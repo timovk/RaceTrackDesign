@@ -9,20 +9,26 @@
  * and fast) decides which passages it gets and how long their straights
  * are; the passages are then put in an order.
  *
- * The lap is laid out on the ground in that order, from the start straight.
- * Each passage may turn either way and is drawn a little differently each
- * time; it goes where it keeps clear of what is there and from where the lap
- * can still come home. Where one has no place, the one before it is laid
- * another way. The last two corners are worked out, not drawn: they are the
- * two that bring the lap back onto its start straight.
+ * A corner is seldom one radius: it is two or three arcs, wide and tight and
+ * wide, or tightening, or opening, as real corners are.
+ *
+ * The lap is laid out on the ground from the start straight, on a plot of
+ * land. Each passage may turn either way and is drawn a little differently
+ * each time; it goes where it keeps clear of what is there and from where
+ * the lap can still come home. Where one has no place, the one before it is
+ * laid another way. The last two corners (or three) are worked out, not
+ * drawn: they are the ones that bring the lap back onto its start straight.
+ *
+ * The figures a lap is drawn to are those of real circuits
+ * (core/character.ts) in the middle of each slider.
  *
  * Coordinates: x east and y south, so a positive turn is to the right, and
  * a lap that turns right on balance runs clockwise on the map.
  */
 import { REAL_CIRCUITS } from './character.ts';
 import type { GeneratorSettings } from './generator.ts';
-import { type Shape, CORNER_RADII, NO_CORNER, STRAIGHT_CREEP, clamp } from './lapShape.ts';
-import { type Pace, peakSpeed } from './roughPace.ts';
+import { type Shape, CORNER_RADII, NO_CORNER, READS_WIDER, STRAIGHT_CREEP, clamp } from './lapShape.ts';
+import { type Pace, lineRadius, peakSpeed } from './roughPace.ts';
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
@@ -48,12 +54,20 @@ const REAL = REAL_CIRCUITS;
 export const REAL_MIX = { slow: REAL.slow[1], medium: REAL.medium[1], fast: REAL.fast[1] } as const;
 const REAL_STRAIGHTS = REAL.longestStraight[1] + REAL.secondStraight[1];
 /**
- * Corners a kilometre at the two ends of "corners or speed": a town circuit
- * at its tightest, and an oval with a bend in it. In the middle of the
- * slider that is 3.4, a twentieth over the 3.25 of real circuits: of the
- * corners drawn, one in twenty reads as part of its neighbour on the track.
+ * Corners a kilometre at the two ends of "corners or speed", as the track
+ * will be read to have them: a town circuit at its tightest, and an oval
+ * with a bend in it. The middle of the slider is what real circuits have.
  */
-const CORNERS_PER_KM = [8.5, 1.36] as const;
+const CORNERS_PER_KM = [8, REAL.cornersPerKm[1], 1.3] as const;
+/** For every corner the track is read to have, this many are drawn: one in six reads as part of its neighbour, or as none. */
+export const DRAWN_PER_READ = 1.2;
+/**
+ * Of the corners drawn, more are slow and fewer fast than the mix asks: the
+ * kinds of passage and the way home lean the other way (a run of esses is
+ * of medium and fast corners, and so are most corners that come out of the
+ * way home).
+ */
+const DRAWN_MIX = { slow: 1.2, medium: 1, fast: 0.75 } as const;
 
 /** The mix of corners asked for, as shares: the sliders on the mix of real circuits, leaning to slow or to fast as the lap is to. */
 export function mixWanted(s: GeneratorSettings): { slow: number; medium: number; fast: number } {
@@ -63,9 +77,19 @@ export function mixWanted(s: GeneratorSettings): { slow: number; medium: number;
   return { slow: slow / all, medium: medium / all, fast: fast / all };
 }
 
-/** Share of the lap that is to have another part of it within 120 m: next to none for one open loop, a third in the middle of the slider as real circuits have, four fifths at its top. */
+/**
+ * How much less of a long lap runs beside another part of it than of a lap
+ * of 5 km, which is what the real circuits measured are: by the root of its
+ * length. A lap comes near itself round its hairpins and its paddock, and a
+ * lap four times as long has not four times as much of that; 18 km with a
+ * third of it side by side would be two roads a kilometre long in a ditch's
+ * width of each other. (No circuit that long was measured: this is a guess.)
+ */
+const besideAtLength = (s: GeneratorSettings) => clamp(Math.sqrt(5000 / s.length), 0.45, 1.15);
+
+/** Share of the lap that is to have another part of it within 120 m: next to none for one open loop, a third in the middle of the slider as real circuits have, four fifths at its top; less of a long lap. */
 export function foldedWanted(s: GeneratorSettings): number {
-  return 0.02 + (4 * REAL.folded[1] - 0.86) * s.foldBack + (1.64 - 4 * REAL.folded[1]) * s.foldBack * s.foldBack;
+  return Math.min(0.9, (0.02 + (4 * REAL.folded[1] - 0.86) * s.foldBack + (1.64 - 4 * REAL.folded[1]) * s.foldBack * s.foldBack) * besideAtLength(s));
 }
 
 /** Share of the outline round the lap that it is to enclose: all but a little for one open loop, two thirds in the middle of the slider as real circuits have, a third at its top. */
@@ -77,30 +101,118 @@ export function hullWanted(s: GeneratorSettings): number {
 export const ownStart = (s: GeneratorSettings) => s.startStraight <= s.longestStraight * 0.8;
 
 /**
- * Corners a lap of this length and character should have: so many a
- * kilometre, 3.2 in the middle of the slider as real circuits have, over the
- * lap less what its straights take beyond what they take of a real one.
+ * Corners to draw for a lap of this length and character: so many a
+ * kilometre as it is to be read to have, 3.25 in the middle of the slider
+ * as real circuits have, and a fifth more; over the lap less what its
+ * straights take beyond what they take of a real one.
  */
 export function cornersWanted(s: GeneratorSettings): number {
-  const perKm = CORNERS_PER_KM[0] * Math.pow(CORNERS_PER_KM[1] / CORNERS_PER_KM[0], s.speed);
+  const [most, middle, fewest] = CORNERS_PER_KM;
+  const perKm = s.speed < 0.5 ? middle * Math.pow(most / middle, 1 - 2 * s.speed) : middle * Math.pow(fewest / middle, 2 * s.speed - 1);
   const straights = s.longestStraight + (ownStart(s) ? s.startStraight : 0);
   const km = (s.length - Math.max(0, straights - REAL_STRAIGHTS * s.length)) / 1000;
-  return clamp(Math.round(perKm * km), 3, 160);
+  return clamp(Math.round(perKm * km * DRAWN_PER_READ), 3, 180);
 }
 
 // ---- the plan --------------------------------------------------------------------
 
 export type PassageKind = 'stop' | 'hairpin' | 'turn' | 'sweeper' | 'kink' | 'ess' | 'triple' | 'double' | 'flow' | 'chicane';
 
+/** One arc of a corner: a share of its turn, at so many times the corner's radius. */
+interface Arc { share: number; ratio: number }
+
 interface Bend {
   /** How far it turns, radians. */
   turn: number;
   /** Which way, against the first corner of its passage. */
   side: number;
+  /** The radius the middle of its turning is made at: what makes it a slow, a medium or a fast corner. */
   radius: number;
   /** Straight between it and the corner before it in the passage, metres. */
   link: number;
+  /** The arcs it is made of, in order: one for a corner of one radius. */
+  arcs: Arc[];
 }
+
+/** A corner as first drawn, before it is given its arcs. */
+type Outline = Omit<Bend, 'arcs'>;
+
+/** No arc of a corner is tighter than this at the middle of the road, metres. */
+const TIGHTEST = 14;
+/** A corner that turns less than this is one arc, whatever it was drawn as. */
+const ONE_ARC = 40 * DEG;
+
+/** How many times the corner's radius the middle half of its turning is made at, for a corner of these arcs. */
+function middleRatio(arcs: readonly Arc[]): number {
+  let length = 0;
+  let before = 0;
+  for (const a of arcs) {
+    const lo = Math.max(before, 0.25), hi = Math.min(before + a.share, 0.75);
+    if (hi > lo) length += (hi - lo) * a.ratio;
+    before += a.share;
+  }
+  return length / 0.5;
+}
+
+/** How many times longer than one arc of its radius a corner of these arcs is. */
+const stretch = (arcs: readonly Arc[]) => arcs.reduce((a, c) => a + c.share * c.ratio, 0);
+
+/** Makes a corner's arcs more alike, as far as its tightest needs to be no tighter than a car can turn. */
+function soften(b: Bend): void {
+  const least = Math.min(...b.arcs.map((a) => a.ratio));
+  const floor = TIGHTEST / b.radius;
+  if (least >= floor) return;
+  const keep = floor >= 1 ? 0 : (1 - floor) / (1 - least);
+  for (const a of b.arcs) a.ratio = 1 + (a.ratio - 1) * keep;
+}
+
+/**
+ * The arcs of a corner. Real corners are seldom one radius: they are
+ * tightest for a third of their turning and wider before and after
+ * (their tightest point is 1.4 times tighter than the middle of the corner).
+ * So: wide, tight, wide; or wide then tight (a corner that tightens, turned
+ * into late); or tight then wide (one that opens, to get on the power
+ * early); or, for a corner that turns far, tight, wide and tight again (two
+ * apexes); or one radius after all. The first corner of a few that turn
+ * one into the other may tighten and the last may open; a chicane's and a
+ * kink's are one arc, a sweeper's nearly so, and a turn right round between
+ * two legs of a folded lap is half a circle. The ratios are such that the
+ * middle of the corner's turning is made at the corner's radius.
+ */
+function drawArcs(kind: PassageKind | 'home', b: Outline, at: number, of: number, s: GeneratorSettings, rng: Rng): Arc[] {
+  const one = (): Arc[] => [{ share: 1, ratio: 1 }];
+  if (b.turn < ONE_ARC || kind === 'kink' || kind === 'chicane' || (kind === 'hairpin' && s.foldBack > 0.6)) return one();
+  type Form = 'even' | 'apex' | 'tightens' | 'opens' | 'twice';
+  const form: Form = kind === 'sweeper' ? choose(rng, [['even', 6], ['tightens', 2], ['opens', 2]] as const)
+    : kind === 'hairpin' ? choose(rng, [['even', 3], ['tightens', 2.5], ['opens', 2.5], ['apex', 1.5]] as const)
+      : of > 1 ? (at === 0 ? choose(rng, [['even', 2.5], ['tightens', 3], ['apex', 3]] as const)
+        : at === of - 1 ? choose(rng, [['even', 2.5], ['opens', 3], ['apex', 3]] as const)
+          : choose(rng, [['even', 3.5], ['apex', 4]] as const))
+        : choose(rng, [['apex', 3.5], ['tightens', 2.5], ['opens', 2.5], ['even', 0.8], ['twice', b.turn >= 110 * DEG ? 3 : 0]] as const);
+  const wide = () => between(rng, 2.1, 3.1);
+  let arcs: Arc[];
+  if (form === 'even') return one();
+  if (form === 'apex') {
+    const tight = between(rng, 0.26, 0.4);
+    const before = (1 - tight) * between(rng, 0.4, 0.6);
+    arcs = [{ share: before, ratio: wide() }, { share: tight, ratio: 1 }, { share: 1 - tight - before, ratio: wide() }];
+  } else if (form === 'tightens' || form === 'opens') {
+    const loose = between(rng, 0.35, 0.55);
+    arcs = form === 'tightens' ? [{ share: loose, ratio: wide() }, { share: 1 - loose, ratio: 1 }] : [{ share: 1 - loose, ratio: 1 }, { share: loose, ratio: wide() }];
+  } else {
+    const between2 = between(rng, 0.22, 0.32);
+    const first = (1 - between2) * between(rng, 0.42, 0.58);
+    arcs = [{ share: first, ratio: 1 }, { share: between2, ratio: wide() }, { share: 1 - between2 - first, ratio: between(rng, 0.9, 1.2) }];
+  }
+  // (A sweeper is nearly one radius: a long fast corner that changed radius by much would be two corners.)
+  if (kind === 'sweeper') for (const a of arcs) a.ratio = 1 + (a.ratio - 1) * 0.4;
+  const k = middleRatio(arcs);
+  for (const a of arcs) a.ratio /= k;
+  return arcs;
+}
+
+/** Length of a passage's corners and the straights between them. */
+const lengthOf = (bends: readonly Bend[]) => bends.reduce((a, b) => a + b.link + b.turn * b.radius * stretch(b.arcs), 0);
 
 interface Passage {
   kind: PassageKind;
@@ -114,15 +226,18 @@ interface Passage {
   must: boolean;
 }
 
-/** A corner's radius from the mix: `lean` from -1, a slow one more often, to 1, a fast one. */
+/** A corner's radius from the mix: `lean` from -1, a slow one more often, to 1, a fast one. The radius is that of the middle of the corner's turning. */
 function drawRadius(s: GeneratorSettings, rng: Rng, lean: number): number {
   const tilt = Math.pow(5.5, s.speed - 0.5) * Math.pow(4, lean);
-  const kind = choose(rng, [['slow', (s.slow * REAL_MIX.slow) / tilt], ['medium', s.medium * REAL_MIX.medium], ['fast', s.fast * REAL_MIX.fast * tilt]] as const);
+  const kind = choose(rng, [
+    ['slow', (s.slow * REAL_MIX.slow * DRAWN_MIX.slow) / tilt], ['medium', s.medium * REAL_MIX.medium * DRAWN_MIX.medium], ['fast', s.fast * REAL_MIX.fast * DRAWN_MIX.fast * tilt],
+  ] as const);
   const [lo, hi] = CORNER_RADII[kind];
-  return logBetween(rng, lo, hi);
+  // (Drawn tighter than it is to read: see READS_WIDER.)
+  return logBetween(rng, lo, hi) / READS_WIDER;
 }
 
-function drawBends(kind: PassageKind, s: GeneratorSettings, rng: Rng, gap: number): Bend[] {
+function drawBends(kind: PassageKind, s: GeneratorSettings, rng: Rng, gap: number): Outline[] {
   const deg = (a: number, b: number) => between(rng, a, b) * DEG;
   switch (kind) {
     case 'stop':
@@ -139,7 +254,7 @@ function drawBends(kind: PassageKind, s: GeneratorSettings, rng: Rng, gap: numbe
     case 'sweeper': {
       const turn = deg(45, 160);
       const most = Math.min(0.13 * s.length, 650) / turn;
-      return [{ turn, side: 1, radius: Math.min(logBetween(rng, 120, 290), Math.max(110, most)), link: 0 }];
+      return [{ turn, side: 1, radius: Math.min(logBetween(rng, 120, 290), Math.max(110, most)) / READS_WIDER, link: 0 }];
     }
     case 'kink':
       return [{ turn: deg(10, 26), side: 1, radius: between(rng, 150, 380), link: 0 }];
@@ -165,38 +280,62 @@ function drawBends(kind: PassageKind, s: GeneratorSettings, rng: Rng, gap: numbe
     }
     case 'flow': {
       const count = choose(rng, [[3, 4], [4, 3], [5, 2], [6, 1]] as const);
-      const r = Math.max(55, drawRadius(s, rng, 0.4));
-      const out: Bend[] = [];
+      const r = Math.max(48, drawRadius(s, rng, 0.4));
+      const out: Outline[] = [];
       for (let k = 0; k < count; k++) out.push({ turn: deg(35, 100), side: k % 2 ? -1 : 1, radius: r * between(rng, 0.7, 1.4), link: k ? between(rng, 0, 40) : 0 });
       return out;
     }
     case 'chicane': {
       const r = () => logBetween(rng, 15, 24);
-      if (rng() < 0.65) {
+      const form = rng();
+      if (form < 0.45) {
+        // One way and back, tight: the lap goes on at an angle to the straight it came down, or on a line beside it.
         const a = between(rng, 60, 100);
         return [{ turn: a * DEG, side: 1, radius: r(), link: 0 }, { turn: (a + between(rng, -15, 20)) * DEG, side: -1, radius: r(), link: between(rng, 0, 8) }];
       }
+      if (form < 0.65) {
+        // Three, each a little less than a right angle.
+        return [
+          { turn: deg(45, 70), side: 1, radius: r(), link: 0 },
+          { turn: deg(50, 75), side: -1, radius: r(), link: between(rng, 0, 8) },
+          { turn: deg(40, 60), side: 1, radius: r(), link: between(rng, 0, 8) },
+        ];
+      }
+      if (form < 0.85) {
+        // A bus stop: off the straight to one side, along beside it for a few metres, and back onto its line.
+        const a = between(rng, 48, 72), back = between(rng, 48, 72);
+        return [
+          { turn: a * DEG, side: 1, radius: r(), link: 0 },
+          { turn: a * DEG, side: -1, radius: r(), link: between(rng, 0, 8) },
+          { turn: back * DEG, side: -1, radius: r(), link: between(rng, 42, 70) },
+          { turn: back * DEG, side: 1, radius: r(), link: between(rng, 0, 8) },
+        ];
+      }
+      // A fast one: two corners of 40 to 70 m, each a third of a right angle or so, with a few metres of straight between them.
+      const a = between(rng, 28, 48);
       return [
-        { turn: deg(45, 70), side: 1, radius: r(), link: 0 },
-        { turn: deg(50, 75), side: -1, radius: r(), link: between(rng, 0, 8) },
-        { turn: deg(40, 60), side: 1, radius: r(), link: between(rng, 0, 8) },
+        { turn: a * DEG, side: 1, radius: between(rng, 40, 70), link: 0 },
+        { turn: (a + between(rng, -6, 8)) * DEG, side: -1, radius: between(rng, 40, 70), link: between(rng, 12, 40) },
       ];
     }
   }
 }
 
 function passage(kind: PassageKind, straight: number, hold: Passage['hold'], s: GeneratorSettings, rng: Rng, gap: number, must = true): Passage {
-  const bends = drawBends(kind, s, rng, gap);
+  const outlines = drawBends(kind, s, rng, gap);
+  for (const b of outlines) b.radius = Math.max(b.radius, TIGHTEST);
+  const bends: Bend[] = outlines.map((b, i, all) => ({ ...b, arcs: drawArcs(kind, b, i, all.length, s, rng) }));
   // No corner but a sweeper goes on for more than a twelfth of the lap, or 450 m: a wide one that turns far is made
   // tighter. Nor do the corners of one passage, all told, for more than a tenth of the lap or 600 m (a run of
   // esses a sixth, or a kilometre, as the longest real ones do).
   const tightest = CORNER_RADII.slow[0];
   const longest = clamp(s.length / 12, 150, 450);
-  if (kind !== 'sweeper') for (const b of bends) b.radius = Math.min(b.radius, Math.max(tightest, longest / b.turn));
-  const arcs = bends.reduce((a, b) => a + b.turn * b.radius, 0);
+  if (kind !== 'sweeper') for (const b of bends) b.radius = Math.min(b.radius, Math.max(tightest, longest / (b.turn * stretch(b.arcs))));
+  const arcs = bends.reduce((a, b) => a + b.turn * b.radius * stretch(b.arcs), 0);
   const most = kind === 'flow' ? clamp(s.length / 6, 400, 1000) : clamp(s.length / 10, 250, 600);
   if (bends.length > 1 && arcs > most) for (const b of bends) b.radius = Math.max(tightest, (b.radius * most) / arcs);
-  return { kind, straight, hold, bends, length: bends.reduce((a, b) => a + b.turn * b.radius + b.link, 0), must };
+  for (const b of bends) soften(b);
+  return { kind, straight, hold, bends, length: lengthOf(bends), must };
 }
 
 /** A passage a car brakes hard for, when it comes off a straight long enough. */
@@ -261,7 +400,7 @@ export function drawPlan(s: GeneratorSettings, rng: Rng, gap: number): Plan | nu
     ['ess', 20], ['double', 13 * lone], ['triple', 12], ['flow', s.esses ? 14 * Math.sqrt(tilt) : 0], ['chicane', s.chicane ? 3 / tilt : 0],
   ] as const), 0, 'free', s, rng, gap, false);
   // (Counted as the analysis will count them on the track: a bend of a few degrees or of a great radius is none.)
-  const corners = () => list.reduce((a, p) => a + p.bends.filter((b) => b.turn >= 15 * DEG && b.radius < NO_CORNER).length, 0) + 2;
+  const corners = () => list.reduce((a, p) => a + p.bends.filter((b) => b.turn >= 15 * DEG && b.radius * READS_WIDER < NO_CORNER).length, 0) + 2;
   const mandatory = list.length;
   for (let guard = 0; guard < 400 && corners() < wanted; guard++) {
     const p = fill();
@@ -280,8 +419,12 @@ export function drawPlan(s: GeneratorSettings, rng: Rng, gap: number): Plan | nu
     for (const p of gentler) {
       // (The corners of a passage that turns one way and then back are brought nearer each other; the others turn less.)
       const net = p.bends.reduce((a, b) => a + b.side * b.turn, 0);
-      for (const b of p.bends) b.turn = Math.max(20 * DEG, p.bends.length > 1 && Math.sign(b.side) !== Math.sign(net) ? b.turn : b.turn * k);
-      p.length = p.bends.reduce((a, b) => a + b.turn * b.radius + b.link, 0);
+      for (const b of p.bends) {
+        b.turn = Math.max(20 * DEG, p.bends.length > 1 && Math.sign(b.side) !== Math.sign(net) ? b.turn : b.turn * k);
+        // (A corner that now turns little is one arc.)
+        if (b.turn < ONE_ARC) b.arcs = [{ share: 1, ratio: 1 }];
+      }
+      p.length = lengthOf(p.bends);
     }
   }
   // Lengths: what the straights that are asked for and chosen, the corners and the way home leave is shared out over the other straights.
@@ -459,7 +602,7 @@ const ZONES = new Ground();
 /** How much further from home than the way home has length for a lap may end, as a share of its length: it may come out a little long. */
 const FAR = 0.05;
 /** What it is worth, among the ways a passage can go, that its first corner turns the way the last corner did. */
-const SAME_WAY = 0.3;
+const SAME_WAY = 0.45;
 /** Points along the lap are this far apart, metres. */
 const STEP = 12;
 /** A lap keeps to its plot where it can, and never goes further out than this many times its size: less, the more compact it is to be. */
@@ -501,6 +644,23 @@ function wayHome(from: Pose, to: Pose, rho: number): number {
 /** One stretch of the lap as laid: a straight, then an arc (to the right when positive). */
 interface Leg { straight: number; angle: number; radius: number; kind: PassageKind | 'home' }
 
+/** The arcs of a corner turned by `angle` (to the right when positive), as stretches of the lap, the first after `straight` metres of straight. */
+function legsOf(b: Bend, angle: number, straight: number, kind: Leg['kind']): Leg[] {
+  if (Math.abs(angle) < ONE_ARC || b.arcs.length === 1) return [{ straight, angle, radius: b.radius, kind }];
+  return b.arcs.map((a, j) => ({ straight: j ? 0 : straight, angle: angle * a.share, radius: b.radius * a.ratio, kind }));
+}
+
+/** Where a pose comes to along some stretches of the lap, and how long they are. */
+function along(from: Pose, legs: readonly Leg[]): { pose: Pose; length: number } {
+  let p = from;
+  let length = 0;
+  for (const leg of legs) {
+    p = round(ahead(p, leg.straight), leg.angle, leg.radius);
+    length += leg.straight + Math.abs(leg.angle) * leg.radius;
+  }
+  return { pose: p, length };
+}
+
 /**
  * What draws came to, for looking into how often laps come round and why
  * not: plans made, laps that reached their last passage, laps that came
@@ -517,11 +677,19 @@ export interface ComposeTrace { plan: number; laid: number; closed: number; earl
  * that is at a speed (m/s); the speeds are those of `pace`.
  */
 export interface Runoff { width: number; pace: Pace; depth(speed: number): number }
-/** An escape path is looked at for a corner that turns this much (radians) at under this radius, as the licence check does. */
-const RUNOFF_TURN = 0.17;
-const RUNOFF_RADIUS = 300;
-/** Another part of the lap is in the way of an escape path when it is more than this far from it along the lap. */
-const RUNOFF_APART = 300;
+/**
+ * An escape path is kept for a corner that turns this much (radians) at under this radius. The licence check looks
+ * at corners of 10 degrees that are tighter than 300 m somewhere; a bend drawn a little short of that may read as one
+ * on the track, so the lap keeps the ground beyond those too.
+ */
+const RUNOFF_TURN = 0.14;
+const RUNOFF_RADIUS = 400;
+/**
+ * Another part of the lap is in the way of an escape path when it is more than this far from it along the lap. The
+ * licence check has 300 m, on the track as built: a little less here, since the lap is laid before it is brought
+ * to length.
+ */
+const RUNOFF_APART = 270;
 
 /**
  * The lap's greatest extent as a share of its length, as asked: half for a
@@ -582,7 +750,7 @@ function on(plot: Plot, x: number, y: number, part = 1): boolean {
  * can go, a lap that is to fold back takes one that runs beside what is
  * there, and a lap that is not takes one that keeps away.
  */
-function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff: Runoff | null, trace?: ComposeTrace): { legs: Leg[]; order: number[] } | null {
+function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff: Runoff | null, trace?: ComposeTrace): { legs: Leg[]; main: number } | null {
   const near = Math.max(2.5 * gap, 110);
   const plot = drawPlot(s, plan, rng, gap);
   // The lap does not go further from its start than the far side of its plot, nor its escape paths much further.
@@ -613,8 +781,8 @@ function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff:
   const keep = Math.min(0.35 * plan.reserve, 260);
   for (let t = gap; t <= Math.max(keep, 2 * gap); t += STEP) ground.add(-t, 0, NaN);
   const legs: Leg[] = [];
-  /** The passages in the order they were laid. */
-  const order: number[] = [];
+  /** The passages in the order they were laid, each with the first of its stretches. */
+  const order: { index: number; from: number }[] = [];
   let budget = 150 + 40 * plan.passages.length;
   // How far from home the lap may end: what the way home has length for, and its two straights can span.
   const farthest = Math.min(plan.reserve + FAR * s.length, 1.2 * s.longestStraight + 250);
@@ -622,7 +790,7 @@ function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff:
   const variants = clamp(Math.round(48 / plan.passages.length / 2) * 2, 4, 16);
   const loose = clamp(1.5 / plan.passages.length, 0.12, 0.45);
   const beside = 1.9 * gap;
-  const liking = 3 * (s.foldBack - 0.3);
+  const liking = 3 * (s.foldBack - 0.3) * (s.foldBack > 0.3 ? besideAtLength(s) : 1);
   // A lap that is to be spread out heads away from home for the first half of its length, and a compact one stays near.
   const roaming = 1.6 * (0.5 - s.compact);
 
@@ -659,14 +827,33 @@ function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff:
     };
     /** An escape path of some depth from a place on the lap: free of the lap as it stands, and kept free from now on. */
     const escape = (x: number, y: number, heading: number, dist: number, depth: number): boolean => {
-      const reach = depth + runoff!.width + 4;
+      // (From the middle of the road: half its width, the run-off, half the width of what would be in the way, and
+      // what the lap may lose of it when it is made smaller to its length and built.)
+      const reach = depth + runoff!.width + 14;
       const co = Math.cos(heading), si = Math.sin(heading);
       for (let t = STEP; t <= reach; t += STEP) if (ground.has(x + co * t, y + si * t, dist, side, lap, true, RUNOFF_APART)) return false;
       for (let t = STEP; t <= reach; t += STEP) zones.add(x + co * t, y + si * t, dist);
       return true;
     };
+    // The corners among the stretches: each run of arcs the same way with no straight between them. How far each
+    // turns, all told (that is what sets the line a car takes through it, and so its speed), and which stretch is
+    // where a corner the licence check will read as one is turned into, however wide that first arc is.
+    const turned = new Array<number>(parts.length).fill(0);
+    const enters = new Array<boolean>(parts.length).fill(false);
+    for (let i = 0; i < parts.length;) {
+      let j = i, turn = 0, tightest = Infinity;
+      do {
+        turn += Math.abs(parts[j].angle);
+        tightest = Math.min(tightest, parts[j].radius);
+        j++;
+      } while (j < parts.length && parts[j].straight < 1 && Math.sign(parts[j].angle) === Math.sign(parts[i].angle));
+      enters[i] = turn >= RUNOFF_TURN && tightest < RUNOFF_RADIUS;
+      for (let k = i; k < j; k++) turned[k] = turn;
+      i = j;
+    }
     let v = speed;
-    for (const leg of parts) {
+    for (let i = 0; i < parts.length; i++) {
+      const leg = parts[i];
       const co = Math.cos(h), si = Math.sin(h);
       const n1 = Math.max(1, Math.ceil(leg.straight / STEP));
       for (let k = 1; k <= n1; k++) {
@@ -681,14 +868,20 @@ function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff:
       const cx = px - r * si, cy = py + r * co;
       const arc = Math.abs(leg.angle) * leg.radius;
       // The speeds: what the corner takes, and the highest on the straight into it.
-      const slight = Math.abs(leg.angle) < 0.2;
-      const taken = pace ? (slight ? pace.top : pace.corner(leg.radius)) : 0;
+      const taken = pace && runoff ? Math.min(pace.top, pace.corner(lineRadius(leg.radius, turned[i], runoff.width))) : 0;
       const into = pace ? peakSpeed(pace, v, taken, leg.straight) : 0;
-      if (runoff && Math.abs(leg.angle) >= RUNOFF_TURN && leg.radius < RUNOFF_RADIUS) {
-        const apex = h + leg.angle / 2;
-        if (!escape(px, py, h, d, runoff.depth(into)) || !escape(cx + r * Math.sin(apex), cy - r * Math.cos(apex), apex, d + arc / 2, runoff.depth(taken))) return fail();
+      if (runoff) {
+        const corner = Math.abs(leg.angle) >= RUNOFF_TURN && leg.radius < RUNOFF_RADIUS;
+        // Straight on from where it is turned into, at the highest speed of the 100 m before (which, with hardly a
+        // straight before it, is the speed the corner before was left at); and along the lap at its apex.
+        if ((corner || enters[i]) && !escape(px, py, h, d, runoff.depth(leg.straight < 100 ? Math.max(into, v) : into))) return fail();
+        // (An arc of one radius has its apex wherever the track as built happens to be tightest: one that turns far is looked at in three places.)
+        for (const at of corner ? (Math.abs(leg.angle) >= 0.9 ? [0.5, 0.2, 0.8] : [0.5]) : []) {
+          const apex = h + leg.angle * at;
+          if (!escape(cx + r * Math.sin(apex), cy - r * Math.cos(apex), apex, d + arc * at, runoff.depth(taken))) return fail();
+        }
       }
-      v = slight ? into : taken;
+      v = taken;
       const n2 = Math.max(1, Math.ceil(arc / STEP));
       for (let k = 1; k <= n2; k++) {
         const a = h + (leg.angle * k) / n2;
@@ -708,10 +901,14 @@ function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff:
     zones.back(mark[1]);
   };
 
-  /** A radius for a corner on the way home: from the mix, a sharp turn more often a slow one, and no arc longer than a tenth of the lap. */
-  const radiusFor = (angle: number) => {
-    const r = drawRadius(s, rng, clamp((80 * DEG - Math.abs(angle)) / (70 * DEG), -1, 1) * 0.5);
-    return Math.min(r, Math.max(20, (0.1 * s.length) / Math.abs(angle)));
+  /** A corner on the way home that turns by `angle`: its radius from the mix, a sharp turn more often a slow one, its arcs as any corner's, and no longer than a tenth of the lap. */
+  const cornerFor = (angle: number, straight: number): Leg[] => {
+    const turn = Math.abs(angle);
+    const outline: Outline = { turn, side: 1, radius: drawRadius(s, rng, clamp((80 * DEG - turn) / (70 * DEG), -1, 1) * 0.5), link: 0 };
+    const b: Bend = { ...outline, arcs: drawArcs('home', outline, 0, 1, s, rng) };
+    b.radius = Math.max(TIGHTEST, Math.min(b.radius, Math.max(20, (0.1 * s.length) / (turn * stretch(b.arcs)))));
+    soften(b);
+    return legsOf(b, angle, straight, 'home');
   };
 
   /**
@@ -726,11 +923,11 @@ function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff:
       for (const turn of [35, 60, 85, 110, 140, 170]) {
         for (const way of [first, -first]) {
           const angle = way * turn * DEG;
-          const leg: Leg = { straight: lead * between(rng, 0.8, 1.2), angle, radius: radiusFor(angle), kind: 'home' };
+          const third = cornerFor(angle, lead * between(rng, 0.8, 1.2));
           const mark = marks();
-          const laid = lay(from, used, [leg], speed);
+          const laid = lay(from, used, third, speed);
           if (!laid) continue;
-          const done = closeWith(laid.pose, used + laid.length, wound + angle, laid.speed, [leg]);
+          const done = closeWith(laid.pose, used + laid.length, wound + angle, laid.speed, third);
           back(mark);
           if (done) return true;
         }
@@ -757,9 +954,10 @@ function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff:
     for (let a1 = -170 * DEG + phase; a1 <= 205 * DEG; a1 += 8 * DEG) {
       const a2 = turn - a1;
       if (Math.abs(a1) < 14 * DEG || Math.abs(a2) < 14 * DEG || Math.abs(a2) > 205 * DEG) continue;
-      const r1 = radiusFor(a1), r2 = radiusFor(a2);
-      const mid = round({ x: 0, y: 0, h: from.h }, a1, r1);
-      const end = round(mid, a2, r2);
+      const one = cornerFor(a1, 0), two = cornerFor(a2, 0);
+      const first = along({ x: 0, y: 0, h: from.h }, one);
+      const second = along(first.pose, two);
+      const mid = first.pose, end = second.pose;
       // from + a u + (the two arcs) + b u1 = home - c u0, with u0 = (1, 0): a u + b u1 + c u0 = q.
       const qx = home.x - from.x - end.x, qy = home.y - from.y - end.y;
       const vx = Math.cos(mid.h), vy = Math.sin(mid.h);
@@ -782,28 +980,28 @@ function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff:
       bound(b0, nb, 20, longest);
       bound(0, nc, cLo, cHi);
       if (lo > hi) continue;
-      const arcs = Math.abs(a1) * r1 + Math.abs(a2) * r2;
+      const arcs = first.length + second.length;
       const rate = na + nb + nc;
       const t = clamp(Math.abs(rate) < 1e-9 ? (lo + hi) / 2 : (target - a0 - b0 - arcs) / rate, lo, hi);
       const a = a0 + t * na, b = b0 + t * nb, c = t * nc;
       const off = Math.abs(a + b + c + arcs - target);
       if (!fits(a + b + c + arcs)) continue;
       const odd = (x: number) => (Math.abs(x) < 30 * DEG || Math.abs(x) > 160 * DEG ? 0.3 : 0);
-      options.push({
-        legs: [{ straight: a, angle: a1, radius: r1, kind: 'home' }, { straight: b, angle: a2, radius: r2, kind: 'home' }],
-        shift: c, cost: off / tolerance + 0.3 * Math.abs(c / start) + odd(a1) + odd(a2) + 0.2 * rng(),
-      });
+      one[0].straight = a;
+      two[0].straight = b;
+      options.push({ legs: [...one, ...two], shift: c, cost: off / tolerance + 0.3 * Math.abs(c / start) + odd(a1) + odd(a2) + 0.2 * rng() });
     }
     // One corner home.
     if (Math.abs(turn) >= 20 * DEG && Math.abs(turn) <= 200 * DEG && Math.abs(uy) > 0.08) {
-      const r = radiusFor(turn);
-      const end = round({ x: 0, y: 0, h: from.h }, turn, r);
+      const one = cornerFor(turn, 0);
+      const { pose: end, length: arc } = along({ x: 0, y: 0, h: from.h }, one);
       const qx = home.x - from.x - end.x, qy = home.y - from.y - end.y;
       // a u + c u0 = q.
       const a = qy / uy, c = qx - a * ux;
-      const off = Math.abs(a + c + Math.abs(turn) * r - target);
-      if (a >= 25 && a <= longest && c >= cLo && c <= cHi && fits(a + c + Math.abs(turn) * r)) {
-        options.push({ legs: [{ straight: a, angle: turn, radius: r, kind: 'home' }], shift: c, cost: off / tolerance + 0.3 * Math.abs(c / start) + 0.3 + 0.2 * rng() });
+      const off = Math.abs(a + c + arc - target);
+      if (a >= 25 && a <= longest && c >= cLo && c <= cHi && fits(a + c + arc)) {
+        one[0].straight = a;
+        options.push({ legs: one, shift: c, cost: off / tolerance + 0.3 * Math.abs(c / start) + 0.3 + 0.2 * rng() });
       }
     }
     options.sort((p, q) => p.cost - q.cost);
@@ -878,9 +1076,7 @@ function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff:
         const way = variant % 2 ? -side : side;
         const more = between(rng, 1 - loose, 1 + loose);
         const straight = Math.min(p.straight * (p.hold === 'asked' ? between(rng, 0.98, 1.02) : between(rng, 0.9, 1.14)), room);
-        const parts: Leg[] = p.bends.map((b, i) => ({
-          straight: i ? b.link : straight, angle: way * b.side * clamp(b.turn * more * between(rng, 0.94, 1.06), 8 * DEG, 208 * DEG), radius: b.radius, kind: p.kind,
-        }));
+        const parts: Leg[] = p.bends.flatMap((b, i) => legsOf(b, way * b.side * clamp(b.turn * more * between(rng, 0.94, 1.06), 8 * DEG, 208 * DEG), i ? b.link : straight, p.kind));
         const net = parts.reduce((a, l) => a + l.angle, 0);
         const length = parts.reduce((a, l) => a + l.straight + Math.abs(l.angle) * l.radius, 0);
         // The heading, against a steady turn once round.
@@ -920,7 +1116,7 @@ function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff:
       if (!laid) continue;
       const before = legs.length;
       legs.push(...way.parts);
-      order.push(way.index);
+      order.push({ index: way.index, from: before });
       if (place(remaining.filter((i) => i !== way.index), laid.pose, used + laid.length, wound + way.net, isLong(plan.passages[way.index]), laid.speed)) return true;
       order.pop();
       legs.length = before;
@@ -932,7 +1128,8 @@ function layOut(plan: Plan, s: GeneratorSettings, rng: Rng, gap: number, runoff:
 
   const done = place(plan.passages.map((_, i) => i), home, 0, 0, true, pace ? pace.corner(60) : 0);
   if (trace && budget < 0) trace.spent++;
-  return done ? { legs, order } : null;
+  // (The stretch the longest straight is the straight of.)
+  return done ? { legs, main: order.find((o) => o.index === plan.main)?.from ?? 0 } : null;
 }
 
 // ---- the shape -------------------------------------------------------------------
@@ -965,7 +1162,7 @@ function composeOnce(s: GeneratorSettings, rng: Rng, gap: number, runoff: Runoff
   if (trace) trace.plan++;
   const laid = layOut(plan, s, rng, gap * APART, runoff, trace);
   if (!laid) return null;
-  const { legs, order } = laid;
+  const { legs } = laid;
   if (trace) trace.closed++;
   // The polygon: each arc's corner is where the straights either side of it would meet.
   const v: Shape['v'] = [];
@@ -994,15 +1191,7 @@ function composeOnce(s: GeneratorSettings, rng: Rng, gap: number, runoff: Runoff
   // The start straight runs from the last corner to the first; the longest is that one, or the one the plan gave its length.
   const start = n - 1;
   if (legs[0].straight >= longest) main = start;
-  else if (plan.main > 0) {
-    // (The legs of that passage begin where those of the passages laid before it end.)
-    let at = 0;
-    for (const index of order) {
-      if (index === plan.main) break;
-      at += plan.passages[index].bends.length;
-    }
-    main = firstOf[at] - 1;
-  }
+  else if (laid.main > 0) main = firstOf[laid.main] - 1;
   // To length, and the way round asked.
   const k = s.length / length;
   const want = s.direction === 'either' ? (rng() < 0.5 ? 'clockwise' : 'anticlockwise') : s.direction;

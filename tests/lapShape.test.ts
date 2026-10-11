@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type Shape, type Vertex, clear, cornersOf, hullShare, lapLength, signedArea, tracePath, turns } from '../src/core/lapShape.ts';
-import { paceOf, peakSpeed } from '../src/core/roughPace.ts';
+import { lineRadius, paceOf, peakSpeed } from '../src/core/roughPace.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
 
 const shape = (points: number[][], r = 30): Shape => ({
@@ -77,6 +77,19 @@ describe('a rough pace', () => {
       expect(pace.corner(5000)).toBeLessThanOrEqual(pace.top);
     }
     expect(f1.corner(60)).toBeGreaterThan(tcr.corner(60) * 1.2);
+  });
+
+  it('takes a corner on a wider line than the road, the more so the less it turns', () => {
+    // On a road 14 m wide: a flick of 50 degrees at 30 m on a line of 150 m, a right angle on one of 65 m, a turn right round on little more than the road's own.
+    expect(lineRadius(30, (50 * Math.PI) / 180, 14)).toBeGreaterThan(140);
+    expect(lineRadius(30, (50 * Math.PI) / 180, 14)).toBeLessThan(165);
+    expect(lineRadius(30, Math.PI / 2, 14)).toBeCloseTo(65, 0);
+    expect(lineRadius(30, Math.PI, 14)).toBeCloseTo(36, 6);
+    // A wider road gives a wider line, and no line is tighter than the road.
+    expect(lineRadius(30, Math.PI / 2, 20)).toBeGreaterThan(lineRadius(30, Math.PI / 2, 10));
+    expect(lineRadius(200, 3, 2)).toBeGreaterThanOrEqual(200);
+    // A corner of a few degrees is no corner to a car.
+    expect(f1.corner(lineRadius(150, 0.15, 12))).toBe(f1.top);
   });
 
   it('reaches a higher speed on a longer straight, and no more than the corner at its end takes on none', () => {

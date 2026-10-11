@@ -341,64 +341,68 @@ Asked for later the same day, after trying it: "Track generator should be more e
 
 And on 2026-10-11, of a Grand Prix circuit at its defaults lengthened to 17.9 km, which came out as a plain loop with clusters of wavy parallel fingers: "Not sure if I was looking for these Caesar Palace-esque corners.. This just sucks, plain said."
 
+He rated that third version "6/10; it's working now, but still far from the best it could be", and after seeing it measured against real circuits (the table below) said what was wrong with it: "the track generator currently feels like a generator that just sticks all selected elements on a base track. It should be built from scratch, with flowing corners, hard braking zones, instead of the same features every time, just in different locations. Implement 1 and 2 together, then 3." (Ideas 1 to 3 of the list that stood here: real circuits as the yardstick, another way of laying out a lap, corners with an anatomy.) That is the fourth version, and what is described below.
+
 ### As built
 
 - **Design, Generate a track.** A dialog with seven kinds of circuit, twelve sliders, seven tick boxes, the class and the direction, and a seed. Generate offers six tracks as cards (the lap drawn, length, corners, height difference, straights, the class's lap and top speed, heavy braking points, the licence verdict, and what the map or the lap had no room for). Use this track makes one the design in one step that Undo takes back.
-- **How it works** is in ARCHITECTURE.md (Track generator): laps drawn as polygons with rounded corners, sorted on shape, tried all over the map, and the best built and measured with the app's own analysis and licence check.
-- **The ends of the sliders** (the second request). The first version drew every lap much the same whatever was asked: the corners slider moved a 5 km lap from 3.1 corners a kilometre to 1.6, and folding back at its maximum left 17% of the lap with another part within 120 m, against 15% at the default. Now, on the same map and 5 km: 6.8 corners a kilometre at one end (with straights of 400 and 300 m) and 1.4 at the other; folding back at its maximum 66% of the lap, 73% with short straights, as rows of parallel legs joined by turns right round, 34 m apart for a track 12 m wide; a straight of 2 km on a 5 km lap comes out at 1.9 km on six tracks of six (it was 1.6 km on the one track that could be made); laps of 1 km and of 20 km are made (they were held to 1.2 and 14 km), and tracks 30 m wide (held to 20 m).
-- **A circuit, not a pattern** (the third). The second version put the rows of legs in the middle of the fold slider too, as many as the lap was to have corners, and made up the corners with regular zigzags and legs swinging in step; on a long lap that was most of the lap. Now the middle of the slider gives arms: the lap goes off to one side and comes back, each arm of its own width, depth and lean. Corners come from bends at every scale, a long edge first and then its pieces, each pushed to one side, as an S or as a bay. Rows of legs are for the top fifth of the fold slider only. Judged on drawn sheets of six tracks for each kind of circuit, each end of each slider, and laps of 1 to 20 km, not on figures alone.
-- **What is set is what is built.** Building to a licence no longer raises the width, the lap length and the start straight or holds the longest straight down: it says which settings stand in the way, and the card says the check fails. This is my reading of "should allow those"; the first version did the opposite on the answer "class sets least width, straight and run-off needs".
-- **The licence check itself** counted a long corner that opens onto a straight as blocked by "another part of the track": the path of a car running wide at its end follows the straight, and after 300 m the check took that straight for an obstacle. Fixed in `licence.ts` (it failed hand-drawn tracks the same way). Without the fix three of twelve Grand Prix circuits of 12 and 17.9 km fail on it; with it none.
-- **Checked**: on the rolling, hilly and mountain landscapes at 8 km and a rolling one at 16 km. On rolling ground (one seed), all 18 of the Grand Prix, motorcycle and high-speed circuits pass the licence they are built to (FIA grade 1, FIM Grade A, FIA grade 2), in under two seconds for six; Grand Prix circuits of 3.5, 8, 12 and 17.9 km pass six of six each, the longest in four and a half seconds. The kinds built to no licence take half a second to one. Every track is within 1% of the length asked.
+- **How it works** is in ARCHITECTURE.md (Track generator).
+- **A lap written from its start line.** There is no loop underneath any more. A lap is a sequence of passages, a straight and the corners it leads into: a corner to brake for, a hairpin, two or three corners that turn one into the other, a run that swings from side to side, a chicane of four kinds, a sweeper, a kink. What is asked decides which passages a lap gets; they are laid out from the start line on a plot of land, each where it keeps clear of the rest and from where the lap can still come home, and the last two or three corners are worked out to bring it onto its start straight (`core/lapComposer.ts`).
+- **Set from real circuits.** The 25 circuits in `data/circuits` are measured by thirteen figures (`core/character.ts`), and the middle of each slider asks for what the middle one of them has. `tests/character.test.ts` measures them again and checks that Grand Prix circuits as generated lie, by every figure, where four in five real ones do.
+- **Corners with an anatomy.** A corner that turns 40 degrees or more is two or three arcs: wide, tight and wide; tightening; opening; two apexes; or one radius after all. A real corner's tightest point is 1.38 times tighter than the middle of its turning; an arc of one radius built as a track read 1.12, and the corners now read 1.29.
+- **Run-off kept as the lap is drawn.** Built to a licence, the ground a car needs beyond each corner is kept free while the lap is laid, where before every part of the lap kept 50 to 70 m from every other. Two straights may lie side by side, as on real circuits, and the corners keep their run-off. Getting this to pass the licence check took reckoning corner speeds on the line a car takes, not on the middle of the road: a quick left and right of 50 degrees each at 30 m is taken nearly flat, and the check asks the run-off of that speed.
+- **The ends of the sliders**, on a 5 km lap. Corners or speed: 29 to 40 corners at one end (with straights of 400 and 300 m; 23 to 33 with the default 800 and 580 m), 8 to 10 at the other. Folding back: one open loop encloses nine tenths of the outline round it and has 4% of the lap beside another part (the middle one of the laps drawn); at the top 44% of the lap is, and 70% on a compact lap with short straights, as legs side by side joined by turns right round. Spread out or compact: from 0.46 of the lap's length across (one open loop) or 0.36 to 0.43, to 0.25 to 0.28.
+- **What is set is what is built.** Building to a licence changes nothing that was set: it says which settings stand in the way, and the card says the check fails.
+- **Checked**, on a rolling landscape of 8 km (and one of 16 km): as drawn sheets of six tracks for every kind of circuit, each end of each slider and laps of 1 to 20 km, and in the app. Grand Prix circuits of 4.3, 5.4 and 6.5 km, two seeds: 36 of 36 pass FIA grade 1. Grand Prix, default (GT3), motorcycle and high-speed circuits, two seeds: all 72 pass the licence they are built to. Grand Prix circuits of 5.4, 12 and 17.9 km, four seeds: 70 of 72 pass; the two that do not fail on a grid of 2.1% and on one escape path of 94 m where 100 is asked. Six tracks take a second and a half at 5 km, three and a half for Grand Prix circuits built to a licence, and six to eight seconds for 17.9 km built to a licence.
 
 ### Not right yet
 
-- **Long laps look alike.** At 18 to 20 km the six are all a big loop with a dozen arms and bays round it: irregular, but of one family. A circuit that long could also be a road out to a far point and back, or two loops joined; the generator draws one loop.
-- **Short laps with long straights are plain.** A 1.5 km club circuit or a 3.5 km Grand Prix circuit with its kind's straights (550 and 400 m; 1,050 and 700 m) is two straights and four to seven corners: there is no lap left for more. The dialog does not shorten the straights when the length is lowered.
-- **The high-speed circuit** is a box with a chicane: at so few corners the loop is all there is.
-- **The twisty end with long straights.** With the default straights (900 m and 600 m of a 5 km lap) the most corners is about 22, 4.3 a kilometre: the two straights carry none. The nine a kilometre the slider stands for is of the lap without them, and the lap reaches 6.8 with short straights, not nine: half the laps drawn that twisty come too near themselves and are thrown away.
-- **How much can fold.** At the maximum two thirds of a 5 km lap has another part within 120 m, not all of it: the longest straight and the start straight take 1.5 km, and the loop they are on is left open on one side. Shorter straights fold more.
-- **Legs or turns.** At the top of the fold slider the number of pairs of legs follows "corners or speed": few long ones for a fast lap, many short ones for a twisty one. That was my choice; nothing was asked about it.
-- **Fast corners and arms.** A lap asked nothing but fast corners gets them on one loop (nine in ten), but with arms on it about half: an arm's end is a turn right round or two corners close together.
-- **Compact without folding does little.** With folding at nothing, compact against spread out changes how far the lap is across from 43% of its length to 35%: a lap of one loop is that far across whatever its shape.
-- **The sweeper needs room.** It wants two straights of 380 m, and often finds none; the card says so.
-- **The six do not stand apart on the map.** Each takes its own best place, and several often lie on the same spot. Nothing spreads them out.
-- **Height on rough maps.** On the mountain landscape a lap asked to climb 160 m gets 30 to 50 m on five tracks of six and 130 m on one, and on the hilly one a lap asked 300 m gets about 75 m: the generator keeps off slopes over 16% and does not touch the grading to make a steep place work (evening the profile out over a longer stretch was tried, and made the slopes worse where the cut and fill limit binds). The card says so.
-- **Run-off is estimated before building.** The speeds are rough, and water or the edge of the map beyond a corner is not looked at until the track is built and the licence check runs. That check is the judge, and a track that fails says so on its card.
-- **Many control points.** About 110 on a 5 km track, 230 on a twisty one and 450 on 20 km, one every 18 degrees of every corner: easy to nudge, slow to reshape by hand.
+- **Long laps are one family.** At 12 to 20 km the six are all one big irregular loop, with a thin neck here and there where it runs beside itself. A circuit that long could also be a road out to a far point and back, or two loops joined. The longest straight asked stays what the kind has (880 m is a twentieth of an 18 km Grand Prix lap), and how much less of a long lap runs beside itself is a guess: no circuit that long was measured.
+- **Short laps with long straights are plain.** A 1.5 km club circuit with its kind's straights (520 and 380 m) is two straights and four or five corners. The dialog does not shorten the straights when the length is lowered.
+- **One open loop is plain, and slow to draw.** It is what is asked, a lap that never turns back, so its corners are gentle. One draw in six comes round, and one in twenty where twenty corners are asked between short straights: more are drawn then, and it takes three or four seconds.
+- **The way home is worked out, not composed.** The last two or three corners of every lap are whatever brings it onto its start straight. They get radii and arcs as other corners do, but they are not chosen for the lap's rhythm.
+- **Heavy braking points come out near what is asked, not at it.** Each place asked gets a straight of its own to brake at the end of; a Grand Prix circuit asked four gets three to seven, since a fast car also loses 90 km/h into a slow corner after a shorter straight.
+- **Built to a licence, less of the lap runs beside itself** than on real circuits (23% against 32%): the ground kept for run-off takes room that real circuits use.
+- **Two things are made up for by a number measured on Grand Prix laps.** A track as built reads a sixth fewer corners than were drawn, and its corners 1.2 times wider. A fifth more corners are drawn, and tighter. On other kinds of circuit the numbers may be a little off.
+- **The six are still more alike than six real circuits.** What the lap encloses of the outline round it ranges over 0.2 among generated Grand Prix circuits and over 0.3 among real ones. Nor do the six stand apart on the map: each takes its own best place, and several often lie on the same spot.
+- **Only the Grand Prix kind stands on the measurements.** The real circuits are mostly Grand Prix circuits of this century; the other six kinds, their numbers and how far each slider goes are my own.
+- **The real circuits are drawn from maps.** Their corners' tightest points read tighter than they are, so the mix of slow, medium and fast goes by the middle of a corner. The first comparison (64% of real corners tighter than 45 m at the apex, against 33%) used the tightest point, and overstated the difference: by the middle of the corner it is 47%.
+- **Height on rough maps.** On the mountain landscape a lap asked to climb 160 m gets 30 to 50 m on most tracks: the generator keeps off slopes over 16% and does not touch the grading to make a steep place work.
+- **Run-off is estimated before building.** The speeds are rough, and water beyond a corner is looked at only at two points straight on (60 and 105 m). The licence check on the built track is the judge, and a track that fails says so on its card.
+- **Many control points.** About 140 on a 5 km track, 215 on a twisty one and 350 on 20 km: easy to nudge, slow to reshape by hand.
 - **On the main thread**: the page stands still for a moment at a time while the tracks are made. It is not in a worker.
 - **No crossings and no banking**, as the app has neither.
-- **The kinds of circuit and the ranges are my own**: the seven kinds, their numbers and how far each slider goes are not from a source.
 
 ### Measured against real circuits (2026-10-11)
 
-After the third round he rated the generator "6/10; it's working now, but still far from the best it could be". The 25 real circuits in `data/circuits` and 36 generated Grand Prix circuits (4.3, 5.4 and 6.5 km, two seeds, six each, rolling map) were put through the same analysis (`analyseTrack`). Middle value, and the range that holds four in five:
+The 25 real circuits in `data/circuits` and generated Grand Prix circuits (4.3, 5.4 and 6.5 km, two seeds, six each, rolling map) put through the same measurement. Middle value, and the range that holds four in five. "Third version" is what he rated 6/10; some figures were not taken then.
 
-| | Real circuits | Generated |
-|---|---|---|
-| Share of its own hull the lap encloses | 0.65 (0.49 to 0.79) | 0.92 (0.83 to 0.96) |
-| Turning per kilometre | 308° (235 to 370) | 202° (170 to 285) |
-| Corners per kilometre | 3.2 (2.2 to 4.2) | 2.4 (2.1 to 2.6) |
-| Corners tighter than 45 m at the apex | 64% (35 to 78) | 33% (20 to 50) |
-| Corners faster than 120 m | 6% (0 to 23) | 14% (0 to 23) |
-| Share of a corner within a fifth of its tightest | 19% (13 to 24) | 34% (30 to 41) |
-| Lap with another part within 120 m | 32% (0 to 59) | 13% (8 to 18) |
-| Longest straight, and the next, as shares of the lap | 14% and 9% | 18% and 14% |
-| Corners that turn the other way from the one before | 67% | 53% |
+| | Real circuits | Third version | Now |
+|---|---|---|---|
+| Share of the outline round it the lap encloses | 0.65 (0.49 to 0.79) | 0.92 (0.83 to 0.96) | 0.64 (0.53 to 0.72) |
+| How far across the lap is, for its length | 0.35 (0.29 to 0.43) | 0.38 | 0.35 (0.32 to 0.38) |
+| Lap with another part within 120 m | 32% (0 to 59) | 13% (8 to 18) | 23% (16 to 28) |
+| Turning per kilometre | 308° (235 to 370) | 202° (170 to 285) | 299° (279 to 337) |
+| Corners per kilometre | 3.25 (2.24 to 4.17) | 2.4 (2.1 to 2.6) | 3.23 (2.78 to 3.69) |
+| The middle corner's turn | 85° (71 to 107) | | 84° (72 to 105) |
+| Slow corners (the middle of the corner under 45 m) | 47% (20 to 65) | | 52% (35 to 62) |
+| Fast corners (over 120 m) | 15% (7 to 32) | | 12% (6 to 29) |
+| A corner's tightest point against the middle of it | 1.38 (1.18 to 1.98) | 1.12 | 1.29 (1.15 to 1.49) |
+| Corners that turn the other way from the one before | 67% (33 to 78) | 53% | 67% (56 to 80) |
+| Longest straight, and the next, as shares of the lap | 14% and 9% | 18% and 14% | 17% and 12% |
 
-What it says: a generated lap is a blob with things on it (it fills nine tenths of its hull, a real circuit two thirds: real circuits wrap round themselves); it turns a third less and has fewer, gentler corners than the Grand Prix kind should; its corners are arcs of one radius where real ones tighten and open; and the six are far more alike than real circuits are. The kinds of circuit and the meaning of the sliders were set by judgement, not against these.
-
-The probe is not in the repo (scratch: `real.test.ts`); the table is what to beat.
+The straights are the kind's own: 880 and 620 m of 5.4 km, where the start straight is as long as Formula 1's licence asks for the grid and the distance to the first corner (562 m). The 1.12 is what a lap of one-radius corners reads as built; it was taken on the new composer before its corners got their arcs.
 
 ### Ideas for the next version (proposed, not decided)
 
-1. **Real circuits as the yardstick.** Set the kinds of circuit and the middle of each slider from the table; keep the measurement in the repo as a test (so many of the measures within the real range) and as part of the ranking. Small.
-2. **Another way of laying out a lap.** Not one loop with things on it. Either a lap put together from sectors (a main straight, a slow complex, a fast run out and back, a stadium), each from a few forms and joined, which is how circuits are designed and gives different families of lap; or corners and straights drawn in sequence from the real circuits' own figures and closed. Large; it is what the hull, turning and likeness figures ask for.
-3. **Corners with an anatomy.** Corners that tighten or open, two apexes, a hairpin that is not half a circle, chicanes of more than one kind. Medium.
-4. **The land first.** The lap is drawn blind and a place looked for. Instead: the start straight on the flattest strip, the lap along the contours and over the hill on purpose, so that the height asked is reached at gentle gradients (a mountain map now gives 30 to 50 m of 160 asked). Large.
-5. **Choosing as designing.** Six that differ (in form and in place), each shown on the map with its height profile and not as a thumbnail, "more like this one", and keeping part of a lap while the rest is drawn again. Medium.
-6. **Ranked as a place to race.** The lap simulation and the overtaking analysis are there: rank by places to pass, range of corner speeds and rhythm, and offer a target lap time. Medium.
-7. **A lap that can be edited.** Thirty to fifty control points for 5 km, at the corners, not 110. Small to medium.
+Ideas 1 to 3 of the earlier list are built. What is left of it, and what building them showed:
+
+1. **The land first.** The lap is drawn blind and a place looked for. Instead: the start straight on the flattest strip, the lap along the contours and over the hill on purpose, so that the height asked is reached at gentle gradients (a mountain map gives 30 to 50 m of 160 asked). The composer lays a lap out on a plot of land already; the plot could be a real piece of the map. Large.
+2. **Choosing as designing.** Six that differ (in form and in place), each shown on the map with its height profile and not as a thumbnail, "more like this one", and keeping part of a lap while the rest is drawn again: the composer can lay a lap from any passage on. Medium.
+3. **Ranked as a place to race.** The lap simulation and the overtaking analysis are there: rank by places to pass, range of corner speeds and rhythm, and offer a target lap time. And the heavy braking points planned with the class's pace, so that the number asked is the number got. Medium.
+4. **Long laps with a form of their own.** A road out and back, two loops joined, a longest straight that grows with the lap; and real long circuits measured for it (there are none in the data). Medium.
+5. **A lap that can be edited.** Thirty to fifty control points for 5 km, at the corners, not 140. Small to medium.
+6. **In a worker**, so the page does not stand still for up to eight seconds. Small.
 
 ## Proposed, not decided
 

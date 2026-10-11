@@ -22,12 +22,12 @@ import { analyseTrack } from './analysis.ts';
 import { placeFacilities } from './facilities.ts';
 import { type Heightmap, sampleHeight } from './heightmap.ts';
 import { type Runoff, composeLap, cornersWanted, foldedWanted, hullWanted, mixWanted, spreadWanted } from './lapComposer.ts';
-import { type Shape, FAST_ABOVE, SLOW_BELOW, STRAIGHT_CREEP, cells, centroid, clamp, clear, cornersOf, hasNeighbour, hullShare, lapLength, mod, tracePath, turns } from './lapShape.ts';
+import { type Shape, FAST_ABOVE, READS_WIDER, SLOW_BELOW, STRAIGHT_CREEP, cells, centroid, clamp, clear, cornerGroups, cornersOf, hasNeighbour, hullShare, lapLength, mod, tracePath, turns } from './lapShape.ts';
 import { simulateLap } from './lapSim.ts';
 import { assessLicence, requiredRunoff } from './licence.ts';
 import { analysePerformance } from './performance.ts';
 import { computeRacingLine } from './racingLine.ts';
-import { HEAVY_BRAKING, paceOf, peakSpeed } from './roughPace.ts';
+import { HEAVY_BRAKING, lineRadius, paceOf, peakSpeed } from './roughPace.ts';
 import { seededRandom } from './rng.ts';
 import { woodsAt } from './scenery.ts';
 import { GRID_LENGTH, placeStartFinish, rotateTrack } from './startFinish.ts';
@@ -235,17 +235,25 @@ export interface ShapeMetrics {
 /** A part of the lap with another part this near (metres) is folded back on it. */
 const NEAR = 120;
 
-/** The rough speeds are taken this much higher for the depth of run-off they ask: the real lap may be quicker than the estimate. */
-const RUNOFF_SPEED = 1.1;
+/** The rough speeds are taken this much higher for the depth of run-off they ask: the real lap, on its racing line, is quicker than the estimate. */
+const RUNOFF_SPEED = 1.2;
 
-/** Each corner's speed, the highest speed on the straight into it, and the straights (the one after each vertex). */
-function shapeSpeeds(shape: Shape, vehicle: VehicleClass | null): { corner: number[]; into: number[]; straights: number[] } {
+/**
+ * Each arc's speed, the highest speed on the straight into it, and the straights (the one after each vertex). An
+ * arc is taken on the line a car takes through the corner it is part of, on a road of this width.
+ */
+function shapeSpeeds(shape: Shape, vehicle: VehicleClass | null, width: number): { corner: number[]; into: number[]; straights: number[] } {
   const v = shape.v;
   const n = v.length;
-  const { angle, tangent, edge } = turns(v);
+  const { tangent, edge } = turns(v);
   const pace = paceOf(vehicle);
   const straights = v.map((_, i) => edge[i] - tangent[i] - tangent[(i + 1) % n]);
-  const corner = v.map((p, i) => (Math.abs(angle[i]) < 0.2 ? pace.top : pace.corner(p.r)));
+  const turn = new Array<number>(n).fill(0);
+  for (const g of cornerGroups(v)) for (let i = g.from; ; i = (i + 1) % n) {
+    turn[i] = g.turn;
+    if (i === g.to) break;
+  }
+  const corner = v.map((p, i) => Math.min(pace.top, pace.corner(lineRadius(p.r, turn[i], width))));
   const into = new Array<number>(n).fill(0);
   for (let i = 0; i < n; i++) into[(i + 1) % n] = peakSpeed(pace, corner[i], corner[(i + 1) % n], Math.max(0, straights[i]));
   return { corner, into, straights };
@@ -262,7 +270,7 @@ export function shortRunoff(shape: Shape, width: number, vehicle: VehicleClass):
   const v = shape.v;
   const n = v.length;
   const { angle, tangent } = turns(v);
-  const { corner, into } = shapeSpeeds(shape, vehicle);
+  const { corner, into } = shapeSpeeds(shape, vehicle, width);
   const path = tracePath(shape, 16);
   const count = path.x.length;
   const firstOf = new Array<number>(n).fill(-1);
@@ -299,18 +307,19 @@ export function shortRunoff(shape: Shape, width: number, vehicle: VehicleClass):
   return short;
 }
 
-export function measureShape(shape: Shape, vehicle: VehicleClass | null = null): ShapeMetrics {
+export function measureShape(shape: Shape, vehicle: VehicleClass | null = null, width = 12): ShapeMetrics {
   const v = shape.v;
   const n = v.length;
   let slow = 0, medium = 0, fast = 0;
-  // (By the radius the middle of a corner's turning is made at, as the mix of real circuits is counted.)
+  // (By the radius the middle of a corner's turning is made at, as the mix of real circuits is counted, and as the track will read it.)
   for (const c of cornersOf(v)) {
-    if (c.middle < SLOW_BELOW) slow++;
-    else if (c.middle > FAST_ABOVE) fast++;
+    const read = c.middle * READS_WIDER;
+    if (read < SLOW_BELOW) slow++;
+    else if (read > FAST_ABOVE) fast++;
     else medium++;
   }
   // Heavy braking: the speed reached on the straight into a corner, against the speed the corner takes.
-  const { corner, into, straights } = shapeSpeeds(shape, vehicle);
+  const { corner, into, straights } = shapeSpeeds(shape, vehicle, width);
   let braking = 0;
   for (let i = 0; i < n; i++) if (into[i] - corner[i] >= HEAVY_BRAKING) braking++;
   // A straight runs on through a corner too slight to be one (under 12 degrees), as the analysis will read it.
@@ -360,8 +369,10 @@ export function scoreShape(m: ShapeMetrics, shape: Shape, s: GeneratorSettings):
   if (m.startStraight < s.startStraight) score += 3 * ((s.startStraight - m.startStraight) / s.startStraight) ** 2;
   score += ((m.brakingPoints - s.brakingPoints) / Math.max(1, s.brakingPoints)) ** 2;
   score += 0.5 * ((m.spread - spreadWanted(s)) / 0.1) ** 2;
-  score += 1.2 * ((m.folded - foldedWanted(s)) / 0.2) ** 2;
-  score += 0.8 * ((m.hull - hullWanted(s)) / 0.15) ** 2;
+  // (How a lap lies on the ground counts for less than what it has in it: real circuits differ in it more than in
+  // anything, and six that were all the middle one would be six of a kind.)
+  score += 0.8 * ((m.folded - foldedWanted(s)) / 0.2) ** 2;
+  score += 0.5 * ((m.hull - hullWanted(s)) / 0.2) ** 2;
   for (const f of ['hairpin', 'chicane', 'esses', 'sweeper'] as const) if (s[f] && !shape.made[f]) score += 1.5;
   return score;
 }
@@ -430,6 +441,19 @@ export function findSite(shape: Shape, hm: Heightmap, s: GeneratorSettings, wood
   for (let i = 0; i < n; i++) if (onStart[i]) startEnd = Math.max(startEnd, path.s[i]);
   const onGrid = onStart.map((on, i) => on && startEnd - path.s[i] > 250 && startEnd - path.s[i] < 600);
   const gridKnown = onGrid.filter(Boolean).length >= 3;
+  // Built to a licence: the ground straight on from where each corner is turned into, 60 and 105 m on, which is to be dry too.
+  const beyond: number[] = [];
+  if (s.licence && hasWater) {
+    const { angle, tangent } = turns(shape.v);
+    const m = shape.v.length;
+    for (let i = 0; i < m; i++) {
+      if (Math.abs(angle[i]) < 0.17 || shape.v[i].r >= 300) continue;
+      const p = shape.v[mod(i - 1, m)], q = shape.v[i];
+      const l = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+      const dx = (q.x - p.x) / l, dy = (q.y - p.y) / l;
+      for (const far of [60, 105]) beyond.push(q.x - dx * tangent[i] + dx * far - c.x, q.y - dy * tangent[i] + dy * far - c.y);
+    }
+  }
   const evaluate = (cx: number, cy: number, turn: number): Site | null => {
     const co = Math.cos(turn), si = Math.sin(turn);
     let min = Infinity, max = -Infinity, wet = 0, wooded = 0;
@@ -458,8 +482,12 @@ export function findSite(shape: Shape, hm: Heightmap, s: GeneratorSettings, wood
     let cost = ((range - s.heightDifference) / Math.max(12, 0.35 * s.heightDifference + 8)) ** 2;
     cost += Math.max(0, (steepest - steep) / 0.03) ** 2;
     // (A licence takes a grid of 2% at most: a place that has more is nearly as bad as none.)
-    cost += s.licence ? 4 * Math.max(0, (grid - 0.016) / 0.008) ** 2 : 0.5 * Math.max(0, (grid - 0.02) / 0.01) ** 2;
+    cost += s.licence ? 8 * Math.max(0, (grid - 0.015) / 0.008) ** 2 : 0.5 * Math.max(0, (grid - 0.02) / 0.01) ** 2;
     cost += 3 * (wet / n) + 4 * (wooded / n);
+    // (Water where a car that misses a corner would end up: each such place fails the licence.)
+    for (let i = 0; i < beyond.length; i += 2) {
+      if (sampleHeight(hm, cx + beyond[i] * co - beyond[i + 1] * si, cy + beyond[i] * si + beyond[i + 1] * co) < hm.waterLevel + 0.6) cost += 0.4;
+    }
     return { x: cx, y: cy, turn, cost, range, steepest, wet: wet / n, wooded: wooded / n };
   };
   let best: Site | null = null;
@@ -574,14 +602,9 @@ function toDesign(shape: Shape, site: Site, s: GeneratorSettings, needs: ClassNe
   // stretch runs past the first that surely does, kinks before it included, and on through any corner the same way
   // that follows at once (the analysis reads those as one).
   const between = (i: number) => edge[i] - tangent[i] - tangent[(i + 1) % n];
-  let first = (shape.start + 1) % n;
-  for (let k = 0; k < n; k++) {
-    const j = (shape.start + 1 + k) % n;
-    if (Math.abs(angle[j]) >= FIRST_CORNER_TURN && v[j].r < 250) {
-      first = j;
-      break;
-    }
-  }
+  // (A corner may be several arcs: it is the corner that turns 55 degrees, not any one of them.)
+  const corners = cornerGroups(v).sort((p, q) => mod(p.from - shape.start - 1, n) - mod(q.from - shape.start - 1, n));
+  let first = (corners.find((g) => g.turn >= FIRST_CORNER_TURN && g.radius < 250) ?? corners[0]).to;
   for (let k = 0; k < n; k++) {
     const next = (first + 1) % n;
     if (next === shape.start || Math.sign(angle[next]) !== Math.sign(angle[first]) || between(first) > 80) break;
@@ -607,16 +630,21 @@ function toDesign(shape: Shape, site: Site, s: GeneratorSettings, needs: ClassNe
     const sign = Math.sign(angle[i]) || 1;
     const cx = t1x - d1y * cv.r * sign, cy = t1y + d1x * cv.r * sign;
     const a0 = Math.atan2(t1y - cy, t1x - cx);
-    // A point every 18 degrees or so round the corner, its ends included; a short kink is one point at its middle.
+    // A point every 18 degrees or so round the arc, its ends included, and no two nearer than 5 m; a slight kink is one
+    // point at its middle. (The tight arc at the apex of a slow corner is short: it keeps its two ends, or the line
+    // through the points would cut it.)
     const arc = cv.r * Math.abs(angle[i]);
-    if (arc < 14) {
-      pts.push({ x: cx + cv.r * Math.cos(a0 + angle[i] / 2), y: cy + cv.r * Math.sin(a0 + angle[i] / 2), d: dist + arc / 2 });
+    // (Where one arc runs straight into the next, its last point is the next one's first: put down once.)
+    const put = (a: number, d: number) => {
+      const x = cx + cv.r * Math.cos(a), y = cy + cv.r * Math.sin(a);
+      const last = pts[pts.length - 1];
+      if (!last || Math.hypot(x - last.x, y - last.y) > 4) pts.push({ x, y, d });
+    };
+    if (arc < 14 && Math.abs(angle[i]) < 0.3) {
+      put(a0 + angle[i] / 2, dist + arc / 2);
     } else {
-      const parts = Math.max(1, Math.min(Math.ceil(Math.abs(angle[i]) / 0.32), Math.floor(arc / 9)));
-      for (let k = 0; k <= parts; k++) {
-        const a = a0 + (angle[i] * k) / parts;
-        pts.push({ x: cx + cv.r * Math.cos(a), y: cy + cv.r * Math.sin(a), d: dist + (arc * k) / parts });
-      }
+      const parts = Math.max(1, Math.min(Math.ceil(Math.abs(angle[i]) / 0.32), Math.floor(arc / 5)));
+      for (let k = 0; k <= parts; k++) put(a0 + (angle[i] * k) / parts, dist + (arc * k) / parts);
     }
     dist += arc;
     if (i === first) wideEnd = dist + WIDE_AFTER;
@@ -739,7 +767,7 @@ export async function generateTracks(
   for (let i = 0; i < 4 * draws && (i < draws || drawn.length < ENOUGH * fewer * s.candidates); i++) {
     const shape = drawShape(drawn2, rng, gap, runoff);
     if (!shape) continue;
-    let score = scoreShape(measureShape(shape, vehicle), shape, s);
+    let score = scoreShape(measureShape(shape, vehicle, s.width), shape, s);
     if (needs && vehicle) score += SHORT_RUNOFF * shortRunoff(shape, s.width, vehicle);
     drawn.push({ shape, score, seed: `${s.seed}-${i + 1}` });
   }

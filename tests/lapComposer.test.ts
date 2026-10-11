@@ -128,6 +128,38 @@ describe('the plan of a lap', () => {
     expect(mixWanted(settings({ speed: 0 })).slow).toBeGreaterThan(REAL_MIX.slow + 0.15);
   });
 
+  it('makes a corner of arcs: wide, tight and wide, or tightening, or opening, or one radius', () => {
+    const bends = drawn.flatMap((plan) => plan.passages.flatMap((p) => p.bends.map((b) => ({ ...b, kind: p.kind }))));
+    for (const b of bends) {
+      expect(b.arcs.reduce((a, c) => a + c.share, 0)).toBeCloseTo(1, 9);
+      // No arc tighter than a car can turn.
+      for (const a of b.arcs) expect(b.radius * a.ratio).toBeGreaterThanOrEqual(14 - 1e-9);
+      // A kink, a chicane's corners and a corner that turns little are one arc.
+      if (b.kind === 'kink' || b.kind === 'chicane' || b.turn < 40 * DEG) expect(b.arcs.length).toBe(1);
+    }
+    const made = bends.filter((b) => b.arcs.length > 1);
+    // More than half the corners that turn 45 degrees or more are of two or three arcs, and of every form.
+    expect(made.length).toBeGreaterThan(0.5 * bends.filter((b) => b.turn >= 45 * DEG && b.kind !== 'chicane').length);
+    expect(made.some((b) => b.arcs.length === 3 && b.arcs[1].ratio < b.arcs[0].ratio && b.arcs[1].ratio < b.arcs[2].ratio)).toBe(true);
+    expect(made.some((b) => b.arcs.length === 2 && b.arcs[0].ratio > b.arcs[1].ratio)).toBe(true);
+    expect(made.some((b) => b.arcs.length === 2 && b.arcs[0].ratio < b.arcs[1].ratio)).toBe(true);
+    // The tightest arc of such a corner is a good deal tighter than the corner's radius, which is that of the middle of its turning.
+    const tightening = made.map((b) => 1 / Math.min(...b.arcs.map((a) => a.ratio))).sort((a, c) => a - c);
+    expect(tightening[Math.floor(tightening.length / 2)]).toBeGreaterThan(1.25);
+    expect(tightening[tightening.length - 1]).toBeLessThan(2.6);
+  });
+
+  it('has chicanes of more than one kind', () => {
+    const chicanes = plans(settings({ seed: 'chicanes', chicane: true }), 80).flatMap((plan) => plan.passages.filter((p) => p.kind === 'chicane'));
+    const counts = new Set(chicanes.map((p) => p.bends.length));
+    expect(counts).toEqual(new Set([2, 3, 4]));
+    // Tight ones of 15 to 24 m, and fast ones of 40 to 70 m.
+    expect(chicanes.some((p) => p.bends.every((b) => b.radius < 25))).toBe(true);
+    expect(chicanes.some((p) => p.bends.every((b) => b.radius >= 40))).toBe(true);
+    // A bus stop comes back onto the line it left: it turns as much one way as the other.
+    for (const p of chicanes.filter((q) => q.bends.length === 4)) expect(Math.abs(p.bends.reduce((a, b) => a + b.side * b.turn, 0))).toBeLessThan(1e-9);
+  });
+
   it('says so when what is asked does not go into the lap', () => {
     // A kilometre with the longest straights a kilometre takes, and more named corners than it has room for: fewer passages, or none.
     const tight = plans(settings({ seed: 'tight', length: 1000, longestStraight: 420, startStraight: 330, hairpin: true, chicane: true, esses: true, sweeper: true, brakingPoints: 8 }), 30);
@@ -169,6 +201,15 @@ describe('the lap as laid', () => {
       // And no straight much longer than the longest asked.
       expect(longest).toBeLessThan(1.15 * s.longestStraight + STRAIGHT_CREEP);
     }
+  });
+
+  it('has corners that tighten to their apex', () => {
+    const all = drawn.flatMap((shape) => cornersOf(shape.v));
+    const ratio = all.map((c) => c.middle / c.radius).sort((a, b) => a - b);
+    // Half of them or more are tighter at their tightest than in the middle of their turning; some by half as much again.
+    expect(ratio[Math.floor(ratio.length * 0.6)]).toBeGreaterThan(1.05);
+    expect(ratio[ratio.length - 1]).toBeGreaterThan(1.5);
+    expect(ratio[0]).toBeGreaterThanOrEqual(1 - 1e-9);
   });
 
   it('has corners of every kind and both ways', () => {

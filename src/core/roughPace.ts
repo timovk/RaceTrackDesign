@@ -54,5 +54,20 @@ export function peakSpeed(pace: Pace, from: number, to: number, length: number):
   return peak;
 }
 
+/**
+ * The radius of the line a car takes through a corner: from the outside of
+ * the road in to the inside at the apex and out again, which is a far wider
+ * arc than the road's own where the corner turns little. A flick of 50
+ * degrees at 30 m on a road 14 m wide is taken on a line of 150 m; a right
+ * angle there on one of 65 m; a turn right round on hardly more than the
+ * road's own.
+ */
+export function lineRadius(radius: number, turn: number, width: number): number {
+  // (What a car has of the road either side of its middle: half the width, less half its own.)
+  const half = Math.min(Math.max(0, width / 2 - 1), 0.8 * radius);
+  const c = Math.cos(Math.min(Math.abs(turn), Math.PI) / 2);
+  return 1 - c < 1e-4 ? 1e6 : Math.max(radius, (radius + half - (radius - half) * c) / (1 - c));
+}
+
 /** A fall in speed of this much (m/s) into a corner is heavy braking: 90 km/h. */
 export const HEAVY_BRAKING = 25;

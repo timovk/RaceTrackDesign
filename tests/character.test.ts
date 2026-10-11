@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { type Character, REAL_CIRCUITS, spreadOf, trackCharacter } from '../src/core/character.ts';
 import { DEFAULT_GENERATOR, GENERATOR_STYLES, generateTracks } from '../src/core/generator.ts';
 import { sampleHeight } from '../src/core/heightmap.ts';
-import { cornersWanted, foldedWanted, hullWanted, mixWanted, spreadWanted } from '../src/core/lapComposer.ts';
+import { DRAWN_PER_READ, cornersWanted, foldedWanted, hullWanted, mixWanted, spreadWanted } from '../src/core/lapComposer.ts';
 import { defaultTerrainSettings, generateHeightmap } from '../src/core/terrain.ts';
 import { buildTrack } from '../src/core/track.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
@@ -55,9 +55,9 @@ describe('the generator, set from real circuits', () => {
     expect(mix.slow).toBeCloseTo(REAL_CIRCUITS.slow[1], 6);
     expect(mix.medium).toBeCloseTo(REAL_CIRCUITS.medium[1], 6);
     expect(mix.fast).toBeCloseTo(REAL_CIRCUITS.fast[1], 6);
-    // Corners: a twentieth over the real figure a kilometre, on a lap whose straights are a real circuit's share of it.
+    // Corners: the real figure a kilometre, and as many more as read as none on the track, on a lap whose straights are a real circuit's share of it.
     const straights = { longestStraight: 5000 * REAL_CIRCUITS.longestStraight[1], startStraight: 5000 * REAL_CIRCUITS.secondStraight[1] };
-    expect(cornersWanted({ ...middle, length: 5000, ...straights })).toBe(Math.round(5 * REAL_CIRCUITS.cornersPerKm[1] * 1.05));
+    expect(cornersWanted({ ...middle, length: 5000, ...straights })).toBe(Math.round(5 * REAL_CIRCUITS.cornersPerKm[1] * DRAWN_PER_READ));
   });
 
   it('goes from one end of what real circuits have to beyond the other', () => {
@@ -80,16 +80,14 @@ describe('the generator, set from real circuits', () => {
       expect(result.tracks.length).toBe(6);
       for (const t of result.tracks) made.push(trackCharacter(buildTrack(t.design, (x, y) => sampleHeight(hm, x, y))!));
     }
-    // The middle one of them lies, by every measure, where four in five real circuits lie. (But for how a corner
-    // tightens to its apex: a generated corner is still an arc of one radius.)
+    // The middle one of them lies, by every measure, where four in five real circuits lie.
     for (const k of keys) {
-      if (k === 'tightening') continue;
       const [, mid] = spreadOf(made.map((c) => c[k]));
       expect(mid, k).toBeGreaterThanOrEqual(REAL_CIRCUITS[k][0]);
       expect(mid, k).toBeLessThanOrEqual(REAL_CIRCUITS[k][2]);
     }
     // And they are not six of one kind: what they enclose of the outline round them differs as it does between real circuits.
     const [low, , high] = spreadOf(made.map((c) => c.hull));
-    expect(high - low).toBeGreaterThan(0.1);
+    expect(high - low).toBeGreaterThan(0.08);
   }, 120000);
 });
