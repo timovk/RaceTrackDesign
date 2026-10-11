@@ -96,6 +96,32 @@ describe('lap simulation', () => {
     expect(lap.fullThrottle).toBeLessThan(1);
   });
 
+  it('tells full throttle from the limit of wheelspin', () => {
+    const t = track(chicaneCircuit());
+    const line = computeRacingLine(t);
+    // A car with little power for its grip puts it all down as soon as it is out of a corner: only there, with the
+    // tyres still busy turning, is it held by them.
+    const tame = simulateLap(t, line, simpleCar({ power: 90_000 }));
+    expect(tame.tractionLimited).toBeLessThan(0.08);
+    expect(tame.fullThrottle).toBeGreaterThan(0.5);
+    // One with far more power than its tyres take is never on full throttle on these straights: it pulls away at the
+    // limit of wheelspin, for about as much of the lap as the tame one is flat out.
+    const wild = simulateLap(t, line, simpleCar({ power: 900_000, grip: 0.8 }));
+    expect(wild.fullThrottle).toBeLessThan(0.05);
+    expect(wild.tractionLimited).toBeGreaterThan(0.4);
+    expect(wild.fullThrottle + wild.tractionLimited).toBeLessThan(1);
+    // Neither figure counts the time in a corner at the limit of the tyres, or on the brakes.
+    for (const lap of [tame, wild]) {
+      let braking = 0;
+      for (let k = 0; k < t.n; k++) if (lap.brake[k] > 0) braking += (line.ds[k] * 2) / (lap.v[k] + lap.v[(k + 1) % t.n]) / lap.time;
+      expect(lap.fullThrottle + lap.tractionLimited + braking).toBeLessThan(1.001);
+    }
+    // More grip on the driven wheels, and more of the power goes down.
+    const planted = simulateLap(t, line, simpleCar({ power: 900_000, grip: 0.8, driveShare: 1 }));
+    expect(planted.fullThrottle).toBeGreaterThan(wild.fullThrottle);
+    expect(planted.time).toBeLessThan(wild.time);
+  });
+
   it('limits bike braking to the stoppie limit', () => {
     const t = track(chicaneCircuit());
     const bike = VEHICLES.find((v) => v.id === 'motogp')!;

@@ -61,6 +61,7 @@ function detailCard(store: Store): HTMLElement | null {
       ...row('Average speed', fmt.speed(lap.avgSpeed)),
       ...row('Slowest point', fmt.speed(lap.minSpeed)),
       ...row('Full throttle', fmt.percent(lap.fullThrottle)),
+      ...row(fmt.capitalise(fmt.tractionLabel(car.kind)), fmt.percent(lap.tractionLimited)),
       ...row('Braking zones', String(lap.brakingZones)),
       ...(aero ? [] : row('Wing setting', `${trim} downforce`)),
     ),

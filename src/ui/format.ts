@@ -43,6 +43,17 @@ export function percent(f: number): string {
   return `${Math.round(f * 100)}%`;
 }
 
+/** What the share of a lap at the limit of the driven tyres is called: a car spins its wheels, a bike may lift its front one first. */
+export function tractionLabel(kind: 'car' | 'bike'): string {
+  return kind === 'bike' ? 'at the limit of grip or a wheelie' : 'at the limit of wheelspin';
+}
+
+export const TRACTION_HINT = 'Pulling away with all the drive the tyres take: more throttle would only spin the wheels. It is not counted as full throttle.';
+
+export function capitalise(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 export function degrees(d: number): string {
   return `${Math.round(d)}°`;
 }

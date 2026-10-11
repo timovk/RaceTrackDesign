@@ -414,3 +414,4 @@ Ideas 1 to 3 of the earlier list are built. What is left of it, and what buildin
 - Sound.
 - More templates of real circuits, made the way Bremgarten was (`data/templates/README.md`).
 - Side-by-side racing for bikes, after the car version.
+- Gears and a power curve in the lap model. The engine gives its full power at every speed, so a car is on full throttle only once the tyres take all of it: the car of 1950 from 237 km/h, where with four gears, off its power after each change, a driver would be flat from 200 km/h or so (my reckoning; no source). It changes every class's lap, so every class would have to be fitted again.

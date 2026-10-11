@@ -106,6 +106,7 @@ export class ProfileView {
       sep(), `slowest ${fmt.speed(lap.minSpeed)}`,
       sep(), `average ${fmt.speed(lap.avgSpeed)}`,
       sep(), `${fmt.percent(lap.fullThrottle)} full throttle`,
+      sep(), h('span', { title: fmt.TRACTION_HINT }, `${fmt.percent(lap.tractionLimited)} ${fmt.tractionLabel(s.vehicle.kind)}`),
     );
   }
 

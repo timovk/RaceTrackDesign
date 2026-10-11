@@ -118,7 +118,12 @@ describe('the Formula 1 car of 1950', () => {
       let fastest = 0;
       for (const v of lap.v) fastest = Math.max(fastest, v);
       expect(fastest * 3.6, id).toBeLessThan(291);
+      // 350 bhp on tall narrow tyres: hardly any of the lap is at full throttle, and a third of it or more at the limit of wheelspin.
+      expect(lap.fullThrottle, id).toBeLessThan(0.1);
+      expect(lap.tractionLimited, id).toBeGreaterThan(0.3);
     }
+    // (The share of its weight on the driven wheels as it pulls away is that of every other car.)
+    expect(gp.driveShare).toBe(0.6);
   }, 120_000);
 
   it('is far slower than the car of today, and has no wings to open', async () => {

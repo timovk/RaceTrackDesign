@@ -38,6 +38,14 @@ export interface LapResult {
   avgSpeed: number;
   /** Share of the lap time at full throttle. */
   fullThrottle: number;
+  /**
+   * Share of the lap time spent pulling away with all the drive the car can
+   * put down, short of full throttle: the driven tyres are at their limit
+   * (or, on a bike, the front wheel is about to lift), and more throttle
+   * would only spin them. A car with more power than grip has little of its
+   * lap at full throttle and much of it here.
+   */
+  tractionLimited: number;
   brakingZones: number;
 }
 
@@ -165,6 +173,7 @@ export function simulateLapAtTrim(track: Track, line: RacingLine, car: VehicleCl
   const gearTops = gearTopSpeeds(car);
   let time = 0;
   let fullTime = 0;
+  let limitedTime = 0;
   let topSpeed = 0;
   let minSpeed = Infinity;
   for (let k = 0; k < n; k++) {
@@ -182,6 +191,8 @@ export function simulateLapAtTrim(track: Track, line: RacingLine, car: VehicleCl
       brake[k] = Math.min(1, -needed / Math.max(1, brakeForce(k, v[k])));
     }
     if (throttle[k] >= 0.98) fullTime += dt;
+    // Short of full throttle, but with all the drive there is: the forward pass set the speed here, and it was the tyres that held it.
+    else if (needed > 0 && Math.abs(needed - driveForce(k, v[k])) <= 0.02 * needed + 1) limitedTime += dt;
     gear[k] = gearAt(v[k], gearTops);
     topSpeed = Math.max(topSpeed, v[k]);
     minSpeed = Math.min(minSpeed, v[k]);
@@ -207,6 +218,7 @@ export function simulateLapAtTrim(track: Track, line: RacingLine, car: VehicleCl
     minSpeed,
     avgSpeed: line.length / time,
     fullThrottle: fullTime / time,
+    tractionLimited: limitedTime / time,
     brakingZones,
   };
 }
