@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { Director, type TvCar, type TvShot, framingFov, heliStart, heliStep, isOnboard, lineOfSight, subjectIds, timeInSight, tvCameras } from '../src/core/broadcast.ts';
+import { Director, type TvCar, type TvShot, framingFov, heliStart, heliStep, isOnboard, subjectIds, timeInSight, tvCameras } from '../src/core/broadcast.ts';
+import { Solids } from '../src/core/solids.ts';
 import { Earthworks, pitRoad, trackRoad } from '../src/core/scene3d.ts';
 import { flatMap } from './helpers.ts';
-import { facilities, metrics, track as t } from './raceFixture.ts';
+import { tvCars } from '../src/core/race/tvFeed.ts';
+import { car as vehicleOf, facilities, metrics, start as startRace, track as t } from './raceFixture.ts';
 
 const hm = flatMap(100);
 const pit = facilities.pitLane!;
@@ -24,11 +26,12 @@ function car(id: number, u: number, extra: Partial<TvCar> = {}): TvCar {
 }
 
 describe('trackside cameras', () => {
-  it('stand at the corners, the start, the pit lane and beside the straights, and between them see the whole lap', () => {
+  it('stand round the corners, behind the grid and beside the straights, and between them see the whole lap', () => {
     const ids = cams.map((c) => c.id);
-    for (const c of metrics.corners) expect(ids).toContain(`corner-${c.number}`);
+    // (Without the buildings: open ground. The cameras on the roofs and the pit wall are in tests/tvSurvey.test.ts.)
+    for (const c of metrics.corners) expect(ids.some((id) => id.startsWith(`corner-${c.number}`) || id === 't1'), `corner ${c.number}`).toBe(true);
     expect(ids).toContain('start');
-    expect(ids).toContain('pit');
+    expect(ids).toContain('t1');
     expect(ids.some((id) => id.startsWith('straight-'))).toBe(true);
     const covered = new Uint8Array(t.n);
     for (const c of cams) for (let k = 0; k < t.n; k++) covered[k] |= c.sees[k];
@@ -43,10 +46,10 @@ describe('trackside cameras', () => {
   });
 
   it('do not see through a hill', () => {
-    const hill = (x: number) => (Math.abs(x - 100) < 20 ? 30 : 0);
-    expect(lineOfSight([0, 0, 10], 200, 0, 1, (x) => hill(x))).toBe(false);
-    expect(lineOfSight([0, 0, 10], 200, 0, 1, () => 0)).toBe(true);
-    expect(lineOfSight([0, 0, 10], 2000, 0, 1, () => 0)).toBe(false);
+    const hill = new Solids((x) => (Math.abs(x - 100) < 20 ? 30 : 0), (z) => z);
+    const flat = new Solids(() => 0, (z) => z);
+    expect(hill.between([0, 0, 10], [200, 0, 1])).toBe('ground');
+    expect(flat.between([0, 0, 10], [200, 0, 1])).toBeNull();
   });
 
   it('know how long a car stays in sight', () => {
@@ -512,5 +515,184 @@ describe('framing', () => {
     expect(h.height).toBeGreaterThan(100);
     expect(Math.abs(Math.cos(h.angle))).toBeLessThan(0.6);
     expect(heliStep(h, 10).angle - h.angle).toBeCloseTo(0.35, 6);
+  });
+});
+
+describe('television as a sequence', () => {
+  const n = 2000;
+  const ds = 2;
+  /** A camera that sees the stations from `from` to `to` (round the line when `to` is past it). */
+  const cam = (id: string, from: number, to: number, extra: Partial<(typeof cams)[number]> = {}): (typeof cams)[number] => {
+    const sees = new Uint8Array(n);
+    for (let k = from; k < to; k++) sees[((k % n) + n) % n] = 1;
+    return { id, label: id, at: [0, 0, 0], sees, ...extra };
+  };
+  const leader = (u: number, extra: Partial<TvCar> = {}) => car(0, u, { classPosition: 1, position: 1, ...extra });
+  /** Runs a director on one car driving at 60 m/s, for `seconds`; the shots in order. */
+  const drive = (d: Director, from: number, seconds: number, extra: Partial<TvCar> = {}): TvShot[] => {
+    const shots: TvShot[] = [];
+    for (let i = 0; i * 0.1 < seconds; i++) {
+      const shot = d.update(0.1, 1, [leader(from + (i * 0.1 * 60) / ds, extra)], 100 + i * 0.1);
+      if (shot && shots[shots.length - 1] !== shot) shots.push(shot);
+    }
+    return shots;
+  };
+
+  it('leaves a car a moment after it has passed the camera', () => {
+    // The camera sees 1,200 m and stands 300 m into it: a car at 60 m/s passes it after five seconds.
+    let seen = 0;
+    for (let seed = 1; seed <= 12; seed++) {
+      const d = new Director([cam('a', 0, 600, { closest: 150 })], { n, ds }, rng(seed));
+      const shot = d.update(0.1, 1, [leader(0)], 100)!;
+      if (shot.camera !== 'a') continue;
+      seen++;
+      expect(shot.hold).toBeGreaterThanOrEqual(2.5);
+      expect(shot.hold).toBeLessThanOrEqual(5 + 1.3 + 1e-6);
+    }
+    expect(seen).toBeGreaterThan(5);
+    // One it has passed already is held as long as any shot.
+    let longer = 0;
+    for (let seed = 1; seed <= 12; seed++) {
+      const shot = new Director([cam('a', 0, 600, { closest: 10 })], { n, ds }, rng(seed)).update(0.1, 1, [leader(100)], 100)!;
+      if (shot.camera === 'a' && shot.hold > 6.5) longer++;
+    }
+    expect(longer).toBeGreaterThan(0);
+  });
+
+  it('goes on with the same cars from the same side of the road', () => {
+    // Two cameras pick the car up where the first loses it, one on either side: the one on the first one's side has it.
+    let same = 0;
+    let other = 0;
+    for (let seed = 1; seed <= 16; seed++) {
+      const d = new Director([cam('a', 0, 500, { side: 1 }), cam('b', 350, 1100, { side: 1 }), cam('c', 350, 1100, { side: -1 })], { n, ds }, rng(seed));
+      const shots = drive(d, 0, 22, { selected: true });
+      for (let i = 1; i < shots.length; i++) {
+        if (shots[i - 1].camera !== 'a') continue;
+        if (shots[i].camera === 'b') same++;
+        if (shots[i].camera === 'c') other++;
+      }
+    }
+    expect(same).toBeGreaterThan(4);
+    expect(other).toBe(0);
+  });
+
+  it('cuts away from a camera that has lost sight of its cars, and leaves it alone for a while', () => {
+    const d = new Director([cam('a', 0, 1500), cam('b', 0, 1500)], { n, ds }, rng(4));
+    let shot = d.update(0.1, 1, [leader(0, { selected: true })], 100)!;
+    for (let i = 0; i < 40 && !d.camera(shot.camera); i++) shot = d.update(3, 1, [leader(0, { selected: true })], 100)!;
+    const lost = shot.camera;
+    expect(d.camera(lost)).toBeDefined();
+    d.lostSight(lost);
+    for (let i = 0; i < 70; i++) {
+      const next = d.update(0.1, 1, [leader(10 + i * 3, { selected: true })], 101 + i * 0.1)!;
+      expect(next.camera).not.toBe(lost);
+    }
+    // Later it may be used again.
+    const later = new Set<string>();
+    for (let i = 0; i < 400; i++) later.add(d.update(0.5, 1, [leader((i * 15) % 1400, { selected: true })], 120 + i * 0.5)!.camera);
+    expect(later.has(lost)).toBe(true);
+  });
+
+  it('shows the start as a sequence: the grid from behind, then the first corner from its own camera', () => {
+    // The first corner is 500 m from the line, and its camera sees the last 300 m to it.
+    const start = cam('start', -300, 400);
+    const corner = cam('t1', 100, 400, { station: 250 });
+    const grid = (moved: number): TvCar[] => Array.from({ length: 8 }, (_, i) => car(i, n - 4 * i + moved, { speed: moved > 0 ? 50 : 0, interval: 0.5 }));
+    const d = new Director([start, corner, cam('x', 400, 1200)], { n, ds }, rng(5));
+    const first = d.update(0.1, 1, grid(0), 0.1)!;
+    expect(first.camera).toBe('start');
+    expect(first.reason).toBe('start');
+    // The grid is held until the leader is three seconds from the corner (150 m at 50 m/s), in its camera's sight.
+    let second = first;
+    let moved = 0;
+    for (let i = 1; i < 140 && second === first; i++) second = d.update(0.1, 1, grid((moved = i * 2.5)), 0.1 + i * 0.1)!;
+    expect(second.camera).toBe('t1');
+    expect(second.reason).toBe('start');
+    expect(second.subject.kind).toBe('group');
+    expect((250 - moved) * ds).toBeLessThanOrEqual(150);
+    expect((250 - moved) * ds).toBeGreaterThan(130);
+    // It is on for its time.
+    for (let i = 0; i < 30; i++) expect(d.update(0.1, 1, grid(moved + i * 2.5), 20 + i * 0.1)).toBe(second);
+    // Where the corner's camera never has the leader in sight, the grid's has its time and the corner's is left out.
+    const blind = new Director([start, cam('t1', 600, 900, { station: 250 }), cam('x', 400, 1200)], { n, ds }, rng(5));
+    const held = blind.update(0.1, 1, grid(0), 0.1)!;
+    let after = held;
+    let steps = 0;
+    for (; steps < 200 && after === held; steps++) after = blind.update(0.1, 1, grid(Math.min(150, steps * 2.5)), 0.1 + steps * 0.1)!;
+    expect(steps * 0.1).toBeGreaterThan(10);
+    expect(after.camera).not.toBe('t1');
+    // Without a camera for the first corner, the start is what it was.
+    const plain = new Director([start], { n, ds }, rng(5)).update(0.1, 1, grid(0), 0.1)!;
+    expect(plain.hold).toBeCloseTo(8, 6);
+  });
+
+  it('shows the leader to the flag, from a camera that sees the line, once', () => {
+    const line = cam('line', 1500, 2100, { side: 1 });
+    const other = cam('other', 1400, 1990, { side: 1 });
+    const d = new Director([line, other], { n, ds }, rng(6));
+    drive(d, 100, 1);
+    // 400 m from the line at 60 m/s.
+    d.note('finish', 0);
+    let shot: TvShot | null = null;
+    for (let i = 0; i < 60 && shot?.reason !== 'finish'; i++) shot = d.update(0.1, 1, [leader(1800 + i * 3)], 300 + i * 0.1);
+    expect(shot!.reason).toBe('finish');
+    expect(shot!.camera).toBe('line');
+    expect(shot!.hold).toBeGreaterThan(6);
+    // Held over the line, and not shown a second time.
+    let again = 0;
+    let after: TvShot | null = shot;
+    for (let i = 0; i < 200; i++) {
+      const next = d.update(0.1, 1, [leader(1830 + i * 3)], 310 + i * 0.1)!;
+      if (next !== after && next.reason === 'finish') again++;
+      after = next;
+    }
+    expect(again).toBe(0);
+  });
+
+  it('shows a car in the pit lane from the camera on the pit wall, and a stop from the box until the car pulls away', () => {
+    const d = new Director([cam('pit', 0, 300), cam('a', 0, 1500)], { n, ds }, rng(7));
+    const inLane = d.update(0.1, 1, [leader(50, { running: false, inPit: true })], 100)!;
+    expect(inLane.camera).toBe('pit');
+    const box = new Director([cam('pit', 0, 300), cam('a', 0, 1500)], { n, ds }, rng(7));
+    const stopped = leader(50, { running: false, inPit: true, stopped: true, stopLeft: 6 });
+    const stop = box.update(0.1, 1, [stopped], 100)!;
+    expect(stop.camera).toBe('pitbox');
+    // It pulls away: a second and a half more from the box, then the camera on the wall.
+    let next = stop;
+    let steps = 0;
+    for (; steps < 60 && next === stop; steps++) next = box.update(0.1, 1, [leader(50 + steps, { running: false, inPit: true })], 101 + steps * 0.1)!;
+    expect(steps * 0.1).toBeGreaterThan(1.3);
+    expect(steps * 0.1).toBeLessThan(2.2);
+    expect(next.camera).toBe('pit');
+  });
+
+  it('replays from the other side of the road, where a camera there sees as much', () => {
+    let reverse = 0;
+    let same = 0;
+    for (let seed = 1; seed <= 20; seed++) {
+      const d = new Director([cam('a', 0, 1200, { side: 1 }), cam('b', 0, 1200, { side: -1 }), cam('c', 0, 1200, { side: 1 })], { n, ds }, rng(seed));
+      const pair = (u: number): TvCar[] => [car(0, u, { classPosition: 1, position: 1, interval: Infinity }), car(1, u - 10, { classPosition: 2, position: 2, interval: 0.4 })];
+      // On air from one side of the road; a pass; its replay.
+      let live: TvShot | null = null;
+      for (let i = 0; i < 40; i++) live = d.update(0.1, 1, pair(100 + i * 3), 100 + i * 0.1);
+      const side = d.camera(live!.camera)?.side;
+      if (side === undefined) continue;
+      d.note('overtake', 1, { other: 0, raceTime: 104, u: 220 });
+      let replay: TvShot | null = null;
+      for (let i = 0; i < 80 && !replay?.replay; i++) replay = d.update(0.1, 1, pair(220 + i * 3), 104 + i * 0.1);
+      const from = replay?.replay ? d.camera(replay.camera) : undefined;
+      if (!from) continue;
+      if (from.side !== side) reverse++;
+      else same++;
+    }
+    expect(reverse).toBeGreaterThan(3);
+    expect(reverse).toBeGreaterThan(same * 3);
+  });
+
+  it('knows the order of the grid before the race has run a step', () => {
+    const sim = startRace(vehicleOf('f1'), { cars: 12 });
+    const cars = tvCars(sim);
+    expect(cars.map((c) => c.position).sort((a, b) => a - b)).toEqual(Array.from({ length: 12 }, (_, i) => i + 1));
+    for (const c of cars) expect(c.position).toBe(sim.cars[c.id].gridPosition);
   });
 });

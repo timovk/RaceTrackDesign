@@ -4,8 +4,11 @@
  * camera and draws the graphics.
  *
  * A trackside camera stands still and pans and zooms with its car through
- * a long lens, a little behind it like an operator would; the helicopter
- * hangs high off to one side and circles slowly. Onboard cameras ride on
+ * a long lens, a little behind it like an operator would, wide as it picks
+ * the car up and then closing in; the helicopter hangs high off to one side
+ * and circles slowly, clear of the hills. While a shot is on, the line from
+ * the lens to its cars is tried against the ground and everything built
+ * (core/solids.ts): cars that go behind something mean a cut. Onboard cameras ride on
  * the car (tilting with it, and leaning with a bike); the chase camera
  * follows the racing line behind the car. A car in its pit box is shown
  * from the pit lane in front of it, with the stop timer running. A new shot
@@ -33,13 +36,15 @@
  * battle, the final lap, and the chequered flag and the results.
  */
 import * as THREE from 'three';
-import { type Heli, type OnboardView, type TvCamera, type TvCar, type TvShot, Director, framingFov, heliStart, heliStep, isOnboard, subjectIds } from '../core/broadcast.ts';
+import { type Heli, type OnboardView, type TvCamera, type TvShot, Director, framingFov, heliStart, heliStep, isOnboard, subjectIds } from '../core/broadcast.ts';
 import { formatLapTime } from '../core/calibration.ts';
 import { type LapToBeat, type Split, captionName, lapToBeat, splitTime } from '../core/race/lapTimer.ts';
 import { type RaceView, ReplayBuffer } from '../core/race/replay.ts';
 import { SessionSim } from '../core/race/session.ts';
+import { sideBySide, tvCar } from '../core/race/tvFeed.ts';
 import { DT, type RaceCar, type RaceEvent, type RaceSim } from '../core/race/sim.ts';
 import type { Vec3 } from '../core/shots.ts';
+import type { Blocker } from '../core/solids.ts';
 import type { Track } from '../core/track.ts';
 import { h, setChildren } from './dom.ts';
 import type { RaceController } from './raceController.ts';
@@ -63,6 +68,14 @@ export interface TvHost {
   fromDrawn(p: Vec3): THREE.Vector3;
   /** The drawn ground's scene height under a scene point, or null off the map. */
   groundY(x: number, z: number): number | null;
+  /** What is in the way between two scene points (the ground or something built), the last `skip` metres aside; null when the line is clear. */
+  between(from: THREE.Vector3, to: THREE.Vector3, skip?: number): Blocker | null;
+  /** Whether a camera at `from` has a clear picture of a scene point: the line to it clear, and nothing built `half` metres either side of it. */
+  framed(from: THREE.Vector3, to: THREE.Vector3, half: number, skip?: number): boolean;
+  /** What a camera at a scene point would be standing in (within `margin` metres), or null. */
+  standing(at: THREE.Vector3, margin: number): Blocker | null;
+  /** The scene height the ground and anything built reach within `r` metres of a scene point, or null where that is not known. */
+  topWithin(x: number, z: number, r: number): number | null;
   /** The view's size, CSS pixels, and how much of its left side the timing tower covers. */
   size(): { width: number; height: number; covered: number };
 }
@@ -102,6 +115,20 @@ const CLIP_AFTER = 6;
 const FIGHT_AGAIN = 20;
 /** Seconds a message from the stewards stays up. */
 const CONTROL_HOLD = 6;
+/** A car hidden from the camera it is shown from for this long (screen seconds) means a cut to another camera. */
+const HIDDEN_FOR = 0.45;
+/** A trackside camera picks its car up this much wider than it will hold it, and closes in over about this long (seconds). */
+const PICK_UP = 1.7;
+const CLOSE_IN = 1.1;
+/** The camera leads its car by this share of the picture's width, 8 m at most. */
+const LEAD = 0.12;
+/** The helicopter keeps this far above the ground and anything built within this distance of it (metres). */
+const HELI_OVER = 40;
+const HELI_ROUND = 30;
+/** Of a group (the start, a restart), the picture is framed on this many cars at its front. */
+const GROUP_FRAMED = 3;
+/** The leader is shown to the flag from this many race seconds before the line. */
+const TO_THE_FLAG = 9;
 const VIEW_LABEL: Record<OnboardView, string> = { tcam: 'Onboard', nose: 'Nose camera', rear: 'Rear camera', chase: 'Chase camera' };
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -154,6 +181,11 @@ export class TvBroadcast {
   private splitUntil = 0;
   /** Pairs of cars side by side that the director has been told of, and when (screen seconds). */
   private fights = new Map<string, number>();
+  /** How long the cars of the shot have been hidden from its camera, screen seconds; and a quarter of the picture's width at them, metres. */
+  private hidden = 0;
+  private frameHalf = 4;
+  /** The leader's run to the flag has been told to the director. */
+  private flagged = false;
 
   constructor(host: TvHost, race: RaceController, cameras: TvCamera[], n: number, ds: number) {
     this.host = host;
@@ -226,6 +258,7 @@ export class TvBroadcast {
       this.controlQueue = [];
       this.controlUntil = 0;
       this.fights.clear();
+      this.flagged = false;
     }
     this.readEvents(sim);
     this.showControl();
@@ -246,6 +279,7 @@ export class TvBroadcast {
       const beside = sideBySide(sim);
       const cars = sim.cars.map((c) => tvCar(sim, c, r.alpha, r.selected, beside.get(c.id)));
       this.noteFights(sim, beside);
+      this.noteFinish(sim);
       let shot = this.director.update(r.playing ? dt : 0, Math.max(0.05, r.speed), cars, sim.t);
       // A replay draws the race as it was; one that is no longer kept ends at once.
       this.replayed = shot?.replay ? this.buffer.view(sim, Math.min(shot.replay.to, shot.replay.from + (this.director.clock - shot.start) * shot.replay.speed)) : null;
@@ -266,6 +300,7 @@ export class TvBroadcast {
       this.shot = shot;
       if (shot) {
         this.point(shot, dt, cut);
+        this.watch(shot, r.playing ? dt : 0, cut);
         if (!shot.replay) this.showTiming(shot, sim, cut);
       }
       this.showStop(shot?.replay ? null : shot, sim);
@@ -329,11 +364,13 @@ export class TvBroadcast {
     const ids = subjectIds(shot.subject);
     const poses = ids.map((id) => this.host.car(id)).filter((p): p is NonNullable<typeof p> => !!p);
     if (poses.length === 0) return null;
+    // (A group is framed on its front three: the leaders stay a size worth looking at, the rest trail out of the picture.)
+    const framed = shot.subject.kind === 'group' ? poses.slice(0, GROUP_FRAMED) : poses;
     const centre = new THREE.Vector3();
-    for (const p of poses) centre.add(p.position);
-    centre.divideScalar(poses.length);
+    for (const p of framed) centre.add(p.position);
+    centre.divideScalar(framed.length);
     let spread = 0;
-    for (const p of poses) spread = Math.max(spread, 2 * p.position.distanceTo(centre));
+    for (const p of framed) spread = Math.max(spread, 2 * p.position.distanceTo(centre));
     const car = this.race.sim?.cars[ids[ids.length - 1]];
     return { centre, heading: poses[poses.length - 1].heading, size: spread + poses[0].length * 1.3, speed: car?.v ?? 0 };
   }
@@ -354,12 +391,14 @@ export class TvBroadcast {
     }
     const sub = this.subject(shot);
     if (!sub) return;
-    // A little ahead of the car, as a camera operator leads it.
+    // A little ahead of the car, as a camera operator leads it (by how much: once the picture's width is known).
     const forward = new THREE.Vector3(Math.cos(sub.heading), 0, Math.sin(sub.heading));
-    const target = sub.centre.clone().addScaledVector(forward, Math.min(4, sub.speed * 0.04));
+    const target = sub.centre.clone();
     let position: THREE.Vector3;
     let wantFov: number;
     let lag = 0.25;
+    let share = 0.5;
+    let pickUp = 1;
     if (shot.camera === 'chase') {
       const car = this.race.sim?.cars[shot.carrier!];
       const pose = this.host.car(shot.carrier!);
@@ -370,6 +409,8 @@ export class TvBroadcast {
       if (!want) return;
       const ground = this.host.groundY(want.x, want.z);
       if (ground !== null) want.y = Math.max(want.y, ground + 1.5);
+      // (Over a crest the road itself may come between: higher, until it sees its car.)
+      for (let lift = 0; lift < 5 && this.host.between(want, pose.position, 1.5) === 'ground'; lift++) want.y += 1;
       if (cut || !this.chase) this.chase = want.clone();
       else this.chase.lerp(want, follow(0.15));
       position = this.chase;
@@ -382,26 +423,35 @@ export class TvBroadcast {
       if (!pose) return;
       this.heli = null;
       if (cut || !this.box) {
-        // On the pit wall across the fast lane, a little ahead of the box, above head height.
+        // On the pit wall across the fast lane, a little ahead of the box, above head height: never in the garages
+        // or behind anything. Where that place is taken or sees nothing, the next best along the wall.
         const hd = pose.heading;
         const left = new THREE.Vector3(Math.sin(hd), 0, -Math.cos(hd));
-        const at = pose.position.clone().addScaledVector(forward, PIT_AHEAD).addScaledVector(left, -this.host.pitSide * PIT_ACROSS);
-        at.y = (this.host.groundY(at.x, at.z) ?? pose.position.y) + PIT_UP;
-        this.box = at;
+        const spot = (ahead: number, across: number) => {
+          const at = pose.position.clone().addScaledVector(forward, ahead).addScaledVector(left, -this.host.pitSide * across);
+          at.y = (this.host.groundY(at.x, at.z) ?? pose.position.y) + PIT_UP;
+          return at;
+        };
+        const spots = [spot(PIT_AHEAD, PIT_ACROSS), spot(PIT_AHEAD * 2.5, PIT_ACROSS), spot(-PIT_AHEAD, PIT_ACROSS), spot(PIT_AHEAD, PIT_ACROSS * 0.6), spot(PIT_AHEAD * 2.5, PIT_ACROSS * 0.6)];
+        this.box = spots.find((at) => !this.host.standing(at, 0.8) && !this.host.between(at, pose.position, 2.5)) ?? spots[0];
       }
       position = this.box;
-      wantFov = framingFov(position.distanceTo(target), sub.size, 0.55, aspect, 8, 60);
+      share = 0.55;
+      wantFov = framingFov(position.distanceTo(target), sub.size, share, aspect, 8, 60);
     } else if (shot.camera === 'heli') {
       if (cut || !this.heli) this.heli = this.clearHeli(heliStart(sub.heading), sub.centre);
       this.heli = heliStep(this.heli, dt);
       const hp = this.heli;
       const want = this.heliSpot(hp, sub.centre);
-      // A hill coming between: climb.
+      // A hill or a building coming between: climb.
       if (!this.clear(this.heliPos, sub.centre)) hp.height += dt * 40;
       if (cut) this.heliPos.copy(want);
       else this.heliPos.lerp(want, follow(1.4));
+      // (On its way from one place to the next too, it stays well over the ground and whatever is built on it.)
+      const top = this.host.topWithin(this.heliPos.x, this.heliPos.z, HELI_ROUND);
+      if (top !== null) this.heliPos.y = Math.max(this.heliPos.y, top + HELI_OVER);
       position = this.heliPos;
-      const share = shot.subject.kind === 'car' ? 0.2 : shot.subject.kind === 'battle' ? 0.32 : 0.45;
+      share = shot.subject.kind === 'car' ? 0.2 : shot.subject.kind === 'battle' ? 0.32 : 0.45;
       wantFov = framingFov(position.distanceTo(target), Math.max(sub.size, 6), share, aspect, 4, 40);
       lag = 0.5;
     } else {
@@ -409,9 +459,15 @@ export class TvBroadcast {
       if (!tc) return;
       this.heli = null;
       position = this.host.fromDrawn(tc.at);
-      const share = shot.subject.kind === 'car' ? 0.5 : shot.subject.kind === 'battle' ? 0.75 : 0.85;
+      share = shot.subject.kind === 'car' ? 0.5 : shot.subject.kind === 'battle' ? 0.75 : 0.85;
       wantFov = framingFov(position.distanceTo(target), sub.size, share, aspect, 1.2, 45);
+      // It picks the car up wide and closes in (not the start, held wide on the grid, nor a replay's second look).
+      if (shot.reason !== 'start' && !shot.replay) pickUp = PICK_UP;
     }
+    // (What is to be free of buildings: the middle half of the picture.)
+    this.frameHalf = Math.max(3, Math.min(14, (0.25 * sub.size) / share));
+    // Room in front of the car: the camera leads it by a share of the picture's width.
+    if (shot.camera !== 'chase' && sub.speed > 3) target.addScaledVector(forward, Math.min(8, (LEAD * sub.size) / share));
     // Panning with the car (its speed across the view), and closing what is left with a little lag.
     if (cut || !this.lastTarget || dt <= 0) {
       if (cut) this.aim.copy(target);
@@ -420,8 +476,48 @@ export class TvBroadcast {
       this.aim.lerp(target, follow(lag));
     }
     this.lastTarget = target.clone();
-    this.fov = cut ? wantFov : this.fov + (wantFov - this.fov) * follow(0.6);
+    this.fov = cut ? Math.min(pickUp > 1 ? 45 : 90, wantFov * pickUp) : this.fov + (wantFov - this.fov) * follow(pickUp > 1 ? CLOSE_IN : 0.6);
     this.place(position, this.aim, this.fov);
+  }
+
+  /**
+   * While a trackside camera is on: whether it sees the cars it shows, by
+   * the line from the lens to each as drawn. Hidden for more than a moment
+   * (a stand, the pit building, a hillside between them), the director is
+   * told, and cuts to a camera that sees them. The cars of a start or a
+   * restart are many: the first and the last are looked at.
+   */
+  private watch(shot: TvShot, dt: number, cut: boolean): void {
+    if (cut) this.hidden = 0;
+    const tc = this.director.camera(shot.camera);
+    if (!tc || dt <= 0) return;
+    // (The first corner after the start waits for the field to come into view: it is on for its time.)
+    if (shot.reason === 'start' && shot.camera !== 'start') return;
+    const from = this.host.fromDrawn(tc.at);
+    const ids = subjectIds(shot.subject);
+    const looked = ids.length > 2 ? [ids[0], ids[ids.length - 1]] : ids;
+    let blocked = false;
+    for (const id of looked) {
+      const pose = this.host.car(id);
+      if (!pose) continue;
+      const at = pose.position.clone();
+      at.y += 0.6;
+      // (Hidden, or with something built in the picture beside it; the grid is shown with what stands on either
+      // side of it, so there only the line to the cars is to be free.)
+      const seen = shot.reason === 'start' ? this.host.between(from, at, 4) === null : this.host.framed(from, at, this.frameHalf, 4);
+      if (!seen) blocked = true;
+      // (Nor is it seen where the camera cannot turn to: what it stands on would be in the picture.)
+      if (tc.stand && tc.pan !== undefined) {
+        const way = this.host.fromDrawn([tc.at[0] + Math.cos(tc.stand.facing), tc.at[1] + Math.sin(tc.stand.facing), tc.at[2]]).sub(from);
+        const to = at.clone().sub(from).setY(0);
+        if (to.lengthSq() > 1 && way.setY(0).angleTo(to) > tc.pan) blocked = true;
+      }
+    }
+    this.hidden = blocked ? this.hidden + dt : 0;
+    if (this.hidden >= HIDDEN_FOR) {
+      this.hidden = 0;
+      this.director.lostSight(shot.camera);
+    }
   }
 
   /**
@@ -523,11 +619,11 @@ export class TvBroadcast {
     this.showCaption(carCaption(sim, car, head, '', slot), GRID_PER_CAR - 0.4);
   }
 
-  /** Where the helicopter hangs for a subject at `centre`: off to the side and up, at least 50 m over the ground below it. */
+  /** Where the helicopter hangs for a subject at `centre`: off to the side and up, well over the ground and anything built round the place. */
   private heliSpot(hp: Heli, centre: THREE.Vector3): THREE.Vector3 {
     const at = centre.clone().add(new THREE.Vector3(Math.cos(hp.angle) * hp.radius, hp.height, Math.sin(hp.angle) * hp.radius));
-    const ground = this.host.groundY(at.x, at.z);
-    if (ground !== null) at.y = Math.max(at.y, ground + 50);
+    const top = this.host.topWithin(at.x, at.z, HELI_ROUND) ?? this.host.groundY(at.x, at.z);
+    if (top !== null) at.y = Math.max(at.y, top + HELI_OVER + 10);
     return at;
   }
 
@@ -544,19 +640,9 @@ export class TvBroadcast {
     return { ...start, height: start.height * 3 };
   }
 
-  /** Whether the drawn ground stays below the line between two scene points (the last few metres aside). */
+  /** Whether neither the drawn ground nor anything built is on the line between two scene points (the last few metres aside). */
   private clear(from: THREE.Vector3, to: THREE.Vector3): boolean {
-    const d = from.distanceTo(to);
-    const steps = Math.max(8, Math.ceil(d / 20));
-    for (let i = 1; i < steps; i++) {
-      const f = i / steps;
-      if ((1 - f) * d < 8) break;
-      const x = from.x + (to.x - from.x) * f;
-      const z = from.z + (to.z - from.z) * f;
-      const g = this.host.groundY(x, z);
-      if (g !== null && g > from.y + (to.y - from.y) * f - 1) return false;
-    }
-    return true;
+    return this.host.between(from, to, 8) === null;
   }
 
   /** A new shot: a caption when it shows someone new. */
@@ -601,7 +687,7 @@ export class TvBroadcast {
   }
 
   private caption(shot: TvShot, sim: RaceSim): HTMLElement | null {
-    const head = { battle: 'Battle', incident: 'Incident', overtake: 'Overtake', leader: '', pit: 'Pit stop', selected: '', field: '', start: '', replay: 'Replay', flying: 'Flying lap' }[shot.reason];
+    const head = { battle: 'Battle', incident: 'Incident', overtake: 'Overtake', leader: '', pit: 'Pit stop', selected: '', field: '', start: '', replay: 'Replay', flying: 'Flying lap', finish: 'To the flag' }[shot.reason];
     if (shot.subject.kind === 'group') return null;
     if (shot.subject.kind === 'battle') {
       const a = sim.cars[shot.subject.ahead];
@@ -759,6 +845,24 @@ export class TvBroadcast {
     for (const el of [...this.pops.children] as HTMLElement[]) if (Number(el.dataset.until) < this.time) el.remove();
   }
 
+  /**
+   * The leader a few seconds from the chequered flag: news for the director,
+   * who shows it to the line (once: the flag falls for the winner).
+   */
+  private noteFinish(sim: RaceSim): void {
+    if (this.flagged || sim.setup.session || sim.chequered || sim.finished || sim.t <= 0) return;
+    const laps = sim.setup.laps;
+    const limit = sim.limit;
+    const final = sim.setup.duration !== null ? limit !== null && sim.t >= limit : laps !== null && sim.leaderLap >= laps;
+    const leader = sim.order.find((c) => c.status === 'running');
+    if (!final || !leader) return;
+    const n = sim.model.n;
+    const toLine = ((n - (((leader.u % n) + n) % n)) * sim.model.track.ds) / Math.max(20, leader.v);
+    if (toLine > TO_THE_FLAG) return;
+    this.flagged = true;
+    this.director.note('finish', leader.id);
+  }
+
   /** Two cars of a class, next to each other in it, that have come side by side: news for the director, once in a while. */
   private noteFights(sim: RaceSim, beside: Map<number, number>): void {
     for (const [id, other] of beside) {
@@ -868,59 +972,6 @@ function hash01(text: string): number {
 function smooth(x: number): number {
   const u = Math.max(0, Math.min(1, x));
   return u * u * (3 - 2 * u);
-}
-
-/**
- * The cars of a class that are side by side now, each with the other: both
- * on the road, their bodies overlapping along it and clear of each other
- * across it. Only in a race of cars under green.
- */
-function sideBySide(sim: RaceSim): Map<number, number> {
-  const out = new Map<number, number>();
-  if (!sim.lanes || sim.setup.session || sim.phase !== 'green') return out;
-  const n = sim.model.n;
-  const ds = sim.model.track.ds;
-  const cars = sim.cars.filter((c) => c.status === 'running' && !c.offTrack);
-  for (let i = 0; i < cars.length; i++) {
-    for (let j = i + 1; j < cars.length; j++) {
-      const a = cars[i];
-      const b = cars[j];
-      if (a.cls !== b.cls) continue;
-      let d = (((a.u - b.u) % n) + n) % n;
-      if (d > n / 2) d -= n;
-      if (Math.abs(d * ds) < (a.cls.length + b.cls.length) / 2 && Math.abs(a.lateral - b.lateral) >= a.cls.half + b.cls.half) {
-        out.set(a.id, b.id);
-        out.set(b.id, a.id);
-      }
-    }
-  }
-  return out;
-}
-
-function tvCar(sim: RaceSim, c: RaceCar, alpha: number, selected: number | null, beside?: number): TvCar {
-  const session = sim instanceof SessionSim ? sim : null;
-  // In a session gaps are between best laps, not on track: no battles; and a car in its garage is no pit stop.
-  const gap = session ? null : sim.classInterval(c);
-  // Nor is a car queued at the pit exit under a red flag.
-  const stopped = c.status === 'pit' && !!c.pit?.stopped && !session && c.pit.service.reason !== 'red flag';
-  const s = session?.of(c);
-  const closing = !!session && session.spec.kind === 'qualifying' && session.timeLeft < Math.min(240, session.spec.duration * 0.25);
-  return {
-    id: c.id,
-    u: c.prevU + (c.u - c.prevU) * alpha,
-    speed: c.v,
-    position: c.position,
-    classIndex: c.cls.index,
-    classPosition: c.classPosition,
-    interval: gap?.kind === 'time' ? gap.value : Infinity,
-    running: c.status === 'running',
-    inPit: c.status === 'pit',
-    stopped,
-    stopLeft: stopped ? Math.max(0, c.pit!.stoppedUntil - sim.t) : 0,
-    selected: c.id === selected,
-    pushing: s && c.status === 'running' && s.phase === 'push' && s.fromLine ? (closing ? 2 : 1) : 0,
-    ...(beside === undefined ? {} : { beside }),
-  };
 }
 
 function placeText(sim: RaceSim, car: RaceCar): string {

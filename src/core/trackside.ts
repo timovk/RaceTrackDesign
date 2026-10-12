@@ -7,6 +7,8 @@
  * - a gantry over the start line with the lights, and a bridge over the
  *   longest straights, with boards on both faces;
  * - the crowd: people on the rows of the grandstands;
+ * - what the television cameras stand on: scaffold towers, platforms on the
+ *   roofs, and a post on the pit wall;
  * - tyre marks on the asphalt: the worn-in ones at the braking points, and
  *   those the cars of a race leave (`RaceSim.marks`).
  *
@@ -16,6 +18,7 @@
  */
 import type { Corner, Straight } from './analysis.ts';
 import type { BarrierRun } from './barriers.ts';
+import type { TvCamera } from './cameraPlan.ts';
 import type { LapResult } from './lapSim.ts';
 import type { PitLane } from './pitLane.ts';
 import type { SkidMark } from './race/sim.ts';
@@ -264,6 +267,12 @@ export function placeGantries(
     }
   }
   return out;
+}
+
+/** A gantry's beam: how far above the road under it it begins and ends, and how deep it is along the track, metres. */
+export function gantryBeam(g: Gantry): { lo: number; hi: number; depth: number } {
+  const bridge = g.kind === 'bridge';
+  return { lo: bridge ? BRIDGE_LOW : GANTRY_LOW, hi: bridge ? BRIDGE_HIGH : GANTRY_HIGH, depth: bridge ? 1.6 : 0.5 };
 }
 
 /** The gantries as meshes: posts, beams and the lights (plain), and the boards on both faces (textured). */
@@ -539,4 +548,76 @@ export function brakingMarks(t: Track, line: RacingLine, lap: LapResult, seed: s
     i += len;
   }
   return marks;
+}
+
+// ---- camera towers ----------------------------------------------------------------
+
+/** A camera's platform: this wide and deep, its rail this high, and the lens this far above its deck (metres). */
+const DECK = 2.2;
+const RAIL = 1.05;
+const EYE = 1.6;
+
+/**
+ * What the television cameras stand on, so that a camera in another
+ * camera's picture is a camera: a scaffold tower with a platform for each
+ * camera beside the track (its open side to the track, the camera at the
+ * edge), a platform with a rail for one on a roof, and a post for the one on
+ * the pit wall. The camera's own body is behind its lens.
+ */
+export function buildCameraMounts(cams: readonly TvCamera[]): MeshData {
+  const mb = new MeshBuilder();
+  const steel = [0.34, 0.36, 0.4];
+  const deckColor = [0.46, 0.47, 0.49];
+  const body = [0.07, 0.07, 0.08];
+  for (const cam of cams) {
+    const st = cam.stand;
+    if (!st) continue;
+    const fx = Math.cos(st.facing);
+    const fy = Math.sin(st.facing);
+    // Across: to the left of the way it faces.
+    const lx = fy;
+    const ly = -fx;
+    const floor = st.ground;
+    /** A box in the camera's own terms: `a` metres ahead of the lens, `l` to its left, `h` above the floor it stands on. */
+    const box = (a0: number, a1: number, l0: number, l1: number, h0: number, h1: number, color: readonly number[]) => {
+      const c = (a: number, l: number, h: number): [number, number, number, number] => [cam.at[0] + fx * a + lx * l, floor + h, cam.at[1] + fy * a + ly * l, floor];
+      mb.face([c(a0, l0, h1), c(a1, l0, h1), c(a1, l1, h1), c(a0, l1, h1)], [0, 1, 0], color);
+      mb.face([c(a0, l0, h0), c(a1, l0, h0), c(a1, l1, h0), c(a0, l1, h0)], [0, -1, 0], color);
+      mb.face([c(a1, l0, h0), c(a1, l1, h0), c(a1, l1, h1), c(a1, l0, h1)], [fx, 0, fy], color);
+      mb.face([c(a0, l0, h0), c(a0, l1, h0), c(a0, l1, h1), c(a0, l0, h1)], [-fx, 0, -fy], color);
+      mb.face([c(a0, l1, h0), c(a1, l1, h0), c(a1, l1, h1), c(a0, l1, h1)], [lx, 0, ly], color);
+      mb.face([c(a0, l0, h0), c(a1, l0, h0), c(a1, l0, h1), c(a0, l0, h1)], [-lx, 0, -ly], color);
+    };
+    if (cam.mount === 'post') {
+      // A post, and the camera on a head at its top (it turns right round, so its body is under the lens).
+      box(-0.07, 0.07, -0.07, 0.07, 0, st.up - 0.3, steel);
+      box(-0.16, 0.16, -0.16, 0.16, st.up - 0.3, st.up - 0.12, body);
+      continue;
+    }
+    const deck = Math.max(0, st.up - EYE);
+    const back = -DECK + 0.25;
+    const half = DECK / 2;
+    box(back, 0.25, -half, half, deck - 0.12, deck, deckColor);
+    if (cam.mount !== 'roof') {
+      // Four legs from the ground (and a little into it, on a slope), with a frame round them every three metres.
+      for (const [a, l] of [[back, -half], [back, half - 0.1], [0.15, -half], [0.15, half - 0.1]] as const) box(a, a + 0.1, l, l + 0.1, -1.5, deck - 0.12, steel);
+      for (let h = 3; h < deck - 1; h += 3) {
+        box(back, 0.25, -half, -half + 0.06, h, h + 0.06, steel);
+        box(back, 0.25, half - 0.06, half, h, h + 0.06, steel);
+        box(back, back + 0.06, -half, half, h, h + 0.06, steel);
+        box(0.19, 0.25, -half, half, h, h + 0.06, steel);
+      }
+    }
+    // A rail round the back and the sides; the side to the track is open.
+    for (const h of [deck + RAIL / 2, deck + RAIL]) {
+      box(back, back + 0.05, -half, half, h - 0.05, h, steel);
+      box(back, 0.25, -half, -half + 0.05, h - 0.05, h, steel);
+      box(back, 0.25, half - 0.05, half, h - 0.05, h, steel);
+    }
+    for (const [a, l] of [[back, -half], [back, half - 0.05], [0.2, -half], [0.2, half - 0.05]] as const) box(a, a + 0.05, l, l + 0.05, deck, deck + RAIL, steel);
+    // The camera on its tripod, behind and below the lens.
+    box(-0.42, -0.36, -0.03, 0.03, deck, st.up - 0.16, steel);
+    box(-0.75, -0.08, -0.13, 0.13, st.up - 0.16, st.up + 0.14, body);
+  }
+  return mb.build();
 }

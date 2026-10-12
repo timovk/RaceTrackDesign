@@ -46,12 +46,12 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { COLORS, Earthworks, type MeshData, type Road, VERGE, anchoredHeight, buildRoads, buildSides, buildTerrain, pitRoad, startLine, trackRoad } from '../core/scene3d.ts';
 import {
-  type Footprint, type PostSite, type RunoffArea, TrackIndex, type Trees, buildGrandstands, buildGridMarks, buildKerbs, buildMarshalPosts, buildPitBuilding, buildRunoff,
-  forest, inside, kerbRuns, lineFlagSite, marshalPostSites, placeGrandstands, placeTrees, runoffAreas, runoffPoints, runoffTest, TREES_NEAR, treesInSight,
+  type PostSite, TrackIndex, type Trees, buildGrandstands, buildGridMarks, buildKerbs, buildMarshalPosts, buildRunoff,
+  forest, inside, kerbRuns, placeTrees, runoffPoints, TREES_NEAR, treesInSight,
 } from '../core/scenery.ts';
 import { type Pose, type Shot, type ShotInput, type Vec3, flyoverDuration, flyoverPose, hotLapPose, trackShots } from '../core/shots.ts';
-import { type BarrierRun, barrierRuns, buildBarriers, buildFences, insideBarriers } from '../core/barriers.ts';
-import { type Crowd, type SkidMesh, brakingMarks, buildBoards, buildGantries, buildSkidMarks, placeBoards, placeGantries, roadHeight, seatCrowd } from '../core/trackside.ts';
+import { buildBarriers, buildFences } from '../core/barriers.ts';
+import { type Crowd, type SkidMesh, brakingMarks, buildBoards, buildCameraMounts, buildGantries, buildSkidMarks, roadHeight, seatCrowd } from '../core/trackside.ts';
 import type { RaceSim } from '../core/race/sim.ts';
 import { RAMP_MIN_RANGE, ROCK, contourInterval } from '../core/terrainImage.ts';
 import type { Track } from '../core/track.ts';
@@ -60,6 +60,8 @@ import { h, setChildren, setText } from './dom.ts';
 import { download, slug } from './download.ts';
 import * as fmt from './format.ts';
 import { type TvCamera, tvCameras } from '../core/broadcast.ts';
+import { Solids } from '../core/solids.ts';
+import { type Venue, placeVenue, venueSolids } from '../core/venue.ts';
 import { flagState, lineFlag, postSignals } from '../core/flags.ts';
 import { DT } from '../core/race/sim.ts';
 import { cloudCover, lineWetness, standingWater } from '../core/weatherFx.ts';
@@ -94,7 +96,7 @@ const SHADOW_RECEIVERS = new Set([
 ]);
 /** How dark the rubber worn into the braking points is, of a fresh tyre mark. */
 const WORN_IN = 0.7;
-const SHADOW_CASTERS = new Set(['pitBuilding', 'stands', 'posts', 'terrain', 'barriers', 'tyres', 'fences', 'boards', 'boardFrames', 'gantries', 'gantryBoards']);
+const SHADOW_CASTERS = new Set(['pitBuilding', 'stands', 'posts', 'terrain', 'barriers', 'tyres', 'fences', 'boards', 'boardFrames', 'gantries', 'gantryBoards', 'cameraMounts']);
 /** The graphics setting, kept per browser. */
 const GRAPHICS_KEY = 'racetrackdesign.graphics';
 /** The finish on the picture: a light one when looking round, a broadcast's on TV. */
@@ -153,6 +155,9 @@ export class View3D {
   private readonly tvButton: HTMLButtonElement;
   /** The trackside cameras, worked out once per track, facilities and height exaggeration. */
   private tvCams: { input: unknown; relief: number; cams: TvCamera[] } | null = null;
+  /** What stands round the track (core/venue.ts), and what of it is in a camera's way at the relief drawn. */
+  private venue: Venue | null = null;
+  private solids: { relief: number; solids: Solids } | null = null;
   private lastStep = 0;
   private readonly canvas: HTMLCanvasElement;
   private readonly renderer: THREE.WebGLRenderer;
@@ -718,18 +723,14 @@ export class View3D {
     const earth = new Earthworks(hm, roads);
     this.earth = earth;
 
-    // Run-off outside the corners, once the analysis belongs to this track. The ground under it gets full
-    // detail, so it does not show through between coarse cells.
-    let areas: RunoffArea[] = [];
-    let index: TrackIndex | null = null;
-    let blocked: ((x: number, y: number) => boolean) | undefined;
-    if (t && ready) {
-      index = new TrackIndex(t);
-      // Run-off and barriers stop at the other roads: a gravel trap ends where the rest of the circuit carries on.
-      const others = this.otherRoads.length ? new Earthworks(hm, this.otherRoads) : null;
-      blocked = others ? (x: number, y: number) => others.clearance(x, y) < VERGE + 2 : undefined;
-      areas = s.licence ? runoffAreas(t, s.metrics!.corners, s.licence.runoff, earth, index, blocked) : [];
-    }
+    // What stands round the track, once the analysis belongs to it (core/venue.ts): the run-off outside the corners,
+    // the buildings, the barriers. The ground under the run-off gets full detail, so it does not show through
+    // between coarse cells.
+    const venue = t && ready ? placeVenue({ hm, track: t, metrics: s.metrics!, facilities: s.facilities!, runoff: s.licence?.runoff ?? null, earth, pitRoad: pit, otherRoads: this.otherRoads }) : null;
+    this.venue = venue;
+    this.solids = null;
+    const areas = venue?.areas ?? [];
+    const index = venue?.index ?? null;
 
     const terrain = buildTerrain(hm, roads, earth, t && areas.length ? runoffPoints(t, areas) : undefined);
     const geo = geometry(terrain);
@@ -757,28 +758,25 @@ export class View3D {
     this.buildLine(t);
 
     // Scenery, once the analysis belongs to this track.
-    const footprints: Footprint[] = [];
-    let barriers: BarrierRun[] = [];
-    if (t && ready && index) {
+    const footprints = venue?.footprints ?? [];
+    if (t && venue && index) {
       const metrics = s.metrics!;
       this.add('kerbs', new THREE.Mesh(geometry(buildKerbs(t, kerbRuns(t, s.performance!.line, metrics.corners))), this.surfaceMaterial(-2, this.asphalt(0.35))));
       // Run-off lies beyond the verges and never overlaps a road, so it can win over the ground by a wide margin.
       if (areas.length) this.add('runoff', new THREE.Mesh(geometry(buildRunoff(t, areas, earth)), this.surfaceMaterial(-4, surfaceDetail(this.surfaces, 'asphalt', { amount: 1.2, normal: 1.2, gravel: true, patches: true }), 0.5)));
-      if (pitLane && pit) {
-        const building = buildPitBuilding(pitLane, pit, { x: t.x[0], y: t.y[0] });
-        footprints.push(building.footprint);
+      const building = venue.building;
+      if (building) {
         // (Every face casts a shadow, lit or not: the building is no closed shell, and the sun would leak through its front into the garages.)
         this.add('pitBuilding', new THREE.Mesh(geometry(building.mesh), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, shadowSide: THREE.DoubleSide })));
         this.add('pitSigns', new THREE.Mesh(geometry(building.signs), this.signMaterial()));
         this.add('pitMarkings', new THREE.Mesh(geometry(building.markings), this.surfaceMaterial(-4, this.asphalt(0.6))));
       }
-      const stands = placeGrandstands(t, metrics.corners, s.facilities!.overtaking, pitLane, areas, earth, footprints);
-      footprints.push(...stands.map((x) => x.footprint));
+      const stands = venue.stands;
       if (stands.length) this.add('stands', new THREE.Mesh(geometry(buildGrandstands(stands)), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 })));
       this.crowd = stands.length ? seatCrowd(stands, s.project.terrain.seed) : null;
       this.crowdLayer.build(this.crowd, s.view.relief);
       // Barriers round the track, behind the run-off: steel rails, tyre walls at the gravel traps, catch fencing by the stands.
-      barriers = barrierRuns({ track: t, index, earth, runoff: areas, pit: pitLane, stands, avoid: footprints, blocked });
+      const barriers = venue.barriers;
       const built = buildBarriers(t, barriers, earth);
       if (built.steel.indices.length) this.add('barriers', new THREE.Mesh(geometry(built.steel), new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.8, roughness: 0.38 })));
       if (built.tyres.indices.length) this.add('tyres', new THREE.Mesh(geometry(built.tyres), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75 })));
@@ -790,18 +788,16 @@ export class View3D {
       }
       this.add('grid', new THREE.Mesh(geometry(buildGridMarks(t, s.facilities!.grid, index)), this.surfaceMaterial(-4, this.asphalt(0.6))));
       // Advertising boards behind the barriers, and the gantries over the road.
-      const boards = buildBoards(placeBoards(t, barriers, metrics.corners, earth));
+      const boards = buildBoards(venue.boards);
       if (boards.faces.indices.length) {
         this.add('boards', new THREE.Mesh(geometry(boards.faces), this.signMaterial()));
         this.add('boardFrames', new THREE.Mesh(geometry(boards.frames), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, side: THREE.DoubleSide })));
       }
-      const gantries = placeGantries(t, metrics.straights, pitLane, earth, footprints, blocked);
+      const gantries = venue.gantries;
       if (gantries.length) {
         const built2 = buildGantries(t, gantries);
         this.add('gantries', new THREE.Mesh(geometry(built2.structure), new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.4, roughness: 0.55 })));
         this.add('gantryBoards', new THREE.Mesh(geometry(built2.faces), this.signMaterial()));
-        // (Nothing grows round their posts.)
-        for (const g of gantries) for (const e of g.ends) if (e.post) footprints.push({ x: [e.x - 1, e.x + 1, e.x + 1, e.x - 1], y: [e.y - 1, e.y - 1, e.y + 1, e.y + 1] });
       }
       // The rubber worn into the asphalt where a lap brakes hardest: the reference class's, whichever class is picked.
       this.roadAt = roadHeight(index, (x, y) => earth.height(x, y));
@@ -811,19 +807,11 @@ export class View3D {
         if (worn.indices.length) this.add('rubber', new THREE.Mesh(skidGeometry(worn), this.skidMaterial));
       }
     }
-    const onRunoff = t && index && areas.length ? runoffTest(t, areas, index) : null;
-    const behindBarrier = t && index && barriers.length ? insideBarriers(t, barriers, index) : null;
-    this.postSites = [];
-    this.lineSite = null;
-    if (t && ready) {
-      // Marshal posts behind the run-off and the barriers, clear of the buildings, and the flag marshal's rostrum at the line.
-      const taken = (x: number, y: number) => (onRunoff?.(x, y, 2) ?? false) || (behindBarrier?.(x, y, 1.5) ?? false) || footprints.some((f) => inside(f, x, y, 2));
-      this.postSites = marshalPostSites(t, s.facilities!.marshals.posts, earth, taken);
-      this.lineSite = lineFlagSite(t, (pitLane?.side ?? 1) as 1 | -1, earth, taken);
-      const sites = [...this.postSites, this.lineSite];
-      footprints.push(...sites.map((p) => p.footprint));
-      this.add('posts', new THREE.Mesh(geometry(buildMarshalPosts(sites)), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 })));
-    }
+    const onRunoff = venue?.onRunoff ?? null;
+    // Marshal posts behind the run-off and the barriers, clear of the buildings, and the flag marshal's rostrum at the line.
+    this.postSites = venue?.posts ?? [];
+    this.lineSite = venue?.lineSite ?? null;
+    if (venue) this.add('posts', new THREE.Mesh(geometry(buildMarshalPosts([...venue.posts, venue.lineSite])), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8 })));
     this.placeMarshals();
     this.trees = placeTrees(
       earth, this.forestFor(hm), (x, y) => (onRunoff?.(x, y, 10) ?? false) || footprints.some((f) => inside(f, x, y, 8)),
@@ -1065,8 +1053,21 @@ export class View3D {
     if (this.path) this.stopPath();
     this.glide = null;
     const relief = this.store.view.relief;
+    const solids = this.solidsNow();
     if (!this.tvCams || this.tvCams.input !== input || this.tvCams.relief !== relief) {
-      this.tvCams = { input, relief, cams: tvCameras({ ...input, display: this.drawn }) };
+      const hm = this.store.terrain?.heightmap;
+      const natural = this.earth;
+      this.tvCams = {
+        input, relief,
+        cams: tvCameras({
+          ...input, display: this.drawn, venue: this.venue ?? undefined, solids: solids ?? undefined, facilities: this.store.facilities ?? undefined,
+          extent: this.extent, wet: hm && Number.isFinite(hm.waterLevel) ? (x, y) => natural.natural(x, y) < hm.waterLevel + 0.3 : undefined,
+        }),
+      };
+      // What they stand on, so that a camera in another camera's picture is a camera.
+      this.remove('cameraMounts');
+      const mounts = buildCameraMounts(this.tvCams.cams);
+      if (mounts.indices.length) this.add('cameraMounts', new THREE.Mesh(geometry(mounts), new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.3, roughness: 0.6 })));
     }
     this.clearTreesFor(this.tvCams.cams);
     const earth = this.earth;
@@ -1088,6 +1089,16 @@ export class View3D {
         const local = this.world.worldToLocal(new THREE.Vector3(x, 0, z));
         if (local.x < 0 || local.z < 0 || local.x > this.extent || local.z > this.extent) return null;
         return (earth.height(local.x, local.z) - this.zRef) * this.store.view.relief;
+      },
+      between: (from, to, skip) => (solids ? solids.between(this.toDrawn(from), this.toDrawn(to), skip) : null),
+      framed: (from, to, half, skip) => (solids ? solids.framed(this.toDrawn(from), this.toDrawn(to), half, skip) : true),
+      standing: (at, margin) => {
+        const p = this.toDrawn(at);
+        return solids ? solids.standing(p[0], p[1], p[2], margin, true) : null;
+      },
+      topWithin: (x, z, r) => {
+        const local = this.world.worldToLocal(new THREE.Vector3(x, 0, z));
+        return solids ? solids.topWithin(local.x, local.z, r) - this.zRef : null;
       },
       size: () => {
         // The timing tower covers the left of the map.
@@ -1143,6 +1154,21 @@ export class View3D {
 
   /** A real height as the view draws it: exaggerated around the lowest point of the map. */
   private readonly drawn = (z: number): number => this.zRef + (z - this.zRef) * this.store.view.relief;
+
+  /** A scene point as core has it: x east, y south, and its height as drawn. */
+  private toDrawn(p: THREE.Vector3): Vec3 {
+    const local = this.world.worldToLocal(p.clone());
+    return [local.x, local.z, this.drawn(local.y)];
+  }
+
+  /** Everything that can be in a camera's way, at the relief the view is drawn with (see core/solids.ts). */
+  private solidsNow(): Solids | null {
+    const earth = this.earth;
+    if (!earth || !this.venue) return null;
+    const relief = this.store.view.relief;
+    if (!this.solids || this.solids.relief !== relief) this.solids = { relief, solids: new Solids((x, y) => earth.height(x, y), this.drawn, venueSolids(this.venue)) };
+    return this.solids.solids;
+  }
 
   /** A model point (x east, height, y south) in scene coordinates. */
   private toScene(x: number, z: number, y: number): THREE.Vector3 {

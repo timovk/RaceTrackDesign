@@ -3,11 +3,11 @@
  * which stretches of track each can see, a director who decides what to
  * show and from which camera, and how a camera frames what it shows.
  *
- * Cameras stand where a circuit puts them: a tower beyond the run-off at
- * every corner, one behind the grid, one over the pit lane, one beside every
- * long straight, and more wherever a stretch of track is still out of sight.
+ * Cameras stand where a circuit would put them: on towers behind the
+ * barriers where cars come towards the lens, on the grandstands and the pit
+ * building, on a lift over the first corner (cameraPlan.ts).
  * A camera sees a station when the track there is within reach of its lens
- * and no hill is in the way (positions and heights as drawn, see shots.ts).
+ * and neither the ground nor anything built is in the way (solids.ts).
  *
  * The director cuts: each shot holds a few seconds on one car or a battle,
  * from the trackside camera that keeps it in view longest (better when the
@@ -29,173 +29,17 @@
  * field, never twice running. A car standing in its pit box is shown from a
  * camera in the pit lane in front of it, and the start from behind the grid.
  */
-import type { TrackMetrics } from './analysis.ts';
-import type { PitLane } from './pitLane.ts';
-import { type Display, type Vec3, trackShots } from './shots.ts';
-import type { Track } from './track.ts';
+import { type CameraInput, type TvCamera, planCameras } from './cameraPlan.ts';
 
-export interface TvCamera {
-  id: string;
-  label: string;
-  /** Position, world coordinates (x east, y south, z up) with heights as drawn. */
-  at: Vec3;
-  /** Per station: 1 where the camera sees the track. */
-  sees: Uint8Array;
-}
+export { CAMERA_REACH, type CameraInput, type TvCamera } from './cameraPlan.ts';
 
-export interface CameraInput {
-  track: Track;
-  metrics: TrackMetrics;
-  pit: PitLane | null;
-  /** Shaped ground height (real). */
-  height: (x: number, y: number) => number;
-  /** A real height as drawn (default: as it is). */
-  display?: Display;
-  /** Run-off depth beside station k on a side, for the corner towers. */
-  runoff?: (k: number, side: 1 | -1) => number;
-}
-
-/** A trackside lens reaches this far (metres), and is no use closer than this. */
-export const CAMERA_REACH = 750;
-const CAMERA_NEAR = 12;
-/** Straights at least this long get a camera of their own. */
-const STRAIGHT_CAMERA = 250;
-/** A stretch of track out of every camera's sight longer than this gets another camera. */
-const BLIND_STRETCH = 120;
-const MAX_CAMERAS = 60;
-
-/**
- * Whether a camera at `at` sees the point (x, y) at drawn height z: within
- * reach, and the drawn ground below the line of sight all the way (ignoring
- * the last few metres, where the line meets the track it looks at).
- */
-export function lineOfSight(at: Vec3, x: number, y: number, z: number, ground: (x: number, y: number) => number): boolean {
-  const d = Math.hypot(x - at[0], y - at[1]);
-  if (d < CAMERA_NEAR || d > CAMERA_REACH) return false;
-  const steps = Math.max(8, Math.ceil(d / 25));
-  for (let i = 1; i < steps; i++) {
-    const f = i / steps;
-    if (f * d > d - 6) break;
-    const px = at[0] + (x - at[0]) * f;
-    const py = at[1] + (y - at[1]) * f;
-    const pz = at[2] + (z - at[2]) * f;
-    if (ground(px, py) > pz - 0.2) return false;
-  }
-  return true;
-}
-
-/** Which stations a camera sees: every third tested, the ones between taking the verdict of both neighbours. */
-function coverage(at: Vec3, t: Track, display: Display, ground: (x: number, y: number) => number): Uint8Array {
-  const n = t.n;
-  const sees = new Uint8Array(n);
-  const step = 3;
-  const test = (k: number) => lineOfSight(at, t.x[k], t.y[k], display(t.z[k]) + 1, ground);
-  let prev = -1;
-  let prevSeen = false;
-  for (let k = 0; k <= n; k += step) {
-    const kk = Math.min(k, n - 1);
-    const dx = t.x[kk] - at[0];
-    const dy = t.y[kk] - at[1];
-    const seen = dx * dx + dy * dy <= CAMERA_REACH * CAMERA_REACH && test(kk);
-    if (seen) sees[kk] = 1;
-    if (prev >= 0 && seen && prevSeen) for (let j = prev + 1; j < kk; j++) sees[j] = 1;
-    prev = kk;
-    prevSeen = seen;
-  }
-  // A glimpse lost for a few metres (a post, a bump) does not end the shot: close short gaps.
-  const gap = 10;
-  for (let k = 0; k < n; k++) {
-    if (sees[k] || !sees[(k - 1 + n) % n]) continue;
-    let j = 0;
-    while (j < gap && !sees[(k + j) % n]) j++;
-    if (j < gap) for (let i = 0; i < j; i++) sees[(k + i) % n] = 1;
-  }
-  return sees;
+/** The trackside cameras of a circuit, with what each can see (see cameraPlan.ts). */
+export function tvCameras(input: CameraInput): TvCamera[] {
+  return planCameras(input);
 }
 
 function mod(a: number, n: number): number {
   return ((a % n) + n) % n;
-}
-
-/** A point beside station k, `side` metres to the left, `up` metres above the drawn ground there. */
-function beside(t: Track, k: number, side: number, up: number, display: Display, height: (x: number, y: number) => number): Vec3 {
-  const h = t.heading[k];
-  const x = t.x[k] + Math.sin(h) * side;
-  const y = t.y[k] - Math.cos(h) * side;
-  return [x, y, Math.max(display(height(x, y)), display(t.z[k])) + up];
-}
-
-/** The trackside cameras of a circuit, with what each can see. */
-export function tvCameras(input: CameraInput): TvCamera[] {
-  const t = input.track;
-  const n = t.n;
-  const display = input.display ?? ((z: number) => z);
-  const ground = (x: number, y: number) => display(input.height(x, y));
-  const cams: TvCamera[] = [];
-  const add = (id: string, label: string, at: Vec3) => cams.push({ id, label, at, sees: coverage(at, t, display, ground) });
-  // The shots' camera positions: corner towers, behind the grid, over the pit lane.
-  const shots = trackShots({ track: t, metrics: input.metrics, pit: input.pit, height: input.height, display, runoff: input.runoff });
-  for (const s of shots) {
-    if (s.id.startsWith('corner-')) add(s.id, s.label.split(' ')[0], s.camera);
-    else if (s.id === 'start') add('start', 'Start', s.camera);
-    else if (s.id === 'pit') add('pit', 'Pit lane', s.camera);
-  }
-  // Beside every long straight, two thirds of the way along, on the lower side, raised on a stand.
-  input.metrics.straights.forEach((st, i) => {
-    if (st.length < STRAIGHT_CAMERA) return;
-    const k = mod(st.start + Math.round(mod(st.end - st.start, n) * 0.65), n);
-    const reach = t.width[k] / 2 + 3 + 22;
-    const l = beside(t, k, reach, 0, display, input.height);
-    const r = beside(t, k, -reach, 0, display, input.height);
-    const side = l[2] <= r[2] ? reach : -reach;
-    add(`straight-${i + 1}`, 'Straight', beside(t, k, side, 8, display, input.height));
-  });
-  // Wherever the track is still out of sight, another camera beside the middle of that stretch.
-  const covered = new Uint8Array(n);
-  for (const c of cams) for (let k = 0; k < n; k++) covered[k] |= c.sees[k];
-  let fill = 0;
-  for (let guard = 0; guard < MAX_CAMERAS && cams.length < MAX_CAMERAS; guard++) {
-    const run = longestGap(covered);
-    if (!run || run.length * t.ds < BLIND_STRETCH) break;
-    const k = mod(run.start + Math.floor(run.length / 2), n);
-    const reach = t.width[k] / 2 + 3 + 18;
-    const l = beside(t, k, reach, 0, display, input.height);
-    const r = beside(t, k, -reach, 0, display, input.height);
-    const side = l[2] <= r[2] ? reach : -reach;
-    let placed = false;
-    for (const up of [6, 12, 25]) {
-      const at = beside(t, k, side, up, display, input.height);
-      const sees = coverage(at, t, display, ground);
-      if (!sees[k]) continue;
-      cams.push({ id: `fill-${++fill}`, label: 'Trackside', at, sees });
-      for (let j = 0; j < n; j++) covered[j] |= sees[j];
-      placed = true;
-      break;
-    }
-    // A stretch no camera can see from beside it: give up on it.
-    if (!placed) for (let j = 0; j < run.length; j++) covered[mod(run.start + j, n)] = 1;
-  }
-  return cams;
-}
-
-/** The longest run of zeros round the lap, or null when there is none. */
-function longestGap(covered: Uint8Array): { start: number; length: number } | null {
-  const n = covered.length;
-  let first = covered.indexOf(1);
-  if (first < 0) return { start: 0, length: n };
-  let best: { start: number; length: number } | null = null;
-  let start = -1;
-  for (let i = 1; i <= n; i++) {
-    const k = (first + i) % n;
-    if (!covered[k]) {
-      if (start < 0) start = k;
-    } else if (start >= 0) {
-      const length = mod(k - start, n);
-      if (!best || length > best.length) best = { start, length };
-      start = -1;
-    }
-  }
-  return best;
 }
 
 // ---- the director ---------------------------------------------------------------
@@ -228,7 +72,7 @@ export interface TvCar {
 export type Battle = { kind: 'battle'; ahead: number; behind: number };
 export type Subject = { kind: 'car'; id: number } | Battle | { kind: 'group'; ids: number[] };
 
-export type ShotReason = 'battle' | 'incident' | 'overtake' | 'leader' | 'pit' | 'selected' | 'field' | 'start' | 'replay' | 'flying';
+export type ShotReason = 'battle' | 'incident' | 'overtake' | 'leader' | 'pit' | 'selected' | 'field' | 'start' | 'replay' | 'flying' | 'finish';
 
 /** Cameras on a car: above the driver looking ahead, on the nose, looking back, and the chase camera behind it. */
 export type OnboardView = 'tcam' | 'nose' | 'rear' | 'chase';
@@ -269,10 +113,11 @@ function samePair(a: Battle, b: Battle): boolean {
  * or taking the lead of the race on track; two cars going side by side
  * (`fight`); a restart coming or under way (`restart`: the car leading the
  * field); a start from the grid during the race (`start`); and a penalty
- * for a contact a while ago, which is worth another look at it (`penalty`).
+ * for a contact a while ago, which is worth another look at it (`penalty`);
+ * and the leader a few seconds from the chequered flag (`finish`).
  */
 export interface TvEvent {
-  kind: 'incident' | 'overtake' | 'lead' | 'fight' | 'restart' | 'start' | 'penalty';
+  kind: 'incident' | 'overtake' | 'lead' | 'fight' | 'restart' | 'start' | 'penalty' | 'finish';
   car: number;
   /** Director time it happened. */
   at: number;
@@ -282,7 +127,7 @@ export interface TvEvent {
   u?: number;
   /** The race time it was noted, when that is not when it happened (a penalty). */
   since?: number;
-  /** A start that has had its shot. */
+  /** A start or a finish that has had its shot. */
   shown?: boolean;
 }
 
@@ -343,6 +188,31 @@ const FIGHT_HOLD = 8;
 /** A restart is shown on this many cars at the front of the field, for about this long (race seconds). */
 const RESTART_GROUP = 5;
 const RESTART_HOLD = 10;
+/**
+ * A sequence: a car that comes towards a camera is left this long (screen
+ * seconds) after it has passed it, for the next camera has it coming; and
+ * the next camera is on the same side of the road where it can be, so that
+ * the cars keep going the same way across the screen.
+ */
+const PAST_CAMERA = 1.3;
+const SAME_SIDE = 5;
+/** A camera that lost sight of the cars it was on (the broadcast saw them go behind something) is left alone this long, screen seconds. */
+const LOST_FOR = 8;
+/** How often the helicopter is a shot's camera, when it has not been one for three shots. */
+const HELI_CHANCE = 0.15;
+/**
+ * The start is a sequence: from behind the grid until the leader is in the
+ * sight of the first corner's camera and this many race seconds from the
+ * corner (or for this long, where it never is), then the first corner from
+ * its own camera for this long.
+ */
+const BEFORE_CORNER = 3;
+const START_LONGEST = 14;
+const FIRST_CORNER_HOLD = 7;
+/** A car is shown leaving its pit box this long (screen seconds) after it has pulled away, then from the camera over the lane. */
+const PIT_AWAY = 1.5;
+/** The finish: the leader from this many race seconds before the flag (see the broadcast), until this many screen seconds after the line. */
+const AFTER_FLAG = 3;
 
 export interface DirectorTrack {
   n: number;
@@ -379,6 +249,12 @@ export class Director {
   private following: { ids: number[]; since: number; selected: number | null } | null = null;
   /** The cars followed before, and when it left them. */
   private followedBefore: { ids: number[]; until: number }[] = [];
+  /** Cameras that lost sight of what they were on, and until when each is left alone (director time). */
+  private lost = new Map<string, number>();
+  /** The next shot of a sequence, waiting for the one on screen to end. */
+  private queue: TvShot[] = [];
+  /** When the car in the pit box shot pulled away (director time), or -1. */
+  private pitAway = -1;
 
   constructor(cameras: TvCamera[], track: DirectorTrack, rng: () => number = Math.random) {
     this.cameras = cameras;
@@ -401,11 +277,27 @@ export class Director {
     this.lastReplay = -Infinity;
     this.following = null;
     this.followedBefore = [];
+    this.lost.clear();
+    this.queue = [];
+    this.pitAway = -1;
   }
 
   /** Ends the current shot now (a replay that cannot be shown after all). */
   endShot(): void {
     if (this.shot) this.shot = { ...this.shot, hold: 0 };
+  }
+
+  /**
+   * The broadcast saw the cars of the shot go behind something from this
+   * camera: the shot ends now, and the camera is left alone for a while.
+   */
+  lostSight(camera: string): void {
+    this.lost.set(camera, this.clock + LOST_FOR);
+    if (this.shot?.camera === camera) this.endShot();
+  }
+
+  private barred(camera: string): boolean {
+    return (this.lost.get(camera) ?? -Infinity) > this.clock;
   }
 
   /** Something worth showing happened (at the current clock); with `replay`, worth a replay too; `other`: the second car in it. */
@@ -446,7 +338,12 @@ export class Director {
     if (again) again.shown = true;
     if (s && !again && !this.mustCut(s, byId, rate, raceTime, follows)) return s;
     const opening = !!again || (!s && this.recent.length === 0 && raceTime < START_WINDOW && rate <= START_MAX_RATE);
-    this.shot = (opening ? this.startShot(cars, rate) : null) ?? this.choose(cars, byId, rate, raceTime, follows);
+    // The next shot of a sequence, unless something major came between.
+    const major = !!s && this.events.some((e) => e.at > s.start && (e.kind === 'incident' || e.kind === 'restart'));
+    const queued = opening || major ? null : this.queued(cars, byId, rate);
+    if (opening || major) this.queue = [];
+    this.pitAway = -1;
+    this.shot = (opening ? this.startShot(cars, rate) : null) ?? queued ?? this.choose(cars, byId, rate, raceTime, follows);
     if (this.shot) {
       this.recent.push(this.shot);
       if (this.recent.length > 6) this.recent.shift();
@@ -559,12 +456,46 @@ export class Director {
     return e.kind !== 'overtake';
   }
 
-  /** The start, from the camera behind the grid, on the front of the field. */
+  /**
+   * The start, from the camera behind the grid, on the front of the field;
+   * and, where the first corner has a camera of its own, that one next, from
+   * a few seconds before the leaders get there.
+   */
   private startShot(cars: readonly TvCar[], rate: number): TvShot | null {
     if (!this.byId.has('start')) return null;
-    const ids = cars.filter((c) => c.running).sort((a, b) => a.position - b.position).slice(0, START_GROUP).map((c) => c.id);
+    const front = cars.filter((c) => c.running).sort((a, b) => a.position - b.position).slice(0, START_GROUP);
+    const ids = front.map((c) => c.id);
     if (!ids.length) return null;
-    return { subject: { kind: 'group', ids }, camera: 'start', reason: 'start', start: this.clock, hold: Math.max(MIN_SHOT, START_HOLD / rate) };
+    let hold = START_HOLD;
+    if (this.byId.get('t1')?.station !== undefined) {
+      // (Until the leader comes to the first corner: see `mustCut`.)
+      hold = START_LONGEST;
+      this.queue = [{ subject: { kind: 'group', ids }, camera: 't1', reason: 'start', start: 0, hold: FIRST_CORNER_HOLD }];
+    }
+    return { subject: { kind: 'group', ids }, camera: 'start', reason: 'start', start: this.clock, hold: Math.max(MIN_SHOT, hold / rate) };
+  }
+
+  /** Whether a car is in a camera's sight and within `seconds` (race time) of the station the camera was placed for. */
+  private comesTo(cam: TvCamera, c: TvCar, seconds: number): boolean {
+    if (cam.station === undefined || !cam.sees[Math.floor(mod(c.u, this.track.n))]) return false;
+    return (mod(cam.station - c.u, this.track.n) * this.track.ds) / Math.max(20, c.speed) <= seconds;
+  }
+
+  /**
+   * The next shot of a sequence, if it can still be shown: its cars as they
+   * stand now, from now, and only with the first of them in its camera's
+   * sight.
+   */
+  private queued(cars: readonly TvCar[], byId: Map<number, TvCar>, rate: number): TvShot | null {
+    const next = this.queue.shift();
+    const cam = next ? this.byId.get(next.camera) : undefined;
+    if (!next || !cam || this.barred(next.camera)) return null;
+    const subject: Subject = next.subject.kind === 'group'
+      ? { kind: 'group', ids: cars.filter((c) => c.running).sort((a, b) => a.position - b.position).slice(0, next.subject.ids.length).map((c) => c.id) }
+      : next.subject;
+    const first = this.subjectCars(subject, byId).find((c) => c.running);
+    if (!first || !cam.sees[Math.floor(mod(first.u, this.track.n))]) return null;
+    return { ...next, subject, start: this.clock, hold: Math.max(MIN_SHOT, next.hold / rate) };
   }
 
   private subjectCars(sub: Subject, byId: Map<number, TvCar>): TvCar[] {
@@ -586,15 +517,24 @@ export class Director {
     // that is on screen for nothing in particular, two cars going side by side for a place.
     const idle = s.reason === 'field' || s.reason === 'leader';
     const incident = elapsed > MIN_SHOT && s.reason !== 'incident' && this.events.some((e) => e.at > s.start && this.cutsIn(e, follows, byId)
-      && (e.kind === 'incident' || (e.kind === 'lead' && !this.shows(s.subject, [e.car])) || (e.kind === 'restart' && s.reason !== 'start')
+      && (e.kind === 'incident' || (e.kind === 'lead' && !this.shows(s.subject, [e.car])) || (e.kind === 'restart' && s.reason !== 'start') || (e.kind === 'finish' && !e.shown)
         || (e.kind === 'fight' && idle && !this.shows(s.subject, [e.car]))));
-    // The start holds on the field as it gets away, until the back of it leaves the camera's sight.
+    // The start holds on the field as it gets away, until the leader comes to the first corner in its camera's
+    // sight (or the back of the field leaves this camera's); the first corner after it, and the finish, for their time.
+    if (s.reason === 'finish' || (s.reason === 'start' && s.camera === 't1')) return false;
+    const corner = s.reason === 'start' && s.camera === 'start' && this.queue.length ? this.byId.get(this.queue[0].camera) : undefined;
+    if (corner && elapsed > MIN_SHOT && this.comesTo(corner, cars[0], BEFORE_CORNER)) return true;
     if (s.reason !== 'start') {
-      // An onboard camera goes with its car, the pit box camera until the car has left the pit lane.
+      // An onboard camera goes with its car, the pit box camera until the car has pulled away (the camera over the
+      // lane has it from there) or left the pit lane.
       const carrier = s.carrier === undefined ? null : byId.get(s.carrier);
       if (s.carrier !== undefined && !carrier) return true;
       if (carrier && isOnboard(s.camera) && !carrier.running) return true;
       if (carrier && s.camera === 'pitbox' && !carrier.inPit) return true;
+      if (carrier && s.camera === 'pitbox' && !carrier.stopped && this.byId.has('pit')) {
+        if (this.pitAway < 0) this.pitAway = this.clock;
+        if (this.clock - this.pitAway >= PIT_AWAY) return true;
+      }
       // A battle that has broken up, a car that has stopped running (an incident shot may linger on it).
       if (s.subject.kind === 'battle' && elapsed > MIN_SHOT && !this.battleNow(s.subject.ahead, s.subject.behind, byId)) return true;
       if (s.reason !== 'incident' && s.reason !== 'pit' && cars.some((c) => !c.running && !c.inPit)) return true;
@@ -624,7 +564,7 @@ export class Director {
   private choose(cars: readonly TvCar[], byId: Map<number, TvCar>, rate: number, raceTime: number, follows: Subject | null): TvShot | null {
     const running = cars.filter((c) => c.running);
     if (running.length === 0 && cars.length === 0) return null;
-    type Candidate = { subject: Subject; reason: ShotReason; score: number; event?: TvEvent };
+    type Candidate = { subject: Subject; reason: ShotReason; score: number; event?: TvEvent; mark?: TvEvent };
     let cand: Candidate[] = [];
     const selected = cars.find((c) => c.selected);
     const stake = this.stakes(cars);
@@ -656,6 +596,8 @@ export class Director {
         const front = running.filter((x) => x.position >= c.position).sort((a, b) => a.position - b.position).slice(0, RESTART_GROUP).map((x) => x.id);
         if (front.length > 1) cand.push({ subject: { kind: 'group', ids: front }, reason: 'start', score: 118 });
       } else if (e.kind === 'overtake') cand.push({ subject: { kind: 'car', id: e.car }, reason: 'overtake', score: 20 + 45 * stake(c) });
+      // The leader to the flag, once.
+      else if (e.kind === 'finish' && !e.shown && c.running) cand.push({ subject: { kind: 'car', id: e.car }, reason: 'finish', score: 130, mark: e });
       // (Two cars side by side are a battle, scored as one above; a penalty and a start have a replay and a shot of their own.)
     }
     // A replay of an overtake or incident a few seconds ago, one at a time.
@@ -703,7 +645,7 @@ export class Director {
     if (follows) {
       const lead = this.events.filter((e) => e.kind === 'lead');
       const fights = this.events.filter((e) => e.kind === 'fight' && this.cutsIn(e, follows, byId));
-      cand = cand.filter((c) => c.reason === 'incident' || c.reason === 'replay' || c.reason === 'start' || (c.reason === 'overtake' && lead.some((e) => this.shows(c.subject, [e.car])))
+      cand = cand.filter((c) => c.reason === 'incident' || c.reason === 'replay' || c.reason === 'start' || c.reason === 'finish' || (c.reason === 'overtake' && lead.some((e) => this.shows(c.subject, [e.car])))
         || (c.reason === 'battle' && fights.some((e) => this.shows(c.subject, [e.car]) && this.shows(c.subject, [e.other ?? e.car]))));
       const own = this.subjectCars(follows, byId);
       const reason = follows.kind === 'battle' || !own.length ? 'battle' : this.reasonFor(own[0]);
@@ -713,6 +655,7 @@ export class Director {
     for (const c of cand) {
       const shot = c.event ? this.replayShot(c.event, c.subject, byId) : this.frame(c.subject, c.reason, byId, rate);
       if (shot) {
+        if (c.mark) c.mark.shown = true;
         if (c.reason === 'pit' && c.subject.kind === 'car') this.shownStops.add(`${c.subject.id}`);
         this.shownStops = new Set([...this.shownStops].filter((id) => byId.get(Number(id))?.inPit));
         this.follow(shot, cars, c.event);
@@ -731,7 +674,7 @@ export class Director {
    * (`event`).
    */
   private follow(shot: TvShot, cars: readonly TvCar[], event?: TvEvent): void {
-    if (shot.subject.kind === 'group' || shot.reason === 'incident' || shot.reason === 'start' || (shot.reason === 'replay' && event?.kind !== 'lead')) return;
+    if (shot.subject.kind === 'group' || shot.reason === 'incident' || shot.reason === 'start' || shot.reason === 'finish' || (shot.reason === 'replay' && event?.kind !== 'lead')) return;
     const ids = subjectIds(shot.subject);
     if (this.following && this.shows(shot.subject, this.following.ids)) return;
     this.endFollow();
@@ -761,12 +704,15 @@ export class Director {
     const k0 = Math.floor(mod(e.u! - (before * speed) / this.track.ds, n));
     const span = Math.ceil(((before + after) * speed) / this.track.ds);
     const last = this.recent[this.recent.length - 1]?.camera;
-    let best: { cam: TvCamera; seen: number } | null = null;
+    // (From the other side of the road than it was last seen from, where a camera there sees about as much: the reverse angle.)
+    const side = [...this.recent].reverse().map((r) => this.byId.get(r.camera)?.side).find((x) => x !== undefined);
+    let best: { cam: TvCamera; seen: number; value: number } | null = null;
     for (const cam of this.cameras) {
       if (cam.id === last || !cam.sees[Math.floor(mod(e.u!, n))]) continue;
       let seen = 0;
       for (let i = 0; i < span; i++) seen += cam.sees[(k0 + i) % n];
-      if (!best || seen + this.rng() * 3 > best.seen) best = { cam, seen };
+      const value = seen + this.rng() * 3 + (side && cam.side && cam.side !== side ? span * 0.2 : 0);
+      if (!best || value > best.value) best = { cam, seen, value };
     }
     return best && best.seen > span * 0.3 ? shot(best.cam.id) : shot('heli');
   }
@@ -786,23 +732,36 @@ export class Director {
       const left = (lead.stopLeft ?? 0) / Math.max(1e-6, rate);
       if (left >= MIN_PIT_SHOT) return { subject, camera: 'pitbox', carrier: lead.id, reason, start: this.clock, hold: Math.min(12, left + 2.5) };
     }
-    const hold = reason === 'start' ? Math.max(5, RESTART_HOLD / Math.max(1e-6, rate)) : 5 + this.rng() * 7;
+    // A car in the pit lane and not in its box, from the camera over the lane.
+    if (lead.inPit && !lead.stopped && reason !== 'incident' && this.byId.has('pit') && !this.barred('pit')) return { subject, camera: 'pit', reason, start: this.clock, hold: 5 };
+    // The finish: until a few seconds after the line.
+    const toLine = (mod(-lead.u, this.track.n) * this.track.ds) / Math.max(20, lead.speed) / Math.max(1e-6, rate);
+    const hold = reason === 'start' ? Math.max(5, RESTART_HOLD / Math.max(1e-6, rate)) : reason === 'finish' ? Math.max(4, Math.min(14, toLine + AFTER_FLAG)) : 5 + this.rng() * 7;
     const last = this.recent[this.recent.length - 1];
+    // The same cars as the shot before, from a trackside camera: a sequence.
+    const before = last ? this.byId.get(last.camera) : undefined;
+    const sequence = !!last && !!before && this.shows(subject, subjectIds(last.subject));
     // Now and then onboard, but never twice running and at most two in four shots.
     const chance = ONBOARD_CHANCE[reason] ?? 0;
     const onboardDue = chance > 0 && cars.every((c) => c.running) && !(last && isOnboard(last.camera))
       && this.recent.slice(-3).filter((r) => isOnboard(r.camera)).length < 2;
-    // Now and then the helicopter, but not twice running.
-    const heliDue = !!last && last.camera !== 'heli' && this.recent.slice(-3).every((r) => r.camera !== 'heli') && this.rng() < 0.4;
+    // Now and then the helicopter, as a choice: not twice running, nor for the finish.
+    const heliDue = !!last && last.camera !== 'heli' && reason !== 'finish' && this.recent.slice(-3).every((r) => r.camera !== 'heli') && this.rng() < HELI_CHANCE;
     let best: { cam: TvCamera; score: number; sight: number } | null = null;
     if (lead.running || lead.inPit) {
       for (const cam of this.cameras) {
+        if (this.barred(cam.id)) continue;
         const sight = timeInSight(cam.sees, this.track, lead.u, lead.speed, 20) / Math.max(1e-6, rate);
         if (sight < MIN_IN_SIGHT) continue;
-        let score = Math.min(sight, 12) * 2;
+        // How long it keeps the car, and how good its picture of it is on the way.
+        let score = Math.min(sight, 12) * 2 + 8 * this.picture(cam, lead.u, lead.speed, Math.min(sight * rate, 8));
         // The car comes towards the camera: its nearest station is still ahead.
         if (this.ahead(cam, lead.u)) score += 6;
+        // In a sequence, from the same side of the road as the shot before.
+        if (sequence && cam.side && before!.side) score += cam.side === before!.side ? SAME_SIDE : -SAME_SIDE;
         if (last && last.camera === cam.id) score -= 12;
+        // (The finish, from one that sees the line.)
+        if (reason === 'finish') score += cam.sees[0] ? 12 : -12;
         if (!best || score > best.score) best = { cam, score, sight };
       }
     } else {
@@ -817,8 +776,35 @@ export class Director {
     // With no trackside camera to hold it (a fast playback), onboard as often as the helicopter.
     if (onboardDue && this.rng() < (best ? chance : 0.5)) return this.onboard(subject, reason);
     const useHeli = !best || (heliDue && reason !== 'pit' && reason !== 'incident');
-    if (useHeli) return { subject, camera: 'heli', reason, start: this.clock, hold: 6 + this.rng() * 5 };
-    return { subject, camera: best!.cam.id, reason, start: this.clock, hold: Math.max(MIN_SHOT, Math.min(hold, best!.sight - 0.5)) };
+    // (Where it is on because no camera beside the track can hold the car, for a shorter while: one soon can.)
+    if (useHeli) return { subject, camera: 'heli', reason, start: this.clock, hold: best ? 6 + this.rng() * 5 : 4 + this.rng() * 2.5 };
+    let time = Math.max(MIN_SHOT, Math.min(hold, best!.sight - 0.5));
+    // A car that comes towards the camera is left a moment after it has passed: the next camera has it coming.
+    const pass = this.passIn(best!.cam, lead.u, lead.speed) / Math.max(1e-6, rate);
+    if (reason !== 'finish' && reason !== 'start' && pass >= 2 && pass + PAST_CAMERA < time) time = pass + PAST_CAMERA;
+    return { subject, camera: best!.cam.id, reason, start: this.clock, hold: time };
+  }
+
+  /** How good a camera's picture of a car is over the next `seconds` of its way (0 to 1). */
+  private picture(cam: TvCamera, u: number, speed: number, seconds: number): number {
+    if (!cam.quality) return 0.5;
+    const n = this.track.n;
+    const k0 = Math.floor(mod(u, n));
+    const count = Math.max(1, Math.min(n, Math.ceil((seconds * Math.max(1, speed)) / this.track.ds)));
+    let sum = 0;
+    for (let i = 0; i < count; i += 4) sum += cam.quality[(k0 + i) % n];
+    return sum / (255 * Math.ceil(count / 4));
+  }
+
+  /** Race seconds until a car at u passes a camera (the station it sees nearest to it), while it has it in sight all the way; Infinity when it has passed or will be out of sight first. */
+  private passIn(cam: TvCamera, u: number, speed: number): number {
+    if (cam.closest === undefined) return Infinity;
+    const n = this.track.n;
+    const k0 = Math.floor(mod(u, n));
+    const d = mod(cam.closest - k0, n);
+    if (d > n / 2) return Infinity;
+    for (let i = 0; i <= d; i += 3) if (!cam.sees[(k0 + i) % n]) return Infinity;
+    return (d * this.track.ds) / Math.max(1, speed);
   }
 
   /**

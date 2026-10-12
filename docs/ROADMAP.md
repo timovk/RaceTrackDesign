@@ -416,35 +416,94 @@ Ideas 1 to 3 of the earlier list are built. What is left of it, and what buildin
 
 ## Television Overhaul Package
 
-Asked for on 2026-10-12: "Introduce the Television Overhaul Package -- which greatly improves the way the TV view shows the race. That means: no more cameras in grandstands, no more cameras in mountains or through the pit stalls. Write out in steps what the Television Overhaul Package entails." The steps below are that; none is built, and he has not said go.
+Asked for on 2026-10-12: "Introduce the Television Overhaul Package -- which greatly improves the way the TV view shows the race. That means: no more cameras in grandstands, no more cameras in mountains or through the pit stalls. Write out in steps what the Television Overhaul Package entails." The seven steps below were the answer. He then asked for steps 1 to 5 ("Implement the Television Overhaul Package -- steps 1 to 5."), and those are built (2026-10-12, branch `tv-overhaul`). Step 6 is not built. He has not seen it yet.
 
-### Why it goes wrong now
+### Why it went wrong
 
-Read from the code (`tvCameras` in `core/broadcast.ts`, `trackShots` in `core/shots.ts`, `placeGrandstands` in `core/scenery.ts`); not yet counted on circuits, which is step 1.
+Counted on six circuits before anything was changed (Bremgarten, Monaco, a generated Grand Prix circuit, a street circuit, a mountain course on the mountain landscape and a lap of 12 km; ten minutes of race on each):
 
-- **A camera is put down by a rule beside the track, and knows only the ground under it.** A tower 15 m beyond the run-off at the apex of every corner; one 25 m from the middle of the road two thirds along every straight, on whichever side is lower; one 21 m out wherever a stretch is still unseen. Nothing in it knows of a grandstand, the pit building, a fence, a gantry or a board.
-- **The grandstands go to the same places.** One 10 or 25 m beyond the run-off at the corners after the three biggest braking zones, 15 m deep: the corner's tower stands in it. The main one along the start straight, 9 m beyond the verge, with the pit building across the road: the start straight's camera stands in the one or in the other, and the garages are open rooms, so from there the race is seen through a pit stall.
-- **"Sees" means the ground is not in the way**, tried every 25 m along the line and for every third station, with the camera's height taken at its own spot. On steep ground, drawn three times as steep, the hillside beside the camera is not tried; and what is drawn far from the track is a coarser ground than the one the heights are read from.
-- **The helicopter looks out for the ground only.** It keeps 50 m over the ground under it and climbs when a hill blocks its view, but the way it eases from one place to the next is not looked at, and nothing built counts.
-- **The director trusts the table of what each camera sees.** Nobody looks at the picture: a car behind a stand or a pit building is "in view".
+- **A camera was put down by a rule beside the track, and knew only the ground under it.** A tower 15 m beyond the run-off at the apex of every corner, one 25 m from the middle of the road two thirds along every straight, one 21 m out wherever a stretch was still unseen. Of the 174 cameras, 7 stood in something and 16 stood in front of the barrier.
+- **The 7 were the start straight's camera, on every circuit**, in the main grandstand or in the pit building: both are put along the start straight, on either side of the road. (Before counting I had it down to the corner towers standing in the corner grandstands. That was not what the count found: those towers stood clear, and looked through the stands.)
+- **"Sees" meant the ground was not in the way.** 11.1% of the stations the cameras were said to see were hidden; 23.8% on the Grand Prix circuit (13.6% behind a grandstand, 7.9% behind the pit building), and on the mountain course 7.0% behind the ground.
+- **The director trusted that table.** For 6.5% of the time a trackside camera was on, a car it showed was hidden, and 18.9% of that time came from a camera that stood wrong. The helicopter had 19% of all air time, mostly as the way out when no camera could hold the car.
 
 ### The steps
 
-Each ends in something to watch.
+1. **A survey of what is on screen now**: built (`core/tvSurvey.ts`), and kept as tests (`tests/tvSurvey.test.ts`).
+2. **One account of everything that is in the way**: built (`core/solids.ts`, with the venue placed in one place, `core/venue.ts`).
+3. **Cameras where a circuit would put them**: built (`core/cameraPlan.ts`), after looking up what broadcasters do; the towers, platforms and the post are drawn.
+4. **The picture checked while it is on air**: built (`watch` in `ui/tvBroadcast.ts`; the helicopter, the chase camera and the pit box camera likewise).
+5. **The race shown as television shows it**: built (the director in `core/broadcast.ts`): sequences, the same side of the road, wide then tight, the start, the pit lane and the finish as sequences, replays from the other side.
+6. **A camera plan to look at** (the cameras and what each sees on the 2D map, a camera picked by hand, a camera moved or taken out): not built, to be decided.
+7. **Checked**: the survey again on the same circuits (below) and the documents. What the checks cost per frame was not measured.
 
-1. **A survey of what is on screen now.** A fixed set of circuits (Bremgarten, Monaco, a generated Grand Prix circuit, a street circuit, a mountain course on the mountain landscape, a long lap) and, for each: every camera with what is wrong with it (in a stand, in the pit building, under the drawn ground or against a hillside, in a fence or the trees), and over a race the share of time on air that the car shown is hidden or the lens is inside something, by kind of camera. And one still from every camera as a sheet to look at. These figures are the yardstick: the package is done when they are nought, and they stay as tests.
-2. **One account of everything that is in the way.** The ground as it is drawn, the grandstands with their roofs, the pit building (a garage counts as solid), gantries and bridges, advertising boards, barriers and fences, marshal posts, trees. It answers two questions, fast enough to ask every frame: may a camera stand here, and is this line of sight clear.
-3. **Cameras where a circuit would put them.** How host broadcasters place their cameras is to be looked up first (how many, on what, how high), not made up. Then the positions are chosen, not ruled: towers and platforms behind the barrier where cars come towards the lens, a platform on top of a grandstand and not in it, the pit wall and the roof of the pit building for the pit lane and the start, a few low cameras at the kerb, a gantry at the line. A position is taken only if step 2 lets a camera stand there, and for what it sees. The towers and platforms are drawn, so a camera in another camera's picture is a camera.
-4. **The picture checked while it is on air.** The line from the lens to the car shown is tried against step 2 as the shot runs; a car hidden for more than a moment means a cut to a camera that sees it. The helicopter's way from one place to the next is looked at before it flies it; the chase camera, the pit box camera and the grid walk keep clear likewise. A stop is shown from the pit wall or the roof, never from inside a garage or through one.
-5. **The race shown as television shows it.** Sequences, not single shots: a car or a battle handed from camera to camera through a sector, cut as it passes each one; the cameras of a sequence on one side of the road, so the cars keep going the same way across the screen; a shot that starts wide and tightens; room in front of the car, and both cars of a battle in the picture; the helicopter as a choice, not the way out. The start, a restart, the finish and a pit stop each as a sequence of their own. Replays from the other side.
-6. **A camera plan to look at** (to be decided): the cameras and what each sees on the 2D map, a camera picked by hand during a broadcast, and perhaps a camera moved or taken out and kept with the project.
-7. **Checked**: the survey of step 1 again on the same circuits, the sheets, what the checks cost per frame, and the documents.
+How each works is in ARCHITECTURE.md (Television); what it does for the viewer is in the README.
+
+### What broadcasters do (looked up)
+
+- **How many.** Monaco: 24 cameras round the 3.3 km, ten more for slow motion where cars pass, and about ten in the grandstands. MotoGP at Aragon: 23 fixed cameras round 5.1 km, "two on every important corner". Le Mans: 34 round the 13.6 km (31 on track, 8 in the pit lane, a cable camera and slow motion in 2018). Formula 1 gives "at least 25" trackside. The line `18 + 1.25 per km` is my own, drawn through the first three; it rests on three circuits.
+- **Where.** On towers and platforms behind the barriers, lower now than they used to be, to show the speed (Formula 1 moved its cameras down for 2019; its cameras stand lower than MotoGP's). A long straight in three: out of the corner before it, at top speed, into the braking zone. On a lift over the first corner. On the grandstands for the wide view. Over and beside the pit lane, with crews on the pit wall. In the kerbs. A helicopter.
+
+Sources:
+- [Inside the workflow at the Monaco Grand Prix](https://www.svgeurope.org/blog/headlines/inside-the-workflow-at-the-monaco-grand-prix/) (SVG Europe)
+- [DORNA: A packed program](https://blog.ktm.com/?p=18574) (KTM Blog)
+- [24 at 90: AMP Visual TV delivers Le Mans anniversary race to global viewers](https://www.svgeurope.org/blog/headlines/24-at-90-amp-visual-tv-delivers-le-mans-anniversary-race-to-global-viewers/) (SVG Europe)
+- [Excellent media coverage for the 86th edition of the 24 Hours of Le Mans](https://newsroom.lemans.org/en/press/excellent-media-coverage-for-the-86th-edition-of-the-24-hours-of-le-mans) (ACO newsroom)
+- [How Is F1 Filmed?](https://flowracers.com/blog/how-is-f1-filmed/) (FlowRacers; a fan's explainer, not a broadcaster's account)
+- [How F1 and MotoGP have interpreted Mugello differently from a broadcasting perspective](https://motorsportbroadcasting.com/2020/09/11/analysis-how-f1-and-motogp-have-interpreted-mugello-differently-from-a-broadcasting-perspective/) (Motorsport Broadcasting, 2020-09-11)
+- [Formula 1 rethinking all its TV camera positions for 2019](https://www.autosport.com/f1/news/formula-1-rethinking-all-its-tv-camera-positions-for-2019-5283306/5283306/) (Autosport)
+- [Behind the bikes: inside Dorna Sports' production of MotoGP's Grand Prix of the Americas](https://www.sportsvideo.org/2025/04/03/behind-the-bikes-inside-dorna-sports-production-powerhouse-behind-motogps-red-bull-grand-prix-of-the-americas/) (Sports Video Group)
+
+### Measured, before and after
+
+The same six circuits, ten minutes of race on each with the same seed. "Hidden" after the package is the stricter test: the car behind something, or something built within 4 m of it in the picture.
+
+| | Before | After |
+| --- | --- | --- |
+| Cameras | 174 | 140 |
+| Standing in a grandstand, the pit building or the ground | 7 | 0 |
+| Standing in front of the barrier | 16 | 0 |
+| Of the stations the cameras are said to see, hidden | 11.1% | 0.3% |
+| Trackside air time with a car of the shot hidden | 6.5% | 1.1% |
+| Trackside air time from a camera that stands wrong | 18.9% | 0% |
+| The helicopter, of all air time | 19% | 13% |
+
+After, per circuit:
+
+| Circuit | Lap | Cameras | Sightings hidden | A car held 150 m on, from | Trackside, helicopter, onboard (s of 600) | Trackside time hidden | Cuts, of which across the road |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Bremgarten 1954 | 7.29 km | 26 | 0.3% | 96% of the lap | 353, 87, 160 | 1.1% | 92, 13 |
+| Monaco 1950 | 3.18 km | 16 | 0.5% | 90% | 340, 101, 159 | 2.0% | 93, 8 |
+| Grand Prix circuit | 5.40 km | 24 | 0.1% | 97% | 353, 78, 169 | 0.9% | 82, 4 |
+| Street circuit | 3.40 km | 16 | 0.2% | 92% | 404, 61, 135 | 0.7% | 80, 2 |
+| Mountain course | 6.00 km | 24 | 0.5% | 96% | 349, 92, 159 | 1.3% | 86, 12 |
+| Lap of 12 km | 12.00 km | 34 | 0.2% | 97% | 426, 44, 130 | 0.6% | 93, 24 |
+
+What is left hidden is the ground, for two to seven seconds in ten minutes: the half second it takes to notice a car has gone behind a rise and cut. No grandstand and no pit building hid a car for as long as half a second. Placing the cameras takes 0.2 s (Monaco) to 1.4 s (the lap of 12 km), once per track.
+
+Looked at in the app on one circuit (a generated Grand Prix circuit): the start (the grid from the tower for five seconds, then the field into the first corner from the lift) and a minute of racing, and during the work a sheet of stills from every camera. The other five circuits were judged by the figures.
+
+### Not right yet
+
+- **Kerb cameras were tried and left out.** Their pictures were grass and kerb with a car passing in a blink. Real broadcasts have them.
+- **Short laps get fewer cameras than the line asks for**: 16 on Monaco and on the street circuit, where it says 22. The choosing stops when no place adds to the picture; a broadcaster adds cameras for slow motion and for a second angle, which this does not value beyond the five corners where cars pass most.
+- **One cut in eight to the same cars crosses the road** (63 of 526), most on the lap of 12 km (24 of 93). The same side is preferred, not required.
+- **The helicopter still has 13% of the time** (7% on the lap of 12 km, 17% at Monaco), and in the app one helicopter shot ran twelve seconds.
+- **Trees.** Those in a camera's line of sight are cleared, but one standing beside the line can fill the foreground of a long lens; seen at one corner camera in the app.
+- **The start.** On the circuit looked at, the end of the main grandstand is in the left of the picture from the tower behind the grid; and the first corner's camera has the field small for its first second or two.
+- **A camera's own tower is not in the way of another camera.** The towers are drawn but are not among the blocks; no case of one blocking a car was seen.
+- **Fences and boards** are not blocks either: a camera behind a catch fence is put at 6 m or more to look over it, which is a rule and not a test.
+- **The Shots menu of the 3D view is untouched.** It keeps its own rule (a tower beyond the run-off at each corner's apex, `core/shots.ts`), so a shot picked there can still look through a grandstand. The package was about the TV view.
+- **The cost per frame of the check on air was not measured**; no stutter was noticed.
+- **The count line** `18 + 1.25 per km` rests on three circuits, and the marks for a picture (best at 40 to 300 m, of a car coming towards the lens) are mine.
 
 ### His to decide
 
-- How far it goes: steps 1 to 4 put right what he named; step 5 is the "greatly improves"; step 6 is extra.
-- Whether camera towers and platforms are drawn.
-- Whether a camera may stand in front of the barrier at all (a low one at a kerb), or only behind it.
+- Step 6, the camera plan on the map.
+- Whether the towers and platforms stay drawn (taken as yes).
+- Whether kerb cameras should come back in another form (lower lens, wider angle, only as a replay angle).
+- Whether the Shots menu should take its places from the same plan.
+
 
 ## Proposed, not decided
 

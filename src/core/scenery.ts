@@ -401,6 +401,13 @@ export interface Footprint {
   y: number[];
 }
 
+/** A block of a building: an outline on the map, and how far above the height it stands on (`anchor`) it begins and ends. */
+export interface Block extends Footprint {
+  anchor: number;
+  lo: number;
+  hi: number;
+}
+
 export function inside(f: Footprint, x: number, y: number, margin = 0): boolean {
   let hit = false;
   const n = f.x.length;
@@ -470,7 +477,7 @@ const PAINT = 0.15;
  * lane and the track with the teams' timing stands on it, and the lane's
  * painted lines. `signs` is textured from the sign atlas (core/trackside.ts).
  */
-export function buildPitBuilding(pit: PitLane, road: Road, line?: { x: number; y: number }): { mesh: MeshData; signs: MeshData; markings: MeshData; footprint: Footprint } {
+export function buildPitBuilding(pit: PitLane, road: Road, line?: { x: number; y: number }): { mesh: MeshData; signs: MeshData; markings: MeshData; footprint: Footprint; blocks: Block[] } {
   const mb = new MeshBuilder();
   const signs = new PanelBuilder();
   const paint = new MeshBuilder();
@@ -666,7 +673,15 @@ export function buildPitBuilding(pit: PitLane, road: Road, line?: { x: number; y
     paint.face([c(-0.2, -(halfLane - 0.35)), c(0.2, -(halfLane - 0.35)), c(0.2, halfLane - 0.35), c(-0.2, halfLane - 0.35)], UP, white);
   }
   const corners = [out(first, front - 2), out(last, front - 2), out(last, rear + 2), out(first, rear + 2)];
-  return { mesh: mb.build(), signs: signs.build(), markings: paint.build(), footprint: { x: corners.map((c) => c[0]), y: corners.map((c) => c[1]) } };
+  // What of it is in the way of a view: the building from its doors to its back wall, garage by garage, the tower higher.
+  const blocks: Block[] = [];
+  for (let i = 0; i + 1 < frames.length; i++) {
+    const a = frames[i];
+    const b = frames[i + 1];
+    const quad = [out(a, front), out(b, front), out(b, rear), out(a, rear)];
+    blocks.push({ x: quad.map((c) => c[0]), y: quad.map((c) => c[1]), anchor: (a.z + b.z) / 2, lo: -3, hi: tall[i] ? towerTop : top });
+  }
+  return { mesh: mb.build(), signs: signs.build(), markings: paint.build(), footprint: { x: corners.map((c) => c[0]), y: corners.map((c) => c[1]) }, blocks };
 }
 
 // ---- grandstands -----------------------------------------------------------------
@@ -764,6 +779,39 @@ export function placeGrandstands(
   }
   return stands;
 }
+
+/**
+ * A grandstand as blocks, for what it hides: the lower rows, the upper rows,
+ * the back wall and the roof, along each stretch of its front.
+ */
+export function standBlocks(s: Stand): Block[] {
+  const out: Block[] = [];
+  const top = 1 + STAND_ROWS * STAND_RISE;
+  const roof = top + 3.5;
+  const low = Math.floor(STAND_ROWS / 2);
+  const foot = s.foot - s.base;
+  const slices: [number, number, number, number][] = [
+    [0, (low / STAND_ROWS) * STAND_DEPTH, foot, 1 + low * STAND_RISE],
+    [(low / STAND_ROWS) * STAND_DEPTH, STAND_DEPTH, foot, top],
+    [STAND_DEPTH - 0.3, STAND_DEPTH + 0.2, foot, roof],
+    [STAND_DEPTH * 0.3, STAND_DEPTH + 0.5, roof - 0.4, roof],
+  ];
+  for (let i = 0; i + 1 < s.front.length; i++) {
+    const a = s.front[i];
+    const b = s.front[i + 1];
+    for (const [d0, d1, lo, hi] of slices) {
+      out.push({
+        x: [a.x + a.ox * d0, b.x + b.ox * d0, b.x + b.ox * d1, a.x + a.ox * d1],
+        y: [a.y + a.oy * d0, b.y + b.oy * d0, b.y + b.oy * d1, a.y + a.oy * d1],
+        anchor: s.base, lo, hi,
+      });
+    }
+  }
+  return out;
+}
+
+/** How far a grandstand's roof is above its lowest row's floor. */
+export const STAND_ROOF = 1 + STAND_ROWS * STAND_RISE + 3.5;
 
 /** Stepped seating rising away from the track, a back wall and a roof over the upper rows. */
 export function buildGrandstands(stands: readonly Stand[]): MeshData {
