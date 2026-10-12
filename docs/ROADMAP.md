@@ -414,6 +414,38 @@ Ideas 1 to 3 of the earlier list are built. What is left of it, and what buildin
 5. **A lap that can be edited.** Thirty to fifty control points for 5 km, at the corners, not 140. Small to medium.
 6. **In a worker**, so the page does not stand still for up to eight seconds. Small.
 
+## Television Overhaul Package
+
+Asked for on 2026-10-12: "Introduce the Television Overhaul Package -- which greatly improves the way the TV view shows the race. That means: no more cameras in grandstands, no more cameras in mountains or through the pit stalls. Write out in steps what the Television Overhaul Package entails." The steps below are that; none is built, and he has not said go.
+
+### Why it goes wrong now
+
+Read from the code (`tvCameras` in `core/broadcast.ts`, `trackShots` in `core/shots.ts`, `placeGrandstands` in `core/scenery.ts`); not yet counted on circuits, which is step 1.
+
+- **A camera is put down by a rule beside the track, and knows only the ground under it.** A tower 15 m beyond the run-off at the apex of every corner; one 25 m from the middle of the road two thirds along every straight, on whichever side is lower; one 21 m out wherever a stretch is still unseen. Nothing in it knows of a grandstand, the pit building, a fence, a gantry or a board.
+- **The grandstands go to the same places.** One 10 or 25 m beyond the run-off at the corners after the three biggest braking zones, 15 m deep: the corner's tower stands in it. The main one along the start straight, 9 m beyond the verge, with the pit building across the road: the start straight's camera stands in the one or in the other, and the garages are open rooms, so from there the race is seen through a pit stall.
+- **"Sees" means the ground is not in the way**, tried every 25 m along the line and for every third station, with the camera's height taken at its own spot. On steep ground, drawn three times as steep, the hillside beside the camera is not tried; and what is drawn far from the track is a coarser ground than the one the heights are read from.
+- **The helicopter looks out for the ground only.** It keeps 50 m over the ground under it and climbs when a hill blocks its view, but the way it eases from one place to the next is not looked at, and nothing built counts.
+- **The director trusts the table of what each camera sees.** Nobody looks at the picture: a car behind a stand or a pit building is "in view".
+
+### The steps
+
+Each ends in something to watch.
+
+1. **A survey of what is on screen now.** A fixed set of circuits (Bremgarten, Monaco, a generated Grand Prix circuit, a street circuit, a mountain course on the mountain landscape, a long lap) and, for each: every camera with what is wrong with it (in a stand, in the pit building, under the drawn ground or against a hillside, in a fence or the trees), and over a race the share of time on air that the car shown is hidden or the lens is inside something, by kind of camera. And one still from every camera as a sheet to look at. These figures are the yardstick: the package is done when they are nought, and they stay as tests.
+2. **One account of everything that is in the way.** The ground as it is drawn, the grandstands with their roofs, the pit building (a garage counts as solid), gantries and bridges, advertising boards, barriers and fences, marshal posts, trees. It answers two questions, fast enough to ask every frame: may a camera stand here, and is this line of sight clear.
+3. **Cameras where a circuit would put them.** How host broadcasters place their cameras is to be looked up first (how many, on what, how high), not made up. Then the positions are chosen, not ruled: towers and platforms behind the barrier where cars come towards the lens, a platform on top of a grandstand and not in it, the pit wall and the roof of the pit building for the pit lane and the start, a few low cameras at the kerb, a gantry at the line. A position is taken only if step 2 lets a camera stand there, and for what it sees. The towers and platforms are drawn, so a camera in another camera's picture is a camera.
+4. **The picture checked while it is on air.** The line from the lens to the car shown is tried against step 2 as the shot runs; a car hidden for more than a moment means a cut to a camera that sees it. The helicopter's way from one place to the next is looked at before it flies it; the chase camera, the pit box camera and the grid walk keep clear likewise. A stop is shown from the pit wall or the roof, never from inside a garage or through one.
+5. **The race shown as television shows it.** Sequences, not single shots: a car or a battle handed from camera to camera through a sector, cut as it passes each one; the cameras of a sequence on one side of the road, so the cars keep going the same way across the screen; a shot that starts wide and tightens; room in front of the car, and both cars of a battle in the picture; the helicopter as a choice, not the way out. The start, a restart, the finish and a pit stop each as a sequence of their own. Replays from the other side.
+6. **A camera plan to look at** (to be decided): the cameras and what each sees on the 2D map, a camera picked by hand during a broadcast, and perhaps a camera moved or taken out and kept with the project.
+7. **Checked**: the survey of step 1 again on the same circuits, the sheets, what the checks cost per frame, and the documents.
+
+### His to decide
+
+- How far it goes: steps 1 to 4 put right what he named; step 5 is the "greatly improves"; step 6 is extra.
+- Whether camera towers and platforms are drawn.
+- Whether a camera may stand in front of the barrier at all (a low one at a kerb), or only behind it.
+
 ## Proposed, not decided
 
 - Projects and backups.
