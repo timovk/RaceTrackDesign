@@ -55,8 +55,9 @@ export function surveyCameras(
     }
     return {
       id: cam.id, label: cam.label,
-      standsIn: solids.standing(cam.at[0], cam.at[1], cam.at[2], cam.mount === 'post' ? 0.6 : 1.5, cam.mount === 'roof' || cam.mount === 'post'),
-      inFront: cam.mount !== 'post' && !!insideBarriers?.(cam.at[0], cam.at[1], 0.5),
+      standsIn: solids.standing(cam.at[0], cam.at[1], cam.at[2], cam.mount === 'post' ? 0.6 : 1.5, cam.mount === 'roof' || cam.mount === 'post' || cam.mount === 'gantry'),
+      // (The camera on the pit wall, and one that hangs over the road from a truss, are there on purpose.)
+      inFront: cam.mount !== 'post' && cam.mount !== 'gantry' && !!insideBarriers?.(cam.at[0], cam.at[1], 0.5),
       sees, hidden, by,
     };
   });

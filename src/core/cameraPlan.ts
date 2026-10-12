@@ -7,9 +7,10 @@
  * important corner"; 34 round the 13.6 km of Le Mans. (`CAMERAS` is the line
  * through those three; the sources are in docs/ROADMAP.md.) They stand on
  * towers and platforms behind the barriers, lower now than they used to,
- * to show the speed; on a lift over the first corner; on the grandstands
- * for the wide view; over the pit lane; and a few are built into the kerbs
- * (those are left out here: what they showed was grass and kerb).
+ * to show the speed; in front of the grid for the start, looking back at
+ * it; on a lift over the first corner; on the grandstands for the wide
+ * view; over the pit lane; and a few are built into the kerbs (those are
+ * left out here: what they showed was grass and kerb).
  * A long straight is covered in three: out of the corner before it, at top
  * speed, and into the braking zone.
  *
@@ -51,15 +52,20 @@ export interface TvCamera {
   quality?: Uint8Array;
   /** The side of the road it stands on: 1 left of the direction of travel, -1 right (none for one that is not beside it). */
   side?: 1 | -1;
-  /** What it stands on: a tower of its own from the ground up (the default), a platform on a roof, or a post on the pit wall. */
-  mount?: 'tower' | 'roof' | 'post';
+  /**
+   * What it stands on: a tower of its own from the ground up (the default),
+   * a platform on a roof, a post on the pit wall, or a truss across the road
+   * that it hangs from (`stand.span`: the truss's two posts, behind the
+   * barriers, with the ground at each).
+   */
+  mount?: 'tower' | 'roof' | 'post' | 'gantry';
   /** How far it turns either way from the way it faces, radians: what it stands on is behind it. */
   pan?: number;
   /** The station it was placed for (a corner's turn-in, the middle of a straight), and the station it sees that is nearest to it: where a car passes it. */
   station?: number;
   closest?: number;
   /** For drawing what it stands on: the real height of the ground or roof under it, how far above that it is, and the way it faces (radians, as a heading). */
-  stand?: { ground: number; up: number; facing: number };
+  stand?: { ground: number; up: number; facing: number; span?: { x: number; y: number; ground: number }[] };
 }
 
 export interface CameraInput {
@@ -107,7 +113,7 @@ export const FRAME_HALF = 4;
  * tower nearly right round, its platform's rail behind it; on a roof only
  * to where the roof would come into the picture; on a post right round.
  */
-const PAN = { tower: 125, roof: 70, post: 180 } as const;
+const PAN = { tower: 125, roof: 70, post: 180, gantry: 100 } as const;
 /** The camera for the pit lane stands on the pit wall, this far above the lane (metres); the wall is this far beyond the lane's edge. */
 const ON_WALL = 4.5;
 const WALL_OUT = 0.9;
@@ -126,6 +132,27 @@ const HOLD_MOST = 300;
 const MORE_TO_HOLD = 1.4;
 /** Corners that get a second camera. */
 const TWO_CAMERAS = 5;
+/**
+ * The start is shown from in front of the grid, as television shows it: the
+ * cars head-on through a long lens, the front row nearest and the lights
+ * over them. Its camera hangs over the middle of the road from a truss
+ * across it, this far beyond the line (metres) and this high over the road,
+ * the truss's posts behind the barriers and no further apart than this; or
+ * it stands where the grid's own line runs on beyond the barrier (often
+ * beyond the first corner: on a tower there, or on the roof of the
+ * grandstand that stands there); or on a tower beside the road. A tower this
+ * high, the lowest that can be, to look under the start gantry. No more than
+ * this far off the grid's line (degrees), the less the better; best about
+ * this far from the line, and no further than this if it can be helped
+ * (metres).
+ */
+const START_AHEAD = [90, 130, 180, 240, 310];
+const OVER_ROAD = 7;
+const START_SPAN = 80;
+const START_UP = [4, 6, 8];
+const START_OFF = 12;
+const START_BEST = 240;
+const START_FAR = 450;
 
 interface Candidate extends TvCamera {
   quality: Uint8Array;
@@ -384,19 +411,109 @@ export function planCameras(input: CameraInput): TvCamera[] {
     return q / (255 * Math.max(1, count));
   };
 
-  // The start, from behind the grid: a tower beside the road behind the last row, or a roof that looks down the grid.
+  // The start, from in front of the grid, looking back at it.
+  const last = mod(-grid, n);
+  const along = Math.hypot(t.x[0] - t.x[last], t.y[0] - t.y[last]) || 1;
+  const ax = (t.x[0] - t.x[last]) / along;
+  const ay = (t.y[0] - t.y[last]) / along;
+  const middle = mod(-Math.round(grid / 2), n);
+  const fronts: Candidate[] = [];
+  const front = (x: number, y: number, k: number, side: 1 | -1, fenced: boolean): void => {
+    const ground = input.height(x, y);
+    for (const up of START_UP) {
+      // (Behind a catch fence, only from over it.)
+      if (fenced && up < OVER_FENCE) continue;
+      const z = display(ground) + up;
+      if (!free(x, y, z)) continue;
+      fronts.push(survey({ id: `front-${fronts.length}`, label: 'Start', at: [x, y, z], side, mount: 'tower', stand: { ground, up, facing: facingTrack(x, y, middle) }, factor: 1, station: k }));
+    }
+  };
+  // Where the grid's line runs on beyond the barrier: the first places there, a few metres apart.
+  for (let s = 60, tried = 0; s <= CAMERA_REACH - GRID_LENGTH / 2 && tried < 3; s += 4) {
+    const x = t.x[0] + ax * s;
+    const y = t.y[0] + ay * s;
+    const near = index.nearest(x, y, 160);
+    const lateral = near ? index.lateral(near.k, x, y) : 0;
+    const side: 1 | -1 = lateral >= 0 ? 1 : -1;
+    if (near && Math.abs(lateral) < barrier(near.k, side) + BEHIND) continue;
+    front(x, y, near?.k ?? 0, side, !!near && barriers?.fence[side > 0 ? 0 : 1][near.k] === 1);
+    tried++;
+    s += 8;
+  }
+  // And beside the road ahead of the line; or over it, hanging from a truss whose posts stand there.
+  for (const m of START_AHEAD) {
+    const k = mod(stations(m), n);
+    const posts: { x: number; y: number; ground: number }[] = [];
+    for (const side of [1, -1] as const) {
+      const [x, y] = beside(k, side, barrier(k, side) + BEHIND);
+      front(x, y, k, side, barriers?.fence[side > 0 ? 0 : 1][k] === 1);
+      const ground = input.height(x, y);
+      if (free(x, y, display(ground) + 2)) posts.push({ x, y, ground });
+    }
+    const z = display(t.z[k]) + OVER_ROAD;
+    if (posts.length < 2 || Math.hypot(posts[0].x - posts[1].x, posts[0].y - posts[1].y) > START_SPAN) continue;
+    // (Nothing built where it hangs, nor a hillside between its posts.)
+    if (solids.standing(t.x[k], t.y[k], z, 1.5, true) !== null) continue;
+    fronts.push(survey({ id: `front-${fronts.length}`, label: 'Start', at: [t.x[k], t.y[k], z], mount: 'gantry', stand: { ground: t.z[k], up: OVER_ROAD, facing: facingTrack(t.x[k], t.y[k], middle), span: posts }, factor: 1, station: k }));
+  }
+  // And on the roof of a grandstand that stands where the grid's line runs on: at its front edge, where that line meets it.
+  for (const s of venue?.stands ?? []) {
+    let at: (typeof s.front)[number] | null = null;
+    let least = Infinity;
+    for (const p of s.front) {
+      const dx = p.x - t.x[0];
+      const dy = p.y - t.y[0];
+      const aside = Math.abs(dx * ay - dy * ax);
+      if (dx * ax + dy * ay < 60 || aside >= least) continue;
+      least = aside;
+      at = p;
+    }
+    if (!at) continue;
+    const x = at.x + at.ox * (STAND_DEPTH * 0.3 + 0.5);
+    const y = at.y + at.oy * (STAND_DEPTH * 0.3 + 0.5);
+    const z = display(s.base) + STAND_ROOF + ON_ROOF;
+    if (!free(x, y, z, true)) continue;
+    const k = index.nearest(x, y, 200)?.k ?? 0;
+    fronts.push(survey({ id: `front-${fronts.length}`, label: 'Start', at: [x, y, z], side: index.lateral(k, x, y) >= 0 ? 1 : -1, mount: 'roof', stand: { ground: s.base + STAND_ROOF, up: ON_ROOF, facing: Math.atan2(-at.oy, -at.ox) }, factor: 0.9, station: k }));
+  }
+  const seen = (c: Candidate, from: number, count: number): number => {
+    let s = 0;
+    for (let i = 0; i < count; i++) s += c.sees[mod(from + i, n)];
+    return s / Math.max(1, count);
+  };
+  let start: Candidate | null = null;
+  let nearest = -Infinity;
+  for (const c of fronts) {
+    // The whole grid, the front rows without a gap, and from nearly straight ahead of it.
+    const dx = c.at[0] - t.x[middle];
+    const dy = c.at[1] - t.y[middle];
+    const off = (Math.acos(Math.max(-1, Math.min(1, (dx * ax + dy * ay) / (Math.hypot(dx, dy) || 1)))) * 180) / Math.PI;
+    // (The rows at the back may be behind the beam of the start gantry, as they are on television.)
+    const whole = seen(c, last, grid - stations(6));
+    if (off > START_OFF || whole < 0.6 || seen(c, mod(-stations(70), n), stations(64)) < 0.97) continue;
+    const far = Math.hypot(c.at[0] - t.x[0], c.at[1] - t.y[0]);
+    // (Head-on before near: straight ahead of the grid, the cars stand one behind the other in the picture.)
+    const score = whole - (3 * off) / START_OFF - 0.15 * Math.min(1, Math.abs(far - START_BEST) / START_BEST) - 0.5 * Math.max(0, (far - START_FAR) / START_FAR)
+      - (c.mount === 'roof' ? 0.1 : 0.01 * c.stand!.up);
+    if (score > nearest) {
+      nearest = score;
+      start = c;
+    }
+  }
+  // (The grid from behind as well, where a camera there adds to the lap: a tower beside the road behind the last row.
+  // High: it looks along the fence that lines the start straight, and over it.)
   const back = mod(-grid - stations(35), n);
-  const startTowers = candidates.length;
-  // (High: it looks along the fence that lines the start straight, and over it.)
-  for (const side of [1, -1] as const) tower(`start${side > 0 ? 'l' : 'r'}`, 'Start', back, side, barrier(back, side) + BEHIND, [LIFT]);
-  const starts = [...candidates.slice(startTowers), ...pitRoofs, ...roofs].filter((c) => {
-    // Behind the grid, looking down it: the car on pole comes no nearer than the last row.
-    const d = (k: number) => Math.hypot(t.x[k] - c.at[0], t.y[k] - c.at[1]);
-    return d(mod(-grid, n)) < d(0) && over(c, mod(-grid, n), grid + stations(120)) > 0.5;
-  });
-  // (A tower behind the last row before a roof beside the grid: it looks down the grid as the field does.)
-  const down = (c: Candidate) => over(c, mod(-grid, n), grid + stations(150)) + (c.mount === 'tower' ? 0.25 : 0);
-  let start = starts.sort((a, b) => down(b) - down(a))[0] ?? null;
+  const behind = candidates.length;
+  for (const side of [1, -1] as const) tower(`grid${side > 0 ? 'l' : 'r'}`, 'Grid', back, side, barrier(back, side) + BEHIND, [LIFT]);
+  if (!start) {
+    // Nowhere to stand in front of it: from behind the grid, a tower there or a roof that looks down it.
+    const starts = [...candidates.slice(behind), ...pitRoofs, ...roofs].filter((c) => {
+      const d = (k: number) => Math.hypot(t.x[k] - c.at[0], t.y[k] - c.at[1]);
+      return d(last) < d(0) && over(c, last, grid + stations(120)) > 0.5;
+    });
+    const down = (c: Candidate) => over(c, last, grid + stations(150)) + (c.mount === 'tower' ? 0.25 : 0);
+    start = starts.sort((a, b) => down(b) - down(a))[0] ?? null;
+  }
   if (start) {
     start = { ...start, id: 'start', label: 'Start' };
     take(start);
@@ -418,6 +535,8 @@ export function planCameras(input: CameraInput): TvCamera[] {
     const into = mod(first.start - stations(150), n);
     let lift: Candidate | null = null;
     for (const p of places) {
+      // (Not where the start's camera stands already.)
+      if (chosen.some((o) => Math.hypot(o.at[0] - p.x, o.at[1] - p.y) < APART)) continue;
       const ground = input.height(p.x, p.y);
       for (const up of [LIFT, 10]) {
         const z = display(ground) + up;
@@ -540,9 +659,9 @@ export function planCameras(input: CameraInput): TvCamera[] {
     if (!pick || most2 * ds < 40 * HOLD) break;
     take(pick);
   }
-  // The start has to be shown from somewhere: without a place behind the grid, the camera that sees most of it.
+  // The start has to be shown from somewhere: without a place in front of the grid or behind it, the camera that sees most of it.
   if (!start && chosen.length) {
-    const from = mod(-grid, n);
+    const from = last;
     const c = [...chosen].sort((a, b) => over(b, from, grid + stations(150)) - over(a, from, grid + stations(150)))[0];
     chosen[chosen.indexOf(c)] = { ...c, id: 'start' };
   }

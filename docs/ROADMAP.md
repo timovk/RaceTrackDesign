@@ -490,19 +490,32 @@ Looked at in the app on one circuit (a generated Grand Prix circuit): the start 
 - **One cut in eight to the same cars crosses the road** (63 of 526), most on the lap of 12 km (24 of 93). The same side is preferred, not required.
 - **The helicopter still has 13% of the time** (7% on the lap of 12 km, 17% at Monaco), and in the app one helicopter shot ran twelve seconds.
 - **Trees.** Those in a camera's line of sight are cleared, but one standing beside the line can fill the foreground of a long lens; seen at one corner camera in the app.
-- **The start.** On the circuit looked at, the end of the main grandstand is in the left of the picture from the tower behind the grid; and the first corner's camera has the field small for its first second or two.
-- **A camera's own tower is not in the way of another camera.** The towers are drawn but are not among the blocks; no case of one blocking a car was seen.
+- **The first corner at the start.** Its camera has the field small for the first second or two, on the circuit looked at.
+- **A camera's own tower is not in the way of another camera**, nor is the truss the start camera hangs from. They are drawn but are not among the blocks; no case of one blocking a car was seen.
 - **Fences and boards** are not blocks either: a camera behind a catch fence is put at 6 m or more to look over it, which is a rule and not a test.
 - **The Shots menu of the 3D view is untouched.** It keeps its own rule (a tower beyond the run-off at each corner's apex, `core/shots.ts`), so a shot picked there can still look through a grandstand. The package was about the TV view.
 - **The cost per frame of the check on air was not measured**; no stutter was noticed.
 - **The count line** `18 + 1.25 per km` rests on three circuits, and the marks for a picture (best at 40 to 300 m, of a car coming towards the lens) are mine.
 
+### The start from the front of the grid
+
+Asked for on 2026-10-12, after steps 1 to 5: "Also, just like in the real racing series, make the starting camera face the front of the grid. You know the suspense when the five red lights turn on before an F1 race? I want to replicate that, which means camera at the front of the grid." Built the same day, on the same branch.
+
+- **Where the camera is.** In front of the grid, looking back at it. First choice: over the middle of the road, 7 m up, hanging from a truss across it 90 to 310 m beyond the line, the truss's posts behind the barriers. Otherwise where the grid's own line runs on beyond the barrier (a tower, or the roof of a grandstand that stands there), or a tower beside the road. Behind the grid only where none of those can be. On the six circuits: a truss on four (240 m beyond the line on three, 90 m at Bremgarten), a tower 1 degree off the line at Monaco and one 3.3 degrees off on the mountain course; every one sees the whole grid.
+- **Why a truss.** The first version stood on a tower beside the road, 18 m off the grid's line. That is head-on by the figures (2.5 degrees), but the picture had the grid running diagonally across it: the camera was further to the side than it was high. Straight ahead, the rows stack up one behind the other, which is the picture he meant. The truss is my choice, not his; it is drawn.
+- **The lights.** The lamps on the start gantry are lit, one housing a second, and go out at the start. They face the grid and the front both; whether real gantries carry lamps on the face away from the grid I did not look up, and took it from how a start looks on television. With the gantry in the picture the lights graphic on the screen is left out, because it sat on top of the real ones; it is still shown where the start camera has to stand behind the grid. That too is my choice.
+- **The picture.** The front four cars with 2.5 m of road either side, the gantry over them, closing in while the lights come on; no cut when they go out, the camera opens up and comes down to the cars as they come at it, and the field is left a second before the leader passes under the camera.
+- **After it, on the six circuits** (ten minutes of race each): 140 cameras, none standing in anything or in front of the barrier (the camera over the road is there on purpose and is not counted), 0.2% of sightings hidden, 1.3% of trackside air time with a car hidden (1.1% before this), the helicopter 13%. Placing the cameras takes 0.3 to 1.7 s.
+- **Looked at** on one circuit in the app (a generated Grand Prix circuit, truss 240 m beyond the line): the lights and the first eight seconds of the race.
+- **Not right yet.** The lamps are small in a small window (a third of a metre each; five housings span 4 m of a picture about 13 m wide). Between the camera in front of the grid and the first corner the field can be "cut" to the same camera twice in a row, which shows as nothing but is wasteful. The truss is not counted as in the way of other cameras. The start lights of a standing restart during a race are not lit.
+
 ### His to decide
 
 - Step 6, the camera plan on the map.
-- Whether the towers and platforms stay drawn (taken as yes).
+- Whether the towers and platforms stay drawn (taken as yes), and the truss over the road in front of the grid.
 - Whether kerb cameras should come back in another form (lower lens, wider angle, only as a replay angle).
 - Whether the Shots menu should take its places from the same plan.
+- Whether the lights graphic on the screen should come back over the picture from in front of the grid (left out now, the gantry's own lights are lit).
 
 
 ## Proposed, not decided

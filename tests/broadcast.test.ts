@@ -26,13 +26,18 @@ function car(id: number, u: number, extra: Partial<TvCar> = {}): TvCar {
 }
 
 describe('trackside cameras', () => {
-  it('stand round the corners, behind the grid and beside the straights, and between them see the whole lap', () => {
+  it('stand round the corners, in front of the grid and beside the straights, and between them see the whole lap', () => {
     const ids = cams.map((c) => c.id);
     // (Without the buildings: open ground. The cameras on the roofs and the pit wall are in tests/tvSurvey.test.ts.)
     for (const c of metrics.corners) expect(ids.some((id) => id.startsWith(`corner-${c.number}`) || id === 't1'), `corner ${c.number}`).toBe(true);
     expect(ids).toContain('start');
     expect(ids).toContain('t1');
     expect(ids.some((id) => id.startsWith('straight-'))).toBe(true);
+    // The start's camera looks back at the grid: the line is nearer to it than the last row.
+    const start = cams.find((c) => c.id === 'start')!;
+    const back = t.n - Math.round(200 / t.ds);
+    expect(Math.hypot(t.x[0] - start.at[0], t.y[0] - start.at[1])).toBeLessThan(Math.hypot(t.x[back] - start.at[0], t.y[back] - start.at[1]));
+    for (let k = t.n - Math.round(70 / t.ds); k < t.n - Math.round(8 / t.ds); k += 3) expect(start.sees[k], `grid ${k}`).toBe(1);
     const covered = new Uint8Array(t.n);
     for (const c of cams) for (let k = 0; k < t.n; k++) covered[k] |= c.sees[k];
     const seen = covered.reduce((a, b) => a + b, 0);
@@ -624,6 +629,48 @@ describe('television as a sequence', () => {
     // Without a camera for the first corner, the start is what it was.
     const plain = new Director([start], { n, ds }, rng(5)).update(0.1, 1, grid(0), 0.1)!;
     expect(plain.hold).toBeCloseTo(8, 6);
+  });
+
+  it('leaves the camera in front of the grid before the leader passes it, and shows the field from elsewhere until the first corner has it', () => {
+    // The camera stands 300 m beyond the line; the first corner is 1,600 m on, and its camera sees the last 400 m to it.
+    const start = cam('start', -300, 200, { closest: 150 });
+    const corner = cam('t1', 600, 900, { station: 800 });
+    const between = cam('x', 100, 700);
+    const grid = (moved: number): TvCar[] => Array.from({ length: 8 }, (_, i) => car(i, n - 4 * i + moved, { speed: moved > 0 ? 50 : 0, interval: 0.5 }));
+    const d = new Director([start, corner, between], { n, ds }, rng(5));
+    const shots: TvShot[] = [];
+    const at: number[] = [];
+    for (let i = 0; i < 420 && shots[shots.length - 1]?.camera !== 't1'; i++) {
+      const moved = i * 2.5;
+      const shot = d.update(0.1, 1, grid(moved), 0.1 + i * 0.1)!;
+      if (shots[shots.length - 1] !== shot) {
+        shots.push(shot);
+        at.push(moved);
+      }
+    }
+    expect(shots[0].camera).toBe('start');
+    // Left a second before the leader is under it: 50 m at 50 m/s.
+    expect((150 - at[1]) * ds).toBeLessThanOrEqual(50 + 5);
+    expect((150 - at[1]) * ds).toBeGreaterThan(30);
+    // The field from another camera (or the helicopter) meanwhile, at most twice; and the first corner once the leader is in its sight.
+    const meanwhile = shots.slice(1, -1);
+    expect(meanwhile.length).toBeGreaterThanOrEqual(1);
+    expect(meanwhile.length).toBeLessThanOrEqual(2);
+    for (const s of meanwhile) {
+      expect(['x', 'heli']).toContain(s.camera);
+      expect(s.reason).toBe('start');
+      expect(s.subject.kind).toBe('group');
+    }
+    expect(shots[shots.length - 1].camera).toBe('t1');
+    expect(shots[shots.length - 1].reason).toBe('start');
+    expect(at[at.length - 1]).toBeGreaterThanOrEqual(600);
+    // A first corner too far on is not waited for: the race goes on as any other shot.
+    const far = new Director([start, cam('t1', 1200, 1500, { station: 1400 }), between], { n, ds }, rng(5));
+    let seen = far.update(0.1, 1, grid(0), 0.1)!;
+    const first = seen;
+    for (let i = 1; i < 100 && seen === first; i++) seen = far.update(0.1, 1, grid(i * 2.5), 0.1 + i * 0.1)!;
+    expect(seen).not.toBe(first);
+    expect(seen.reason).not.toBe('start');
   });
 
   it('shows the leader to the flag, from a camera that sees the line, once', () => {

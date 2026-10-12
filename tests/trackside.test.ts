@@ -6,7 +6,7 @@ import { Earthworks, type MeshData, pitRoad, trackRoad } from '../src/core/scene
 import { STAND_DEPTH, STAND_RISE, STAND_ROWS, TrackIndex, buildPitBuilding, inside, placeGrandstands, runoffAreas } from '../src/core/scenery.ts';
 import { ATLAS, NUMBERS, PanelBuilder, SIGNS, START_SIGN, cellUv, numberCell, signCell } from '../src/core/signs.ts';
 import { buildTrack } from '../src/core/track.ts';
-import { brakingMarks, buildBoards, buildGantries, buildSkidMarks, placeBoards, placeGantries, roadHeight, seatCrowd } from '../src/core/trackside.ts';
+import { LAMP_VERTICES, START_LAMPS, brakingMarks, buildBoards, buildGantries, buildSkidMarks, placeBoards, placeGantries, roadHeight, seatCrowd } from '../src/core/trackside.ts';
 import { VEHICLES } from '../src/core/vehicles.ts';
 import { bigRectangle, design, flatMap } from './helpers.ts';
 import { car, facilities, metrics, performance, race, start, track as t } from './raceFixture.ts';
@@ -234,6 +234,21 @@ describe('gantries', () => {
       if (along > 0) ahead++;
     }
     expect(ahead).toBe(built.faces.normals.length / 3 / 4 / 2);
+    // The lamps of the start lights are a mesh of their own, to be lit: five housings of two lamps, each to the grid and to the front.
+    expect(built.lamps.positions.length / 3).toBe(START_LAMPS * LAMP_VERTICES);
+    let toGrid = 0;
+    for (let v = 0; v < built.lamps.normals.length / 3; v += 4) {
+      const along = built.lamps.normals[v * 3] * Math.cos(t.heading[0]) + built.lamps.normals[v * 3 + 2] * Math.sin(t.heading[0]);
+      expect(Math.abs(along)).toBeCloseTo(1, 5);
+      if (along < 0) toGrid++;
+    }
+    expect(toGrid).toBe(START_LAMPS * 2);
+    // A housing's lamps are together in it: the first sixteen vertices lie within half a metre across the road.
+    const across = (v: number) => (built.lamps.positions[v * 3] - t.x[0]) * Math.sin(t.heading[0]) - (built.lamps.positions[v * 3 + 2] - t.y[0]) * Math.cos(t.heading[0]);
+    for (let h = 0; h < START_LAMPS; h++) {
+      const xs = Array.from({ length: LAMP_VERTICES }, (_, i) => across(h * LAMP_VERTICES + i));
+      expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(0.5);
+    }
     // Nothing hangs lower than five metres over the road: the lights under the start gantry are the lowest.
     for (const m of [built.structure, built.faces]) {
       for (let v = 0; v < m.positions.length / 3; v++) {
@@ -244,13 +259,11 @@ describe('gantries', () => {
         expect(m.anchors![v]).toBeLessThanOrEqual(g.road + 1e-4);
       }
     }
-    // The start lights: five housings of two lamps, facing the grid.
-    const lamps: number[] = [];
-    const c = built.structure.colors!;
-    for (let v = 0; v < c.length / 3; v++) if (Math.abs(c[v * 3] - 0.32) < 1e-6 && Math.abs(c[v * 3 + 1] - 0.05) < 1e-6) lamps.push(v);
-    expect(lamps).toHaveLength(5 * 2 * 4);
-    for (const v of lamps) {
-      expect(built.structure.normals[v * 3] * Math.cos(t.heading[0]) + built.structure.normals[v * 3 + 2] * Math.sin(t.heading[0])).toBeCloseTo(-1, 5);
+    // (The lamps hang under the beam with their housings, over the middle of the road.)
+    for (let v = 0; v < built.lamps.positions.length / 3; v++) {
+      expect(built.lamps.positions[v * 3 + 1]).toBeGreaterThan(t.z[0] + 5);
+      expect(built.lamps.positions[v * 3 + 1]).toBeLessThan(t.z[0] + 6.3);
+      expect(Math.abs(index.lateral(0, built.lamps.positions[v * 3], built.lamps.positions[v * 3 + 2]))).toBeLessThan(2.5);
     }
   });
 });

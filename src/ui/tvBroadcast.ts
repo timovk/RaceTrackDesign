@@ -25,9 +25,9 @@
  * on the lens (a fresh set at every cut), except the helicopter's.
  *
  * Before the start, the camera walks the grid from tenth to pole, a caption
- * for each car, then looks down the grid from behind it while the start
- * lights come on and go out (or the green flag waves for a rolling start);
- * the start itself is shown from there.
+ * for each car, then looks at the grid from in front of it, the lights on
+ * the gantry over it coming on and going out (or the green flag waving for
+ * a rolling start); the start itself goes on in that picture.
  *
  * Every step of the race is kept for the last 40 seconds (core/race/replay.ts),
  * so the director can replay an overtake or an incident a few seconds later:
@@ -66,6 +66,8 @@ export interface TvHost {
   pitSide: number;
   /** A world point with drawn heights in scene coordinates. */
   fromDrawn(p: Vec3): THREE.Vector3;
+  /** Lights this many of the five start lights on the gantry over the line (0: all out); false where there is no gantry with lights. */
+  startLights(lit: number): boolean;
   /** The drawn ground's scene height under a scene point, or null off the map. */
   groundY(x: number, z: number): number | null;
   /** What is in the way between two scene points (the ground or something built), the last `skip` metres aside; null when the line is clear. */
@@ -100,6 +102,24 @@ const GRID_WALK = 10;
 const GRID_PER_CAR = 3;
 const GRID_MOVE = 0.45;
 const GRID_WIDE = 6;
+/**
+ * The grid from the camera in front of it: this much of the road either side
+ * of the front rows is in the picture (metres), which fills this share of
+ * its width; the camera aims this far over the cars, so that the lights over
+ * the line are in the picture with the cars under them (that takes this
+ * many metres of height); while the lights come on it closes in until this
+ * share of the road beside the cars is left, as far as that height allows;
+ * and once they are out it comes down to the cars between these times
+ * (screen seconds).
+ */
+const GRID_AIR = 2.5;
+const GRID_SHARE = 0.9;
+const GRID_TALL = 8.4;
+const GRID_CLOSE = 0.3;
+/** The cars at the front of the grid that picture is framed on. */
+const GRID_FRONT = 4;
+const GRID_LIFT = 3.4;
+const GRID_DOWN = [0.8, 4];
 /** The start lights: seconds on the wide shot before the first comes on, one more a second, and then out after between these. */
 const LIGHTS_FROM = 1.5;
 const LIGHTS_OUT_MIN = 0.4;
@@ -170,6 +190,10 @@ export class TvBroadcast {
   /** The two cars of the battle on screen ('' for none), to caption a new pair within a shot. */
   private pair = '';
   private lastTarget: THREE.Vector3 | null = null;
+  /** Screen seconds since the last cut. */
+  private sinceCut = 0;
+  /** Whether the grid is waiting in a picture from in front of it, the lights on the gantry in it: the start's own shot goes on from that picture. */
+  private gridAhead = false;
   private time = 0;
   private seenEvents = -1;
   private sim: RaceSim | null = null;
@@ -379,6 +403,7 @@ export class TvBroadcast {
   private point(shot: TvShot, dt: number, cut: boolean): void {
     const aspect = this.frameView();
     const follow = (tc: number) => (cut ? 1 : 1 - Math.exp(-dt / tc));
+    this.sinceCut = cut ? 0 : this.sinceCut + dt;
     if (shot.camera === 'tcam' || shot.camera === 'nose' || shot.camera === 'rear') {
       const m = this.host.mount(shot.carrier!, shot.camera);
       if (!m) return;
@@ -399,6 +424,7 @@ export class TvBroadcast {
     let lag = 0.25;
     let share = 0.5;
     let pickUp = 1;
+    let held = false;
     if (shot.camera === 'chase') {
       const car = this.race.sim?.cars[shot.carrier!];
       const pose = this.host.car(shot.carrier!);
@@ -463,6 +489,20 @@ export class TvBroadcast {
       wantFov = framingFov(position.distanceTo(target), sub.size, share, aspect, 1.2, 45);
       // It picks the car up wide and closes in (not the start, held wide on the grid, nor a replay's second look).
       if (shot.reason !== 'start' && !shot.replay) pickUp = PICK_UP;
+      // The start from in front of the grid: the lights over the cars, then down to the cars as they come.
+      if (shot.reason === 'start' && shot.camera === 'start') {
+        const poses = subjectIds(shot.subject).map((id) => this.host.car(id)).filter((p): p is NonNullable<typeof p> => !!p).slice(0, GRID_FRONT);
+        const down = smooth((this.sinceCut - GRID_DOWN[0]) / (GRID_DOWN[1] - GRID_DOWN[0]));
+        const grid = this.fromInFront(position, poses, aspect, GRID_LIFT * (1 - down));
+        if (grid) {
+          target.copy(grid.target);
+          wantFov = grid.fov;
+          share = GRID_SHARE;
+          // (From the picture the grid waited in: no cut, the camera opens up as the cars get away.)
+          if (cut && this.gridAhead) held = true;
+        }
+      }
+      this.gridAhead = false;
     }
     // (What is to be free of buildings: the middle half of the picture.)
     this.frameHalf = Math.max(3, Math.min(14, (0.25 * sub.size) / share));
@@ -470,13 +510,13 @@ export class TvBroadcast {
     if (shot.camera !== 'chase' && sub.speed > 3) target.addScaledVector(forward, Math.min(8, (LEAD * sub.size) / share));
     // Panning with the car (its speed across the view), and closing what is left with a little lag.
     if (cut || !this.lastTarget || dt <= 0) {
-      if (cut) this.aim.copy(target);
+      if (cut && !held) this.aim.copy(target);
     } else {
       this.aim.add(target.clone().sub(this.lastTarget));
       this.aim.lerp(target, follow(lag));
     }
     this.lastTarget = target.clone();
-    this.fov = cut ? Math.min(pickUp > 1 ? 45 : 90, wantFov * pickUp) : this.fov + (wantFov - this.fov) * follow(pickUp > 1 ? CLOSE_IN : 0.6);
+    if (!held) this.fov = cut ? Math.min(pickUp > 1 ? 45 : 90, wantFov * pickUp) : this.fov + (wantFov - this.fov) * follow(pickUp > 1 ? CLOSE_IN : 0.6);
     this.place(position, this.aim, this.fov);
   }
 
@@ -522,13 +562,14 @@ export class TvBroadcast {
 
   /**
    * Before the start: from tenth on the grid to pole, a little ahead of each
-   * car and to the side away from the pits, then down the grid from behind
-   * it; then the race starts.
+   * car and to the side away from the pits, then the grid from in front of
+   * it while the lights come on; then the race starts.
    */
   private gridWalk(sim: RaceSim, dt: number): void {
     const aspect = this.frameView();
     if (!this.walk) {
       this.walk = { time: 0, shown: -1 };
+      this.host.startLights(0);
       this.shot = null;
       setChildren(this.drops);
       this.timer.hidden = true;
@@ -540,8 +581,9 @@ export class TvBroadcast {
     const last = order.length - 1;
     const step = w.time / GRID_PER_CAR;
     if (step >= last + 1) {
-      this.gridWide(order.slice(-GRID_WIDE), aspect);
-      this.startLights(sim, w.time - (last + 1) * GRID_PER_CAR);
+      const into = w.time - (last + 1) * GRID_PER_CAR;
+      this.gridWide(order.slice(-GRID_WIDE), aspect, into);
+      this.startLights(sim, into);
       return;
     }
     const i = Math.min(last, Math.floor(step));
@@ -580,10 +622,14 @@ export class TvBroadcast {
     }
     const hold = LIGHTS_OUT_MIN + (LIGHTS_OUT_MAX - LIGHTS_OUT_MIN) * hash01(sim.setup.settings.seed);
     if (from < 5 + hold) {
-      this.graphics.setLights({ lit: Math.min(5, Math.floor(from) + 1) });
+      // On the gantry over the grid; and on the screen where that is not in the picture.
+      const lit = Math.min(5, Math.floor(from) + 1);
+      const real = this.host.startLights(lit) && this.gridAhead;
+      this.graphics.setLights(real ? null : { lit });
       return;
     }
-    this.graphics.setLights('out');
+    const real = this.host.startLights(0) && this.gridAhead;
+    this.graphics.setLights(real ? null : 'out');
     this.go();
   }
 
@@ -593,19 +639,64 @@ export class TvBroadcast {
     this.race.play();
   }
 
-  /** The front of the grid from the camera behind it, waiting for the start. */
-  private gridWide(front: RaceCar[], aspect: number): void {
+  /**
+   * The cars at the front of the grid as a camera in front of them has them:
+   * where to aim (`lift` metres over them, no higher than keeps them in the
+   * picture) and the angle of view that shows the road they stand on. Null
+   * when the camera does not stand in front of them.
+   */
+  private fromInFront(
+    position: THREE.Vector3, poses: readonly { position: THREE.Vector3; heading: number; length: number; width: number }[], aspect: number, lift: number, close = 0,
+  ): { target: THREE.Vector3; fov: number } | null {
+    if (poses.length === 0) return null;
+    const centre = new THREE.Vector3();
+    for (const p of poses) centre.add(p.position);
+    centre.divideScalar(poses.length);
+    const view = centre.clone().sub(position).setY(0);
+    const distance = view.length();
+    if (distance < 1) return null;
+    view.divideScalar(distance);
+    // (In front of them: they face the camera.)
+    if (Math.cos(poses[0].heading) * view.x + Math.sin(poses[0].heading) * view.z > -0.5) return null;
+    // How wide they stand across the line of sight, each as it is turned to the camera.
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const p of poses) {
+      const across = (p.position.x - centre.x) * -view.z + (p.position.z - centre.z) * view.x;
+      const turned = Math.abs(Math.cos(p.heading) * view.x + Math.sin(p.heading) * view.z);
+      const half = (p.width * turned + p.length * (1 - turned)) / 2;
+      lo = Math.min(lo, across - half);
+      hi = Math.max(hi, across + half);
+    }
+    // (Closing in takes the road beside the cars out of the picture, not the cars.)
+    const size = hi - lo + 2 * GRID_AIR * (1 - (1 - GRID_CLOSE) * close);
+    const far = position.distanceTo(centre);
+    // Closer while the lights come on, but no closer than keeps the lights and the cars under them both in the picture.
+    const lights = (2 * Math.atan((GRID_TALL * lift) / GRID_LIFT / 2 / far) * 180) / Math.PI;
+    const fov = Math.max(1.2, lights, framingFov(far, size, GRID_SHARE, aspect, 1.2, 45));
+    const tall = 2 * far * Math.tan((fov * Math.PI) / 360);
+    const target = centre.clone();
+    target.y += Math.max(0, Math.min(lift, tall / 2 - 1.2));
+    return { target, fov };
+  }
+
+  /** The front of the grid from its camera, waiting for the start: head-on from in front of it, or down it from behind where no camera can stand in front. */
+  private gridWide(front: RaceCar[], aspect: number, into: number): void {
     const tc = this.director.camera('start');
     const poses = front.map((c) => this.host.car(c.id)).filter((p): p is NonNullable<typeof p> => !!p);
     if (!tc || poses.length === 0) return;
+    const position = this.host.fromDrawn(tc.at);
+    // (The same cars as the start's own shot has; and closing in slowly as the lights come on.)
+    const grid = this.fromInFront(position, poses.slice(-GRID_FRONT).reverse(), aspect, GRID_LIFT, smooth((into - LIGHTS_FROM) / 5));
+    this.gridAhead = !!grid;
     const centre = new THREE.Vector3();
     for (const p of poses) centre.add(p.position);
     centre.divideScalar(poses.length);
     let spread = 0;
     for (const p of poses) spread = Math.max(spread, 2 * p.position.distanceTo(centre));
-    const position = this.host.fromDrawn(tc.at);
+    if (grid) centre.copy(grid.target);
     this.aim.copy(centre);
-    this.fov = framingFov(position.distanceTo(centre), spread + poses[0].length * 2, 0.85, aspect, 1.2, 45);
+    this.fov = grid ? grid.fov : framingFov(position.distanceTo(centre), spread + poses[0].length * 2, 0.85, aspect, 1.2, 45);
     this.place(position, centre, this.fov);
     if (this.walk && this.walk.shown !== -2) {
       this.walk.shown = -2;

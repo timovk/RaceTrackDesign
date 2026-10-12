@@ -275,9 +275,19 @@ export function gantryBeam(g: Gantry): { lo: number; hi: number; depth: number }
   return { lo: bridge ? BRIDGE_LOW : GANTRY_LOW, hi: bridge ? BRIDGE_HIGH : GANTRY_HIGH, depth: bridge ? 1.6 : 0.5 };
 }
 
-/** The gantries as meshes: posts, beams and the lights (plain), and the boards on both faces (textured). */
-export function buildGantries(t: Track, gantries: readonly Gantry[]): { structure: MeshData; faces: MeshData } {
+/** The lamps of the start lights: five housings, each with this many vertices in `buildGantries().lamps`, the first housing the leftmost as the grid sees them. */
+export const START_LAMPS = 5;
+export const LAMP_VERTICES = 16;
+
+/**
+ * The gantries as meshes: posts, beams and the housings of the lights
+ * (plain), the boards on both faces (textured), and the lamps of the start
+ * lights on their own, to be lit: they face the grid and, as television has
+ * them, the camera in front of it too.
+ */
+export function buildGantries(t: Track, gantries: readonly Gantry[]): { structure: MeshData; faces: MeshData; lamps: MeshData } {
   const mb = new MeshBuilder();
+  const lamps = new MeshBuilder();
   const faces = new PanelBuilder();
   const steel = [0.3, 0.32, 0.36];
   const dark = [0.1, 0.11, 0.13];
@@ -332,7 +342,7 @@ export function buildGantries(t: Track, gantries: readonly Gantry[]): { structur
       }
     }
     if (bridge) continue;
-    // The start lights under the beam, facing the grid: five housings, two lamps each.
+    // The start lights under the beam: five housings, two lamps each on either face.
     const across = { x: (r.x - l.x) / span, y: (r.y - l.y) / span };
     const mid = { x: (l.x + r.x) / 2 - fx * (depth + 0.25), y: (l.y + r.y) / 2 - fy * (depth + 0.25) };
     for (let i = -2; i <= 2; i++) {
@@ -340,16 +350,18 @@ export function buildGantries(t: Track, gantries: readonly Gantry[]): { structur
       box({ x: c.x - across.x * 0.3, y: c.y - across.y * 0.3 }, { x: c.x + across.x * 0.3, y: c.y + across.y * 0.3 }, 0.14, lo - 1.0, lo - 0.05, g.road, dark);
       for (const up of [0.3, 0.68]) {
         const s = 0.16;
-        const x = c.x - fx * 0.15;
-        const y = c.y - fy * 0.15;
-        mb.face([
-          [x - across.x * s, g.road + lo - 1 + up - s, y - across.y * s, g.road], [x + across.x * s, g.road + lo - 1 + up - s, y + across.y * s, g.road],
-          [x + across.x * s, g.road + lo - 1 + up + s, y + across.y * s, g.road], [x - across.x * s, g.road + lo - 1 + up + s, y - across.y * s, g.road],
-        ], [-fx, 0, -fy], lamp);
+        for (const dir of [-1, 1]) {
+          const x = c.x + fx * 0.15 * dir;
+          const y = c.y + fy * 0.15 * dir;
+          lamps.face([
+            [x - across.x * s, g.road + lo - 1 + up - s, y - across.y * s, g.road], [x + across.x * s, g.road + lo - 1 + up - s, y + across.y * s, g.road],
+            [x + across.x * s, g.road + lo - 1 + up + s, y + across.y * s, g.road], [x - across.x * s, g.road + lo - 1 + up + s, y - across.y * s, g.road],
+          ], [fx * dir, 0, fy * dir], lamp);
+        }
       }
     }
   }
-  return { structure: mb.build(), faces: faces.build() };
+  return { structure: mb.build(), faces: faces.build(), lamps: lamps.build() };
 }
 
 // ---- the crowd ----------------------------------------------------------------------
@@ -556,13 +568,16 @@ export function brakingMarks(t: Track, line: RacingLine, lap: LapResult, seed: s
 const DECK = 2.2;
 const RAIL = 1.05;
 const EYE = 1.6;
+/** A truss a camera hangs from over the road: its lower and its upper chord, metres above the lens. */
+const TRUSS = [0.9, 1.9];
 
 /**
  * What the television cameras stand on, so that a camera in another
  * camera's picture is a camera: a scaffold tower with a platform for each
  * camera beside the track (its open side to the track, the camera at the
- * edge), a platform with a rail for one on a roof, and a post for the one on
- * the pit wall. The camera's own body is behind its lens.
+ * edge), a platform with a rail for one on a roof, a post for the one on
+ * the pit wall, and a truss across the road for the one that hangs over it.
+ * The camera's own body is behind its lens.
  */
 export function buildCameraMounts(cams: readonly TvCamera[]): MeshData {
   const mb = new MeshBuilder();
@@ -588,6 +603,39 @@ export function buildCameraMounts(cams: readonly TvCamera[]): MeshData {
       mb.face([c(a0, l1, h0), c(a1, l1, h0), c(a1, l1, h1), c(a0, l1, h1)], [lx, 0, ly], color);
       mb.face([c(a0, l0, h0), c(a1, l0, h0), c(a1, l0, h1), c(a0, l0, h1)], [-lx, 0, -ly], color);
     };
+    if (cam.mount === 'gantry') {
+      // A truss across the road on two posts, and the camera hanging from its middle. (Heights over the road under it.)
+      const [p, q] = st.span ?? [];
+      if (!p || !q) continue;
+      const len = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+      const ux = (q.x - p.x) / len;
+      const uy = (q.y - p.y) / len;
+      /** A bar from `a` to `b` metres along the truss, `half` thick along the road, between two heights. */
+      const bar = (a: number, b: number, half: number, h0: number, h1: number, color: readonly number[], along = 0) => {
+        const c = (s: number, w: number, h: number): [number, number, number, number] => [p.x + ux * s - uy * (w + along), floor + h, p.y + uy * s + ux * (w + along), floor];
+        mb.face([c(a, -half, h1), c(b, -half, h1), c(b, half, h1), c(a, half, h1)], [0, 1, 0], color);
+        mb.face([c(a, -half, h0), c(b, -half, h0), c(b, half, h0), c(a, half, h0)], [0, -1, 0], color);
+        mb.face([c(a, half, h0), c(b, half, h0), c(b, half, h1), c(a, half, h1)], [-uy, 0, ux], color);
+        mb.face([c(a, -half, h0), c(b, -half, h0), c(b, -half, h1), c(a, -half, h1)], [uy, 0, -ux], color);
+        mb.face([c(a, -half, h0), c(a, half, h0), c(a, half, h1), c(a, -half, h1)], [-ux, 0, -uy], color);
+        mb.face([c(b, -half, h0), c(b, half, h0), c(b, half, h1), c(b, -half, h1)], [ux, 0, uy], color);
+      };
+      const top = st.up + TRUSS[1];
+      const low = st.up + TRUSS[0];
+      // (A post goes down to its own ground, which may lie below the road, drawn up to three times as far below.)
+      bar(-0.2, 0.2, 0.2, Math.min(0, p.ground - floor) * 3 - 1, top, steel);
+      bar(len - 0.2, len + 0.2, 0.2, Math.min(0, q.ground - floor) * 3 - 1, top, steel);
+      for (const w of [-0.3, 0.3]) {
+        bar(0, len, 0.05, top - 0.1, top, steel, w);
+        bar(0, len, 0.05, low, low + 0.1, steel, w);
+      }
+      const bays = Math.max(2, Math.round(len / 3));
+      for (let i = 0; i <= bays; i++) for (const w of [-0.3, 0.3]) bar((len * i) / bays - 0.04, (len * i) / bays + 0.04, 0.04, low, top, steel, w);
+      // The camera under the truss, on a drop arm.
+      box(-0.05, 0.05, -0.05, 0.05, st.up + 0.14, low, steel);
+      box(-0.6, 0.05, -0.13, 0.13, st.up - 0.14, st.up + 0.14, body);
+      continue;
+    }
     if (cam.mount === 'post') {
       // A post, and the camera on a head at its top (it turns right round, so its body is under the lens).
       box(-0.07, 0.07, -0.07, 0.07, 0, st.up - 0.3, steel);

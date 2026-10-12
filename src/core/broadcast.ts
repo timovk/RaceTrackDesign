@@ -27,7 +27,8 @@
  * cuts to them now and then for the car the viewer picked, a battle (from
  * the car behind, or looking back from the car ahead), the leader and the
  * field, never twice running. A car standing in its pit box is shown from a
- * camera in the pit lane in front of it, and the start from behind the grid.
+ * camera in the pit lane in front of it, and the start from in front of the
+ * grid.
  */
 import { type CameraInput, type TvCamera, planCameras } from './cameraPlan.ts';
 
@@ -161,7 +162,7 @@ const MIN_IN_SIGHT = 3;
 const ONBOARD_CHANCE: Partial<Record<ShotReason, number>> = { selected: 0.35, battle: 0.3, leader: 0.25, field: 0.3, flying: 0.3 };
 /** A pit stop is shown from the pit box only when this many screen seconds of it are left. */
 const MIN_PIT_SHOT = 2;
-/** The start is shown from behind the grid within this many race seconds of it, for this many race seconds, at up to this playback speed. */
+/** The start is shown from its own camera within this many race seconds of it, for this many race seconds, at up to this playback speed. */
 const START_WINDOW = 3;
 const START_HOLD = 8;
 const START_MAX_RATE = 5;
@@ -201,14 +202,21 @@ const LOST_FOR = 8;
 /** How often the helicopter is a shot's camera, when it has not been one for three shots. */
 const HELI_CHANCE = 0.15;
 /**
- * The start is a sequence: from behind the grid until the leader is in the
- * sight of the first corner's camera and this many race seconds from the
- * corner (or for this long, where it never is), then the first corner from
- * its own camera for this long.
+ * The start is a sequence: the grid from the camera in front of it, until
+ * the leader is this long (screen seconds) from passing that camera, or in
+ * the sight of the first corner's camera and this many race seconds from
+ * the corner (or for this long, where neither comes); then the first corner
+ * from its own camera for this long. Where the leader is not in that
+ * camera's sight yet, the field is shown from wherever it is seen best
+ * meanwhile, in at most this many shots, while the corner is no further
+ * ahead than this (metres).
  */
+const BEFORE_PASS = 1;
 const BEFORE_CORNER = 3;
 const START_LONGEST = 14;
 const FIRST_CORNER_HOLD = 7;
+const START_FILLS = 2;
+const START_REACH = 1500;
 /** A car is shown leaving its pit box this long (screen seconds) after it has pulled away, then from the camera over the lane. */
 const PIT_AWAY = 1.5;
 /** The finish: the leader from this many race seconds before the flag (see the broadcast), until this many screen seconds after the line. */
@@ -253,6 +261,8 @@ export class Director {
   private lost = new Map<string, number>();
   /** The next shot of a sequence, waiting for the one on screen to end. */
   private queue: TvShot[] = [];
+  /** Shots shown while the next of the sequence waited for its cars. */
+  private fills = 0;
   /** When the car in the pit box shot pulled away (director time), or -1. */
   private pitAway = -1;
 
@@ -279,6 +289,7 @@ export class Director {
     this.followedBefore = [];
     this.lost.clear();
     this.queue = [];
+    this.fills = 0;
     this.pitAway = -1;
   }
 
@@ -312,7 +323,7 @@ export class Director {
    * race running `rate` race seconds per screen second, and cuts when the
    * shot has run its time, its car has left the camera's sight, or something
    * major happened. The first shot within a few seconds of the start
-   * (`raceTime`, race seconds) is the start from behind the grid; an
+   * (`raceTime`, race seconds) is the start from in front of the grid; an
    * overtake or incident noted for a replay is replayed a few seconds later.
    * The cars it picks it follows for a while, from one camera after another
    * (see `followed`). Returns the shot to show.
@@ -457,9 +468,9 @@ export class Director {
   }
 
   /**
-   * The start, from the camera behind the grid, on the front of the field;
-   * and, where the first corner has a camera of its own, that one next, from
-   * a few seconds before the leaders get there.
+   * The start, from the camera in front of the grid, on the front of the
+   * field; and, where the first corner has a camera of its own, that one
+   * next, from a few seconds before the leaders get there.
    */
   private startShot(cars: readonly TvCar[], rate: number): TvShot | null {
     if (!this.byId.has('start')) return null;
@@ -470,6 +481,7 @@ export class Director {
     if (this.byId.get('t1')?.station !== undefined) {
       // (Until the leader comes to the first corner: see `mustCut`.)
       hold = START_LONGEST;
+      this.fills = 0;
       this.queue = [{ subject: { kind: 'group', ids }, camera: 't1', reason: 'start', start: 0, hold: FIRST_CORNER_HOLD }];
     }
     return { subject: { kind: 'group', ids }, camera: 'start', reason: 'start', start: this.clock, hold: Math.max(MIN_SHOT, hold / rate) };
@@ -484,18 +496,32 @@ export class Director {
   /**
    * The next shot of a sequence, if it can still be shown: its cars as they
    * stand now, from now, and only with the first of them in its camera's
-   * sight.
+   * sight. While the cars of a start have still to come to it, they are
+   * shown from wherever they are seen best, and the shot waits.
    */
   private queued(cars: readonly TvCar[], byId: Map<number, TvCar>, rate: number): TvShot | null {
-    const next = this.queue.shift();
-    const cam = next ? this.byId.get(next.camera) : undefined;
-    if (!next || !cam || this.barred(next.camera)) return null;
+    const next = this.queue[0];
+    if (!next) return null;
+    const cam = this.byId.get(next.camera);
     const subject: Subject = next.subject.kind === 'group'
       ? { kind: 'group', ids: cars.filter((c) => c.running).sort((a, b) => a.position - b.position).slice(0, next.subject.ids.length).map((c) => c.id) }
       : next.subject;
     const first = this.subjectCars(subject, byId).find((c) => c.running);
-    if (!first || !cam.sees[Math.floor(mod(first.u, this.track.n))]) return null;
-    return { ...next, subject, start: this.clock, hold: Math.max(MIN_SHOT, next.hold / rate) };
+    if (cam && first && !this.barred(next.camera) && cam.sees[Math.floor(mod(first.u, this.track.n))]) {
+      this.queue.shift();
+      return { ...next, subject, start: this.clock, hold: Math.max(MIN_SHOT, next.hold / rate) };
+    }
+    const coming = !!cam && !!first && next.reason === 'start' && cam.station !== undefined && !this.barred(next.camera)
+      && mod(cam.station - first.u, this.track.n) * this.track.ds < START_REACH;
+    if (coming && this.fills < START_FILLS) {
+      const fill = this.frame(subject, 'start', byId, rate);
+      if (fill && fill.camera !== next.camera) {
+        this.fills++;
+        return fill;
+      }
+    }
+    this.queue.shift();
+    return null;
   }
 
   private subjectCars(sub: Subject, byId: Map<number, TvCar>): TvCar[] {
@@ -522,8 +548,11 @@ export class Director {
     // The start holds on the field as it gets away, until the leader comes to the first corner in its camera's
     // sight (or the back of the field leaves this camera's); the first corner after it, and the finish, for their time.
     if (s.reason === 'finish' || (s.reason === 'start' && s.camera === 't1')) return false;
-    const corner = s.reason === 'start' && s.camera === 'start' && this.queue.length ? this.byId.get(this.queue[0].camera) : undefined;
+    const corner = s.reason === 'start' && this.queue.length && s.camera !== this.queue[0].camera ? this.byId.get(this.queue[0].camera) : undefined;
     if (corner && elapsed > MIN_SHOT && this.comesTo(corner, cars[0], BEFORE_CORNER)) return true;
+    // (The grid's own camera stands in front of it: the start is left just before the leader passes it.)
+    const own = s.reason === 'start' && s.camera === 'start' ? this.byId.get('start') : undefined;
+    if (own && elapsed > MIN_SHOT && this.passIn(own, cars[0].u, cars[0].speed) / Math.max(1e-6, rate) < BEFORE_PASS) return true;
     if (s.reason !== 'start') {
       // An onboard camera goes with its car, the pit box camera until the car has pulled away (the camera over the
       // lane has it from there) or left the pit lane.

@@ -51,7 +51,7 @@ import {
 } from '../core/scenery.ts';
 import { type Pose, type Shot, type ShotInput, type Vec3, flyoverDuration, flyoverPose, hotLapPose, trackShots } from '../core/shots.ts';
 import { buildBarriers, buildFences } from '../core/barriers.ts';
-import { type Crowd, type SkidMesh, brakingMarks, buildBoards, buildCameraMounts, buildGantries, buildSkidMarks, roadHeight, seatCrowd } from '../core/trackside.ts';
+import { type Crowd, type SkidMesh, LAMP_VERTICES, START_LAMPS, brakingMarks, buildBoards, buildCameraMounts, buildGantries, buildSkidMarks, roadHeight, seatCrowd } from '../core/trackside.ts';
 import type { RaceSim } from '../core/race/sim.ts';
 import { RAMP_MIN_RANGE, ROCK, contourInterval } from '../core/terrainImage.ts';
 import type { Track } from '../core/track.ts';
@@ -94,6 +94,9 @@ const SHADOW_RECEIVERS = new Set([
   'terrain', 'track', 'trackVerges', 'pit', 'pitVerges', 'otherRoads', 'otherVerges', 'start', 'kerbs', 'runoff', 'grid', 'pitBuilding', 'stands', 'posts', 'sides', 'barriers', 'tyres',
   'fences', 'pitSigns', 'pitMarkings', 'boards', 'boardFrames', 'gantries', 'gantryBoards',
 ]);
+/** A start light lit and out, linear colour (lit, brighter than white: it glows in the finished picture). */
+const LAMP_ON = [2.4, 0.045, 0.02];
+const LAMP_OFF = [0.045, 0.006, 0.006];
 /** How dark the rubber worn into the braking points is, of a fresh tyre mark. */
 const WORN_IN = 0.7;
 const SHADOW_CASTERS = new Set(['pitBuilding', 'stands', 'posts', 'terrain', 'barriers', 'tyres', 'fences', 'boards', 'boardFrames', 'gantries', 'gantryBoards', 'cameraMounts']);
@@ -152,6 +155,8 @@ export class View3D {
   private carLabels = new Map<number, { el: HTMLElement; text: string; p: THREE.Vector3; shown: boolean }>();
   private downAt: { x: number; y: number } | null = null;
   private tv: TvBroadcast | null = null;
+  /** How many of the start lights on the gantry are lit. */
+  private lampsLit = 0;
   private readonly tvButton: HTMLButtonElement;
   /** The trackside cameras, worked out once per track, facilities and height exaggeration. */
   private tvCams: { input: unknown; relief: number; cams: TvCamera[] } | null = null;
@@ -798,6 +803,11 @@ export class View3D {
         const built2 = buildGantries(t, gantries);
         this.add('gantries', new THREE.Mesh(geometry(built2.structure), new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.4, roughness: 0.55 })));
         this.add('gantryBoards', new THREE.Mesh(geometry(built2.faces), this.signMaterial()));
+        if (built2.lamps.indices.length) {
+          // (Lit by the broadcast before a start; they give their own light, whichever way they are looked at.)
+          this.add('startLamps', new THREE.Mesh(geometry(built2.lamps), new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide })));
+          this.lightStart(this.lampsLit);
+        }
       }
       // The rubber worn into the asphalt where a lap brakes hardest: the reference class's, whichever class is picked.
       this.roadAt = roadHeight(index, (x, y) => earth.height(x, y));
@@ -1085,6 +1095,7 @@ export class View3D {
       pathPoint: (u, back, side, up) => this.cars?.pathPoint(u, back, side, up, new THREE.Vector3()) ?? null,
       pitSide: this.store.facilities?.pitLane?.side ?? 1,
       fromDrawn: (p) => this.fromDrawn(p),
+      startLights: (lit) => this.lightStart(lit),
       groundY: (x, z) => {
         const local = this.world.worldToLocal(new THREE.Vector3(x, 0, z));
         if (local.x < 0 || local.z < 0 || local.x > this.extent || local.z > this.extent) return null;
@@ -1127,12 +1138,28 @@ export class View3D {
     this.buildTrees();
   }
 
+  /** The start lights on the gantry over the line: this many of the five lit red, from the left as the grid sees them (0: all out). False where there are none. */
+  private lightStart(lit: number): boolean {
+    this.lampsLit = lit;
+    const mesh = this.meshes.get('startLamps') as THREE.Mesh | undefined;
+    const color = mesh?.geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+    if (!color) return false;
+    for (let i = 0; i < color.count; i++) {
+      const c = Math.floor(i / LAMP_VERTICES) % START_LAMPS < lit ? LAMP_ON : LAMP_OFF;
+      color.setXYZ(i, c[0], c[1], c[2]);
+    }
+    color.needsUpdate = true;
+    this.requestRender();
+    return true;
+  }
+
   /** Back to the orbit camera, looking where the broadcast looked. */
   private stopTv(): void {
     const tv = this.tv;
     if (!tv) return;
     this.tv = null;
     tv.dispose();
+    this.lightStart(0);
     if (this.race) this.race.holdStart = false;
     this.camera.clearViewOffset();
     this.camera.fov = FOV;

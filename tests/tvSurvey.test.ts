@@ -81,12 +81,40 @@ describe('the cameras of a Grand Prix circuit', async () => {
     expect(covered.reduce((a, x) => a + x, 0) / t.n).toBeGreaterThan(0.97);
   });
 
-  it('have a camera behind the grid, one for the first corner and one on the pit wall', () => {
+  it('have a camera in front of the grid, one for the first corner and one on the pit wall', () => {
+    // The start as television shows it: the grid head-on, from in front of it and nearly on its own line.
     const start = byId.get('start')!;
-    const far = (cam: TvCamera, k: number) => Math.hypot(t.x[k] - cam.at[0], t.y[k] - cam.at[1]);
     const last = t.n - Math.round(GRID_LENGTH / t.ds);
-    expect(far(start, last)).toBeLessThan(far(start, 0));
-    for (let k = last; k < t.n; k += 5) expect(start.sees[k], `grid ${k}`).toBe(1);
+    const middle = t.n - Math.round(GRID_LENGTH / t.ds / 2);
+    const along = Math.hypot(t.x[0] - t.x[last], t.y[0] - t.y[last]);
+    const ax = (t.x[0] - t.x[last]) / along;
+    const ay = (t.y[0] - t.y[last]) / along;
+    const dx = start.at[0] - t.x[middle];
+    const dy = start.at[1] - t.y[middle];
+    expect(dx * ax + dy * ay).toBeGreaterThan(GRID_LENGTH / 2 + 60);
+    expect((Math.acos((dx * ax + dy * ay) / Math.hypot(dx, dy)) * 180) / Math.PI).toBeLessThan(12);
+    // It sees the front rows without a gap, and most of the grid (the last rows may be behind the beam of the start gantry).
+    for (let k = t.n - Math.round(70 / t.ds); k < t.n - Math.round(8 / t.ds); k += 3) expect(start.sees[k], `grid ${k}`).toBe(1);
+    let rows = 0;
+    for (let k = last; k < t.n; k++) rows += start.sees[k];
+    expect(rows / (t.n - last)).toBeGreaterThan(0.6);
+    // Low enough to look under the gantry: the line to the car on pole passes under its beam.
+    const gantry = c.venue.gantries.find((g) => g.kind === 'start')!;
+    const pole = t.n - Math.round(10 / t.ds);
+    const share = Math.hypot(t.x[0] - t.x[pole], t.y[0] - t.y[pole]) / Math.hypot(start.at[0] - t.x[pole], start.at[1] - t.y[pole]);
+    expect(c.display(t.z[pole]) + 1 + (start.at[2] - c.display(t.z[pole]) - 1) * share).toBeLessThan(c.display(gantry.road) + 5);
+    if (start.mount === 'gantry') {
+      // Over the middle of the road, seven metres up, on a truss whose posts stand behind the barriers.
+      expect(Math.abs(c.venue.index.lateral(start.station!, start.at[0], start.at[1]))).toBeLessThan(0.5);
+      expect(start.stand!.up).toBeGreaterThan(6);
+      expect(start.stand!.span).toHaveLength(2);
+      for (const p of start.stand!.span!) {
+        expect(c.venue.insideBarriers!(p.x, p.y, 0.5)).toBe(false);
+        expect(c.solids.standing(p.x, p.y, c.display(p.ground) + 2, 1.5)).toBeNull();
+      }
+    }
+    const far = (cam: TvCamera, k: number) => Math.hypot(t.x[k] - cam.at[0], t.y[k] - cam.at[1]);
+    expect(far(start, 0)).toBeLessThan(far(start, last));
     const corner = byId.get('t1')!;
     const first = c.metrics.corners.find((x) => x.angle >= 45)!;
     expect(corner.station).toBe(first.start);
